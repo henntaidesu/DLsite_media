@@ -46,9 +46,8 @@ public static class Db
         EnsureTables();
         var conn = new SqliteConnection(ConnString);
         conn.Open();
-        using var pragma = conn.CreateCommand();
-        pragma.CommandText = "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;";
-        pragma.ExecuteNonQuery();
+        // WAL 是数据库级持久属性、synchronous 由 EnsureTables 建库时设一次即可，
+        // 不再每次开连接重复执行 PRAGMA（每查询固定开销）。
         return conn;
     }
 
@@ -168,6 +167,23 @@ public static class Db
                     cmd.CommandText = $"ALTER TABLE \"download_list\" ADD COLUMN \"{dlCol}\" text";
                     cmd.ExecuteNonQuery();
                 }
+            }
+
+            // 为高频过滤/排序列建二级索引（列必已由上方建表或补列保证存在），
+            // 避免媒体库/标签/形式/已下载页的全表扫描。
+            using (var cmd = conn.CreateCommand())
+            {
+                cmd.CommandText = """
+                    CREATE INDEX IF NOT EXISTS "idx_works_library" ON "works" ("library");
+                    CREATE INDEX IF NOT EXISTS "idx_works_state" ON "works" ("state");
+                    CREATE INDEX IF NOT EXISTS "idx_works_maker_name" ON "works" ("maker_name");
+                    CREATE INDEX IF NOT EXISTS "idx_works_work_type" ON "works" ("work_type");
+                    CREATE INDEX IF NOT EXISTS "idx_works_down_time" ON "works" ("down_time");
+                    CREATE INDEX IF NOT EXISTS "idx_work_genres_genre" ON "work_genres" ("genre");
+                    CREATE INDEX IF NOT EXISTS "idx_download_list_work_id" ON "download_list" ("work_id");
+                    CREATE INDEX IF NOT EXISTS "idx_download_list_status" ON "download_list" ("status");
+                    """;
+                cmd.ExecuteNonQuery();
             }
             _initialized = true;
         }

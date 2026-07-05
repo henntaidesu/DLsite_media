@@ -11,6 +11,7 @@ using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using System.Windows.Threading;
 using DASD.Core;
 using DASD.Services;
 
@@ -123,6 +124,11 @@ public partial class MediaLibPage : UserControl
     // 底部音频播放条：代码动态加入 RootGrid 第 2 行（在文件树中就地播放 wav/mp3 等）
     private readonly AudioPlayerBar AudioBar = new() { Margin = new Thickness(0, 10, 0, 0) };
 
+    // 搜索输入防抖：分组层级的作用域搜索会查库，逐字触发既卡 UI 又打库，
+    // 停顿 250ms 后再执行一次过滤（作品/标签/形式层级则是纯内存过滤）。
+    private readonly DispatcherTimer _searchDebounce =
+        new() { Interval = TimeSpan.FromMilliseconds(250) };
+
     public MediaLibPage(MediaLibRoot root)
     {
         InitializeComponent();
@@ -136,6 +142,11 @@ public partial class MediaLibPage : UserControl
             MediaLibRoot.WorkType => "types",
             MediaLibRoot.Favorite => "favorites",
             _ => "libs",
+        };
+        _searchDebounce.Tick += (_, _) =>
+        {
+            _searchDebounce.Stop();
+            ApplyCardFilter();
         };
         RetranslateUi();
         I18n.LanguageChanged += RetranslateUi;
@@ -763,7 +774,11 @@ public partial class MediaLibPage : UserControl
 
     // ---------- 过滤与懒加载 ----------
 
-    private void SearchBox_TextChanged(object sender, TextChangedEventArgs e) => ApplyCardFilter();
+    private void SearchBox_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        _searchDebounce.Stop();
+        _searchDebounce.Start();
+    }
 
     private void ApplyCardFilter()
     {

@@ -376,17 +376,43 @@ public partial class DownloadPage : UserControl
         return (I18n.Tr("已完成"), "#4ade80");
     }
 
-    private static Brush BrushOf(string hex) =>
-        new SolidColorBrush((Color)ColorConverter.ConvertFromString(hex));
-
-    private void Refresh()
+    // 状态颜色只有固定几种，冻结并按 hex 缓存复用，避免每秒每条目重复分配画刷；
+    // 同一 hex 返回同一实例，使未变化的 StatusBrush 赋值命中相等短路、不触发多余通知。
+    private static readonly Dictionary<string, Brush> BrushCache = new();
+    private static Brush BrushOf(string hex)
     {
-        UpdateStartButton();
-        var rows = Db.Select(
-            "SELECT \"UUID\", \"work_id\", \"url\", \"status\", \"long\", \"error\", \"sub_path\" FROM \"download_list\" ORDER BY rowid");
-        if (rows == null)
-            return;
+        if (BrushCache.TryGetValue(hex, out var cached))
+            return cached;
+        var brush = new SolidColorBrush((Color)ColorConverter.ConvertFromString(hex));
+        brush.Freeze();
+        BrushCache[hex] = brush;
+        return brush;
+    }
 
+    private bool _refreshing;   // 上一次刷新（含后台查询）未完成时跳过本次，防止 tick 重入堆积
+
+    private async void Refresh()
+    {
+        if (_refreshing)
+            return;
+        _refreshing = true;
+        try
+        {
+            UpdateStartButton();
+            // 全表读放到后台线程，避免每秒在 UI 线程阻塞（连接池 + WAL 下并发安全）
+            var rows = await Task.Run(() => Db.Select(
+                "SELECT \"UUID\", \"work_id\", \"url\", \"status\", \"long\", \"error\", \"sub_path\" FROM \"download_list\" ORDER BY rowid"));
+            if (rows != null)
+                ApplyRows(rows);   // 集合改动回到 UI 线程执行（await 后续接续在 UI 上下文）
+        }
+        finally
+        {
+            _refreshing = false;
+        }
+    }
+
+    private void ApplyRows(List<object?[]> rows)
+    {
         // 按番号分组，同一番号合并为一个父条目
         var groups = new Dictionary<string, List<(string Uuid, string Url, string Status, string Long, string? Error, string? SubPath)>>();
         var order = new List<string>();
@@ -403,6 +429,7 @@ public partial class DownloadPage : UserControl
         }
 
         // 同步到现有集合（保留展开状态与滚动位置）
+        var anyActive = false;   // 是否存在下载中/等待/解压中的任务，用于空闲降频
         var existing = _groups.ToDictionary(g => g.WorkId);
         for (var i = _groups.Count - 1; i >= 0; i--)
             if (!groups.ContainsKey(_groups[i].WorkId))
@@ -428,6 +455,7 @@ public partial class DownloadPage : UserControl
             // 单独控制按钮：有下载中/等待分卷时可"停止"；有已暂停分卷时可"下载"（继续）
             var hasActive = statuses.Any(s => s is "0" or "3");
             var hasPaused = statuses.Contains("4");
+            anyActive |= hasActive || DownloadEngine.UnzipProgress.ContainsKey(workId);
             group.PauseVisibility = hasActive && workId.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
             group.ResumeVisibility = hasPaused && workId.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
 
@@ -496,6 +524,11 @@ public partial class DownloadPage : UserControl
                 RebuildTree(group);
             }
         }
+
+        // 有活动任务时每秒刷新（进度平滑）；全部完成/失败/空闲时降到 3 秒，减少空转开销
+        var wanted = TimeSpan.FromSeconds(anyActive ? 1 : 3);
+        if (_refreshTimer.Interval != wanted)
+            _refreshTimer.Interval = wanted;
     }
 
     /// <summary>按各分卷的相对路径（含子目录）把扁平文件列表重建为文件夹/文件目录树。</summary>

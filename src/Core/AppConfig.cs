@@ -79,12 +79,6 @@ public static class AppConfig
     private static Dictionary<string, Dictionary<string, string>> Load()
     {
         Db.EnsureTables();
-        // 补齐缺失的默认配置项
-        foreach (var (section, items) in Defaults)
-            foreach (var (key, value) in items)
-                Db.Execute(
-                    "INSERT OR IGNORE INTO \"conf\" (\"section\", \"key\", \"value\") VALUES (@s, @k, @v)",
-                    ("@s", section), ("@k", key), ("@v", value));
 
         var conf = new Dictionary<string, Dictionary<string, string>>();
         var rows = Db.Select("SELECT \"section\", \"key\", \"value\" FROM \"conf\"");
@@ -98,6 +92,24 @@ public static class AppConfig
                     conf[section] = dict = new Dictionary<string, string>();
                 dict[key] = value;
             }
+
+        // 仅补齐缺失的默认项（首次运行或新增配置项时才写库），
+        // 避免每次 Load/Reload 都盲发数十条 INSERT——切页触发 Reload 时是纯读。
+        foreach (var (section, items) in Defaults)
+        {
+            if (!conf.TryGetValue(section, out var dict))
+                conf[section] = dict = new Dictionary<string, string>();
+            foreach (var (key, value) in items)
+            {
+                if (dict.ContainsKey(key))
+                    continue;
+                Db.Execute(
+                    "INSERT OR IGNORE INTO \"conf\" (\"section\", \"key\", \"value\") VALUES (@s, @k, @v)",
+                    ("@s", section), ("@k", key), ("@v", value));
+                dict[key] = value;   // 同步进本次缓存，免二次查询
+            }
+        }
+
         LogLevelCached = conf.GetValueOrDefault("loglevel")?.GetValueOrDefault("level") ?? "info";
         return conf;
     }

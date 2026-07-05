@@ -646,6 +646,11 @@ public partial class SearchPage : UserControl
                 groups[wid] = list = [];
             list.Add(row[1] as string ?? "");
         }
+        // 已不在下载列表、但此前处于活动角标的作品需回查 works 最终状态：
+        // 先收集全部再一次性批量 IN 查询，避免逐作品 Db.Scalar 的 N+1。
+        var states = LookupWorkStates(
+            _makerWorks.Where(it => it.DownActive && !groups.ContainsKey(it.WorkId))
+                       .Select(it => it.WorkId));
         foreach (var item in _makerWorks)
         {
             if (groups.TryGetValue(item.WorkId, out var statuses))
@@ -658,8 +663,7 @@ public partial class SearchPage : UserControl
             else if (item.DownActive)
             {
                 // 已不在下载列表：显示 works 最终状态（已下载/已品悦），否则回到原角标
-                var state = Db.Scalar("SELECT \"state\" FROM \"works\" WHERE \"work_id\" = @w",
-                    ("@w", item.WorkId)) as string;
+                var state = states.GetValueOrDefault(item.WorkId);
                 if (state is "已下载" or "已品悦")
                 {
                     item.DownText = state;
@@ -698,8 +702,17 @@ public partial class SearchPage : UserControl
         return (I18n.Tr("已完成"), "#4ade80");
     }
 
-    private static Brush BrushOf(string hex) =>
-        new SolidColorBrush((Color)ColorConverter.ConvertFromString(hex));
+    // 角标颜色只有固定几种，冻结并按 hex 缓存复用，避免每秒每卡片重复分配画刷。
+    private static readonly Dictionary<string, Brush> BrushCache = new();
+    private static Brush BrushOf(string hex)
+    {
+        if (BrushCache.TryGetValue(hex, out var cached))
+            return cached;
+        var brush = new SolidColorBrush((Color)ColorConverter.ConvertFromString(hex));
+        brush.Freeze();
+        BrushCache[hex] = brush;
+        return brush;
+    }
 
     /// <summary>批量查询作品号在 works 表中的状态（不存在则不在结果里），用于标记"已在库"。</summary>
     private static Dictionary<string, string> LookupWorkStates(IEnumerable<string> ids)

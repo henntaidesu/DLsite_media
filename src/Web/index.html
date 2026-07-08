@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="dark">
-<title>DLsite 下载器</title>
+<title>DLsite媒体库</title>
 <style>
   :root {
     --bg: #1b1b1f; --surface: #26262b; --surface2: #2f2f36; --line: #3a3a42;
@@ -410,7 +410,7 @@ $('pw').addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
 // ---------- 左侧导航（桌面常驻 / 移动抽屉） ----------
 function buildTabs() {
   const box = $('nav'); box.innerHTML = '';
-  box.appendChild(el('div', 'brand', 'DLsite 下载器'));
+  box.appendChild(el('div', 'brand', 'DLsite媒体库'));
   SECTIONS.forEach(s => {
     const b = el('div', 'navitem' + (s.key === section ? ' active' : ''));
     b.appendChild(el('span', 'ni', s.icon || ''));

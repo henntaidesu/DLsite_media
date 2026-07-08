@@ -100,14 +100,24 @@
                                                     <StackPanel>
                                                         <TextBlock Text="{Binding Host}" FontWeight="SemiBold" FontSize="14" />
                                                         <TextBlock Text="{Binding CountText}" Style="{StaticResource CaptionText}" />
-                                                        <ItemsControl ItemsSource="{Binding Urls}" Margin="0,4,12,0">
+                                                        <ItemsControl ItemsSource="{Binding Links}" Margin="0,4,12,0">
                                                             <ItemsControl.ItemTemplate>
                                                                 <DataTemplate>
-                                                                    <TextBox Text="{Binding Mode=OneWay}" IsReadOnly="True"
-                                                                             BorderThickness="0" Background="Transparent"
-                                                                             Padding="0" Margin="0,1" FontSize="12"
-                                                                             Foreground="{StaticResource AccentLightBrush}"
-                                                                             TextWrapping="Wrap" ToolTip="{Binding Mode=OneWay}" />
+                                                                    <Grid Margin="0,1">
+                                                                        <Grid.ColumnDefinitions>
+                                                                            <ColumnDefinition Width="*" />
+                                                                            <ColumnDefinition Width="Auto" />
+                                                                        </Grid.ColumnDefinitions>
+                                                                        <TextBox Text="{Binding Url, Mode=OneWay}" IsReadOnly="True"
+                                                                                 BorderThickness="0" Background="Transparent"
+                                                                                 Padding="0" FontSize="12"
+                                                                                 Foreground="{StaticResource AccentLightBrush}"
+                                                                                 TextWrapping="Wrap" ToolTip="{Binding Url, Mode=OneWay}" />
+                                                                        <TextBlock Grid.Column="1" Text="{Binding StatusText}"
+                                                                                   Foreground="{Binding StatusBrush}"
+                                                                                   FontSize="11" FontWeight="SemiBold"
+                                                                                   VerticalAlignment="Center" Margin="8,0,0,0" />
+                                                                    </Grid>
                                                                 </DataTemplate>
                                                             </ItemsControl.ItemTemplate>
                                                         </ItemsControl>

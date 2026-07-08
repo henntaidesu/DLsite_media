@@ -22,6 +22,7 @@ public partial class App : Application
     protected override void OnExit(ExitEventArgs e)
     {
         WebServer.Stop();
+        Db.Checkpoint();
         base.OnExit(e);
     }
 }

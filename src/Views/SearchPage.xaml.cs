@@ -6,6 +6,7 @@ using System.IO;
 using System.Linq;
 using System.Net.Http;
 using System.Runtime.CompilerServices;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
@@ -67,12 +68,39 @@ public class SearchResultItem : INotifyPropertyChanged
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
 }
 
+/// <summary>网盘卡片下单条链接的检测状态：待检测 → 检测中… → 有效/失效/已暂停，让用户能明确看到具体是哪一条链接失效。</summary>
+public class LinkStatusItem : INotifyPropertyChanged
+{
+    public string Url { get; init; } = "";
+
+    private string _statusText = "";
+    public string StatusText
+    {
+        get => _statusText;
+        set { _statusText = value; OnPropertyChanged(); }
+    }
+
+    private Brush _statusBrush = Brushes.Gray;
+    public Brush StatusBrush
+    {
+        get => _statusBrush;
+        set { _statusBrush = value; OnPropertyChanged(); }
+    }
+
+    public event PropertyChangedEventHandler? PropertyChanged;
+    private void OnPropertyChanged([CallerMemberName] string? name = null) =>
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
+}
+
 /// <summary>下载网站卡片：host -> 链接组与检测状态。</summary>
 public class HostCardItem : INotifyPropertyChanged
 {
     public string Host { get; init; } = "";
     public List<string> Urls { get; init; } = [];
     public string CountText { get; init; } = "";
+
+    /// <summary>逐条链接的检测状态，供 UI 显示具体是哪一条失效（与 Urls 同序）。</summary>
+    public ObservableCollection<LinkStatusItem> Links { get; } = [];
 
     /// <summary>null=检测中 / true=全部有效 / false=失效或部分 / "queued"=已加入下载。</summary>
     public object? Status { get; set; }
@@ -196,6 +224,9 @@ public partial class SearchPage : UserControl
     // 用户点击下载后暂停链接校验：已选定下载源，无需再消耗网络去检测其余网盘/帖子。
     // 新搜索或用户手动点击帖子扫描时解除。
     private volatile bool _checksPaused;
+    // 与 _checksPaused 配合：取消正在进行中的网络请求（HTTP GET/POST），
+    // 让点击下载后校验立即中止，而不是等当前这一条链接的请求超时才停下。
+    private CancellationTokenSource _checkCts = new();
 
     // 社团（RG）搜索状态
     private bool _fromMaker;         // 当前 AS 结果是否来自社团作品列表（决定返回去向）
@@ -312,6 +343,7 @@ public partial class SearchPage : UserControl
     {
         _searchGeneration++;   // 作废旧的作品缩略图加载与帖子扫描
         _checksPaused = false;  // 新搜索：解除上次点击下载造成的校验暂停
+        var checkToken = RestartCheckCts();
         _results.Clear();
         _selectId = workId;
 
@@ -403,11 +435,11 @@ public partial class SearchPage : UserControl
             });
         ShowResultsPage();
         _ = LoadThumbnailsAsync(generation);
-        _ = AutoScanPostsAsync(generation);   // 自动逐帖抓链接 + 检测，命中有效下载即止
+        _ = AutoScanPostsAsync(generation, checkToken);   // 自动逐帖抓链接 + 检测，命中有效下载即止
     }
 
     /// <summary>自动从上到下扫描帖子：抓取网盘链接并检测，命中一个含有效下载的帖子即停止。</summary>
-    private async Task AutoScanPostsAsync(int generation)
+    private async Task AutoScanPostsAsync(int generation, CancellationToken ct)
     {
         foreach (var post in _results.ToList())
         {
@@ -415,7 +447,7 @@ public partial class SearchPage : UserControl
                 return;
             if (post.Scanned || post.Scanning)
                 continue;
-            var hasValid = await ScanPostAsync(post, generation);
+            var hasValid = await ScanPostAsync(post, generation, ct);
             if (ChecksStopped(generation))
                 return;
             if (hasValid)
@@ -424,7 +456,7 @@ public partial class SearchPage : UserControl
     }
 
     /// <summary>扫描单个帖子：抓取其网盘链接、按域名分组内联展示并逐组检测。返回是否存在全部有效的网盘组。</summary>
-    private async Task<bool> ScanPostAsync(SearchResultItem post, int generation)
+    private async Task<bool> ScanPostAsync(SearchResultItem post, int generation, CancellationToken ct)
     {
         post.Scanning = true;
         post.HostsVisibility = Visibility.Collapsed;
@@ -475,6 +507,13 @@ public partial class SearchPage : UserControl
                 StatusText = I18n.Tr("检测中…"),
                 StatusBrush = (Brush)FindResource("CaptionBrush"),
             };
+            foreach (var u in hostUrls)
+                card.Links.Add(new LinkStatusItem
+                {
+                    Url = u,
+                    StatusText = I18n.Tr("待检测"),
+                    StatusBrush = (Brush)FindResource("CaptionBrush"),
+                });
             post.Hosts.Add(card);
             cards.Add(card);
         }
@@ -493,7 +532,7 @@ public partial class SearchPage : UserControl
                 post.Scanning = false;
                 return false;
             }
-            await CheckHostAsync(card, generation);
+            await CheckHostAsync(card, generation, ct);
             if (ChecksStopped(generation))
             {
                 if (_checksPaused)
@@ -899,7 +938,8 @@ public partial class SearchPage : UserControl
             return;   // 已扫描/扫描中的帖子不重复处理（下载按钮点击也会落到这里，需放行）
         // 手动点击未扫描的帖子：用户主动要校验该帖，解除之前点击下载造成的暂停
         _checksPaused = false;
-        await ScanPostAsync(post, _searchGeneration);
+        var checkToken = RestartCheckCts();
+        await ScanPostAsync(post, _searchGeneration, checkToken);
     }
 
     private static string HostOf(string url)
@@ -918,6 +958,17 @@ public partial class SearchPage : UserControl
     /// <summary>校验应否中止：发起了新搜索（代际变化），或用户点击下载后暂停了链接校验。</summary>
     private bool ChecksStopped(int generation) => generation != _searchGeneration || _checksPaused;
 
+    /// <summary>
+    /// 开启新一轮校验前调用：取消上一轮仍在进行的网络请求并换发新的取消令牌。
+    /// 用于新搜索、用户手动点击帖子恢复扫描等"确实要继续检测"的场景。
+    /// </summary>
+    private CancellationToken RestartCheckCts()
+    {
+        _checkCts.Cancel();
+        _checkCts = new CancellationTokenSource();
+        return _checkCts.Token;
+    }
+
     /// <summary>把仍处于"检测中"的网盘卡片标为已暂停校验（已判定有效/失效/已加入下载的卡片不动）。</summary>
     private void MarkCardPaused(HostCardItem card)
     {
@@ -925,25 +976,61 @@ public partial class SearchPage : UserControl
             return;
         card.StatusText = I18n.Tr("已暂停校验");
         card.StatusBrush = (Brush)FindResource("CaptionBrush");
+        // 未出结果（待检测/检测中…）的链接一并标为已暂停，让用户清楚哪些链接根本没检测完
+        var pending = I18n.Tr("待检测");
+        var checking = I18n.Tr("检测中…");
+        foreach (var link in card.Links)
+            if (link.StatusText.Length == 0 || link.StatusText == pending || link.StatusText == checking)
+            {
+                link.StatusText = I18n.Tr("已暂停");
+                link.StatusBrush = (Brush)FindResource("CaptionBrush");
+            }
     }
 
-    /// <summary>检测某网盘组下所有链接是否直连有效（不经过中转站）；全部有效则允许下载。</summary>
-    private async Task CheckHostAsync(HostCardItem card, int generation)
+    /// <summary>
+    /// 检测某网盘组下所有链接是否直连有效（不经过中转站）；全部有效则允许下载。
+    /// 逐条更新 card.Links 中对应链接的状态，让用户在检测过程中就能明确看到具体是哪一条链接失效；
+    /// 用户点击下载后 ct 会被取消，正在进行的网络请求随之立即中止（而非等到超时）。
+    /// </summary>
+    private async Task CheckHostAsync(HostCardItem card, int generation, CancellationToken ct)
     {
         using var client = LinkChecker.MakeClient();
         int valid = 0, checkedCount = 0;
-        foreach (var url in card.Urls)
+        for (var i = 0; i < card.Urls.Count; i++)
         {
+            var url = card.Urls[i];
+            var link = i < card.Links.Count ? card.Links[i] : null;
             if (ChecksStopped(generation))
             {
                 if (_checksPaused)
                     MarkCardPaused(card);
                 return;
             }
-            var ok = await LinkChecker.CheckUrlAsync(url, client);
+            if (link != null)
+            {
+                link.StatusText = I18n.Tr("检测中…");
+                link.StatusBrush = (Brush)FindResource("CaptionBrush");
+            }
+            bool ok;
+            try
+            {
+                ok = await LinkChecker.CheckUrlAsync(url, client, ct);
+            }
+            catch (OperationCanceledException)
+            {
+                // 用户点击下载中断了本次检测：不判定该链接失效，仅标记为已暂停
+                if (_checksPaused)
+                    MarkCardPaused(card);
+                return;
+            }
             checkedCount++;
             if (ok)
                 valid++;
+            if (link != null)
+            {
+                link.StatusText = ok ? I18n.Tr("有效") : I18n.Tr("失效");
+                link.StatusBrush = (Brush)FindResource(ok ? "GreenBrush" : "RedBrush");
+            }
             if (ChecksStopped(generation))
             {
                 if (_checksPaused)
@@ -985,8 +1072,9 @@ public partial class SearchPage : UserControl
         if ((sender as FrameworkElement)?.DataContext is not HostCardItem card || !card.CanDownload)
             return;
 
-        // 用户已选定下载源：暂停其余网盘/帖子的链接校验，不再消耗网络去检测
+        // 用户已选定下载源：暂停其余网盘/帖子的链接校验，并立即中断所有正在进行中的检测请求
         _checksPaused = true;
+        _checkCts.Cancel();
 
         // 有媒体库配置时弹窗选择下载目标
         string? targetFolder = null, targetLib = null;
@@ -1044,6 +1132,10 @@ public partial class SearchPage : UserControl
             InAppDialog.Warn(this, I18n.Tr("请先在设置中填写 ASMR.ONE 账号"), I18n.Tr("提示"));
             return;
         }
+
+        // 用户已选定下载源：暂停并立即中断所有正在进行中的链接校验请求
+        _checksPaused = true;
+        _checkCts.Cancel();
 
         // 有媒体库配置时弹窗选择下载目标
         string? targetFolder = null, targetLib = null;

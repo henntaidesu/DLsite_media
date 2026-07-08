@@ -1,7 +1,7 @@
 <Window x:Class="DASD.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="DLsite 下载器" Height="760" Width="1280"
+        Title="DLsite媒体库" Height="760" Width="1280"
         Background="{StaticResource WindowBrush}"
         WindowStartupLocation="CenterScreen">
     <Grid>
@@ -13,7 +13,7 @@
         <!-- 左侧导航 -->
         <Border Grid.Column="0" Background="{StaticResource BaseBrush}">
             <StackPanel>
-                <TextBlock x:Name="LogoLabel" Text="DLsite 下载器" FontSize="17" FontWeight="Bold"
+                <TextBlock x:Name="LogoLabel" Text="DLsite媒体库" FontSize="17" FontWeight="Bold"
                            Margin="20,22,12,18" />
                 <RadioButton x:Name="NavMediaLib" Style="{StaticResource NavButton}" GroupName="nav"
                              IsChecked="True" Checked="Nav_Checked" Tag="medialib" Content="媒体库" />

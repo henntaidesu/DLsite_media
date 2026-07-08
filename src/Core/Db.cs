@@ -7,11 +7,15 @@ namespace DASD.Core;
 
 /// <summary>
 /// SQLite 数据库访问层（对应 Python 版 datebase_execution.py）。
-/// 沿用项目根目录的 DASD.db：conf / download_list / works / work_genres 表，老数据无缝继承。
+/// 沿用项目根目录的 DLsiteMedia.db：conf / download_list / works / work_genres 表，老数据无缝继承。
 /// 每次操作独立连接（Sqlite 连接池），WAL 模式下 UI 刷新 + 下载线程 + 元数据补全并发安全。
 /// </summary>
 public static class Db
 {
+    private const string DbFileName = "DLsiteMedia.db";
+    // 改名前（DASD 时代）的库文件名：仅用于一次性迁移旧数据，之后一律按 DbFileName 访问。
+    private const string LegacyDbFileName = "DASD.db";
+
     private static readonly string DbPath = LocateDb();
     private static readonly string ConnString =
         new SqliteConnectionStringBuilder { DataSource = DbPath, DefaultTimeout = 30 }.ToString();
@@ -20,23 +24,54 @@ public static class Db
     private static readonly object InitLock = new();
 
     /// <summary>
-    /// 定位 DASD.db：优先当前工作目录，其次从 exe 目录向上逐级查找（开发期命中仓库根），
-    /// 都没有时在 exe 目录新建。
+    /// 定位 DLsiteMedia.db：优先当前工作目录，其次从 exe 目录向上逐级查找（开发期命中仓库根），
+    /// 每处查找前都会先尝试把同目录下的旧版 DASD.db 迁移为新文件名，都没有时在 exe 目录新建。
     /// </summary>
     private static string LocateDb()
     {
-        var cwd = Path.Combine(Environment.CurrentDirectory, "DASD.db");
+        var cwdDir = Environment.CurrentDirectory;
+        MigrateLegacyDb(cwdDir);
+        var cwd = Path.Combine(cwdDir, DbFileName);
         if (File.Exists(cwd))
             return cwd;
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
         while (dir != null)
         {
-            var candidate = Path.Combine(dir.FullName, "DASD.db");
+            MigrateLegacyDb(dir.FullName);
+            var candidate = Path.Combine(dir.FullName, DbFileName);
             if (File.Exists(candidate))
                 return candidate;
             dir = dir.Parent;
         }
-        return Path.Combine(AppContext.BaseDirectory, "DASD.db");
+        return Path.Combine(AppContext.BaseDirectory, DbFileName);
+    }
+
+    /// <summary>
+    /// 旧版数据库改名迁移：目录下存在老版 DASD.db 但新文件名尚不存在时原地改名（.db 本体 + -wal/-shm
+    /// 一并改名，不丢 WAL 里尚未 checkpoint 的数据），一次性完成。迁移前不能有任何连接打开过旧库，
+    /// 故只能在 LocateDb 算出路径之前做纯文件操作；失败（如文件被占用）时静默保留旧文件名，下次启动重试。
+    /// </summary>
+    private static void MigrateLegacyDb(string dir)
+    {
+        var newPath = Path.Combine(dir, DbFileName);
+        var legacyPath = Path.Combine(dir, LegacyDbFileName);
+        if (File.Exists(newPath) || !File.Exists(legacyPath))
+            return;
+        try
+        {
+            File.Move(legacyPath, newPath);
+            foreach (var suffix in new[] { "-wal", "-shm" })
+            {
+                var legacySide = legacyPath + suffix;
+                if (File.Exists(legacySide))
+                    File.Move(legacySide, newPath + suffix);
+            }
+            Console.WriteLine($"[DASD] 已将旧版数据库 {legacyPath} 迁移为 {newPath}");
+        }
+        catch (IOException e)
+        {
+            Console.WriteLine($"[DASD] 旧版数据库迁移失败，保留旧文件名待下次重试: {e.Message}");
+        }
     }
 
     public static string DatabasePath => DbPath;
@@ -244,5 +279,25 @@ public static class Db
     {
         var rows = Select(sql, args);
         return rows is { Count: > 0 } ? rows[0][0] : null;
+    }
+
+    /// <summary>
+    /// 手动执行 WAL checkpoint，把 -wal 中已提交但尚未写回主库文件的数据落盘到 DLsiteMedia.db 并截断 -wal。
+    /// WAL 模式下应用内读写始终能看到最新数据（无需此调用才能读到），但外部工具/备份脚本若只复制主库文件
+    /// 而不带上 -wal/-shm，会漏掉尚未 checkpoint 的数据——退出前调用一次收尾，尽量让主库文件保持最新。
+    /// </summary>
+    public static void Checkpoint()
+    {
+        try
+        {
+            using var conn = Open();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = "PRAGMA wal_checkpoint(TRUNCATE);";
+            cmd.ExecuteNonQuery();
+        }
+        catch (SqliteException e)
+        {
+            Logger.Error($"WAL checkpoint 失败: {e.Message}");
+        }
     }
 }

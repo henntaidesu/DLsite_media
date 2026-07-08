@@ -1,6 +1,6 @@
 ##  本程序可用于在Anime-sharing中检索查找DLsite作品 
 
-使用本地SQLite数据库（DASD.db）管理下载列表，无需连接外部数据库。
+使用本地SQLite数据库（DLsiteMedia.db）管理下载列表，无需连接外部数据库。
 
 ``` ini
 [start_type]
@@ -39,7 +39,7 @@ pyinstaller main.spec
 
 注意：
 - 必须使用 `pyinstaller main.spec` 打包，不要用 `pyinstaller -F main.py`（会重新生成 spec 文件，丢失已配置的 datas 等设置）
-- exe 需要在仓库根目录下运行（`.ui` 文件和 `DASD.db` 使用相对路径加载）
+- exe 需要在仓库根目录下运行（`.ui` 文件和 `DLsiteMedia.db` 使用相对路径加载）
 
 ### 基本窗口
 

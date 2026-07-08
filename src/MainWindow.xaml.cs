@@ -47,8 +47,8 @@ public partial class MainWindow : Window
 
     private void RetranslateUi()
     {
-        LogoLabel.Text = I18n.Tr("DLsite 下载器");
-        Title = I18n.Tr("DLsite 下载器");
+        LogoLabel.Text = I18n.Tr("DLsite媒体库");
+        Title = I18n.Tr("DLsite媒体库");
         NavMediaLib.Content = I18n.Tr("媒体库");
         NavSearchDownload.Content = I18n.Tr("搜索/下载");
         NavTag.Content = I18n.Tr("标签");

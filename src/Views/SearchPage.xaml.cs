@@ -14,10 +14,10 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
-using DASD.Core;
-using DASD.Services;
+using DLsiteMedia.Core;
+using DLsiteMedia.Services;
 
-namespace DASD.Views;
+namespace DLsiteMedia.Views;
 
 /// <summary>搜索结果条目（AS 论坛一个帖子，内联展示其网盘卡片与自动检测状态）。</summary>
 public class SearchResultItem : INotifyPropertyChanged

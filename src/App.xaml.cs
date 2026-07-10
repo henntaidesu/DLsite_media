@@ -1,8 +1,8 @@
 using System.Windows;
-using DASD.Core;
-using DASD.Services;
+using DLsiteMedia.Core;
+using DLsiteMedia.Services;
 
-namespace DASD;
+namespace DLsiteMedia;
 
 public partial class App : Application
 {

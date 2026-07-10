@@ -12,10 +12,10 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
-using DASD.Core;
-using DASD.Services;
+using DLsiteMedia.Core;
+using DLsiteMedia.Services;
 
-namespace DASD.Views;
+namespace DLsiteMedia.Views;
 
 /// <summary>媒体库页的根视图模式。</summary>
 public enum MediaLibRoot

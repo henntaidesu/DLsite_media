@@ -7,9 +7,9 @@ using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
-using DASD.Core;
+using DLsiteMedia.Core;
 
-namespace DASD.Views;
+namespace DLsiteMedia.Views;
 
 /// <summary>
 /// 下载目标 / 移动目标选择对话框（程序内覆盖层，卡片每行三个）：先选媒体库，多文件夹时再选具体文件夹。

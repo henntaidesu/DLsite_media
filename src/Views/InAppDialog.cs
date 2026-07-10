@@ -6,9 +6,9 @@ using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
-using DASD.Core;
+using DLsiteMedia.Core;
 
-namespace DASD.Views;
+namespace DLsiteMedia.Views;
 
 /// <summary>
 /// 程序内模态对话框：在所属窗口的 AdornerLayer 上覆盖渲染，替代系统 MessageBox（不再弹出程序外窗口）。

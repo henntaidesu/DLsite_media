@@ -3,10 +3,10 @@ using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Interop;
-using DASD.Core;
-using DASD.Views;
+using DLsiteMedia.Core;
+using DLsiteMedia.Views;
 
-namespace DASD;
+namespace DLsiteMedia;
 
 /// <summary>主窗口：左侧导航 + 右侧页面切换（对应 Python 版 index_UI.py）。</summary>
 public partial class MainWindow : Window

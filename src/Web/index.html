@@ -25,7 +25,7 @@
     backdrop-filter: blur(8px); border-bottom: 1px solid var(--line);
     padding: 8px max(12px, env(safe-area-inset-left));
   }
-  .topbar { display: flex; align-items: center; gap: 8px; max-width: 1200px; margin: 0 auto; flex-wrap: wrap; }
+  .topbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
   .icon-btn {
     background: var(--surface2); border: 1px solid var(--line); color: var(--text);
     border-radius: 8px; padding: 7px 12px; cursor: pointer; font-size: 14px; white-space: nowrap;
@@ -77,13 +77,13 @@
   .layout-mobile #search { order: 5; flex-basis: 100%; }
   .layout-mobile #sort { order: 6; }
 
-  main { max-width: 1200px; margin: 0 auto; padding: 12px max(12px, env(safe-area-inset-left)) 40px; }
+  main { padding: 12px max(12px, env(safe-area-inset-left)) 40px; }
   .count { color: var(--muted); font-size: 13px; margin: 4px 2px 12px; }
   .toolbar { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; align-items: center; }
 
-  .grid { display: grid; gap: 12px; }
-  .grid.cards { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
-  .grid.groups { grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
+  .grid { display: grid; gap: 12px; justify-content: start; }
+  .grid.cards { grid-template-columns: repeat(auto-fill, minmax(150px, 200px)); }
+  .grid.groups { grid-template-columns: repeat(auto-fill, minmax(220px, 260px)); }
   .card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
           overflow: hidden; cursor: pointer; display: flex; flex-direction: column; transition: border-color .12s; }
   .card:hover { border-color: var(--accent-dim); }

@@ -8,10 +8,10 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Threading;
-using DASD.Core;
-using DASD.Services;
+using DLsiteMedia.Core;
+using DLsiteMedia.Services;
 
-namespace DASD.Views;
+namespace DLsiteMedia.Views;
 
 /// <summary>下载页子行：单个分卷文件。</summary>
 public class DownloadFileItem : ObservableBase

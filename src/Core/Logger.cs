@@ -1,7 +1,7 @@
 using System;
 using System.IO;
 
-namespace DASD.Core;
+namespace DLsiteMedia.Core;
 
 /// <summary>
 /// 文件 + 控制台日志（对应 Python 版 log.py）。

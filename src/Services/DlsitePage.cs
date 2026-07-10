@@ -6,10 +6,10 @@ using System.Net;
 using System.Net.Http;
 using System.Text;
 using System.Threading.Tasks;
-using DASD.Core;
+using DLsiteMedia.Core;
 using HtmlAgilityPack;
 
-namespace DASD.Services;
+namespace DLsiteMedia.Services;
 
 /// <summary>DLsite 作品页抓取结果。</summary>
 public class WorkPageData

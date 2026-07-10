@@ -4,9 +4,9 @@ using System.Net.Http;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
-using DASD.Core;
+using DLsiteMedia.Core;
 
-namespace DASD.Services;
+namespace DLsiteMedia.Services;
 
 /// <summary>debrid-link.com 下载中转站 API 客户端（对应 Python 版 DebridLink 类）。</summary>
 public class DebridLinkClient : IDisposable

@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using Microsoft.Data.Sqlite;
 
-namespace DASD.Core;
+namespace DLsiteMedia.Core;
 
 /// <summary>
 /// SQLite 数据库访问层（对应 Python 版 datebase_execution.py）。

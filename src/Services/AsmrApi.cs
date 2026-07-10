@@ -5,9 +5,9 @@ using System.Net;
 using System.Net.Http;
 using System.Text.Json;
 using System.Threading.Tasks;
-using DASD.Core;
+using DLsiteMedia.Core;
 
-namespace DASD.Services;
+namespace DLsiteMedia.Services;
 
 /// <summary>asmr.one 作品详情中的单个文件（含直链与作品内相对目录）。</summary>
 public class AsmrFile

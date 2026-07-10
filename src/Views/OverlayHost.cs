@@ -5,7 +5,7 @@ using System.Windows.Documents;
 using System.Windows.Media;
 using System.Windows.Threading;
 
-namespace DASD.Views;
+namespace DLsiteMedia.Views;
 
 /// <summary>
 /// 程序内模态覆盖层宿主：在所属窗口的 AdornerLayer 上叠加内容，并用嵌套消息泵阻塞到关闭，

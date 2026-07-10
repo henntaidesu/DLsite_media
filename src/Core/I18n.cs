@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
 
-namespace DASD.Core;
+namespace DLsiteMedia.Core;
 
 /// <summary>
 /// 界面多语言支持（对应 Python 版 i18n.py）。

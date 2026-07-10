@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using System.Net;
 using System.Text.Json;
 
-namespace DASD.Core;
+namespace DLsiteMedia.Core;
 
 /// <summary>一个媒体库：名称 + 文件夹列表。</summary>
 public class MediaLib

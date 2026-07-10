@@ -6,9 +6,9 @@ using System.Net;
 using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
-using DASD.Core;
+using DLsiteMedia.Core;
 
-namespace DASD.Services;
+namespace DLsiteMedia.Services;
 
 /// <summary>正在下载任务的实时进度（UUID -> 进度），由下载线程写入、下载页 UI 读取。</summary>
 public class DownloadProgressInfo

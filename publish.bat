@@ -13,7 +13,7 @@ if exist "%OUT%" (
 )
 
 echo Publishing DLsiteMedia.exe ...
-dotnet publish src\DASD.csproj ^
+dotnet publish src\DLsiteMedia.csproj ^
     -c Release ^
     -r win-x64 ^
     --self-contained false ^
@@ -21,7 +21,6 @@ dotnet publish src\DASD.csproj ^
     -p:IncludeNativeLibrariesForSelfExtract=true ^
     -p:DebugType=none ^
     -p:VlcWindowsX86Enabled=false ^
-    -p:AssemblyName=DLsiteMedia ^
     -o "%OUT%"
 
 if errorlevel 1 (

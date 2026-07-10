@@ -2,7 +2,7 @@ using System.Collections.Generic;
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
 
-namespace DASD.Views;
+namespace DLsiteMedia.Views;
 
 /// <summary>简单 INotifyPropertyChanged 基类，供各页面条目模型使用。</summary>
 public abstract class ObservableBase : INotifyPropertyChanged

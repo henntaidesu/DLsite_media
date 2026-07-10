@@ -333,6 +333,7 @@ public static class WebServer
                 // 搜索
                 case "/api/search": await ApiSearchAsync(stream, req); break;
                 case "/api/maker": await ApiMakerAsync(stream, req); break;
+                case "/api/catalog": await ApiCatalogAsync(stream, req); break;
                 case "/api/asscan": await ApiAsScanAsync(stream, req); break;
                 case "/api/thumb": await ApiThumbAsync(stream, req); break;
                 case "/api/posturls": await ApiPostUrlsAsync(stream, req); break;
@@ -353,6 +354,7 @@ public static class WebServer
                 case "/api/clearall": ApiClearAll(stream); break;
                 case "/api/downloaded": ApiDownloaded(stream); break;
                 case "/api/mark": ApiMark(stream, req); break;
+                case "/api/dislike": ApiDislike(stream, req); break;
                 // 设置
                 case "/api/settings": if (req.Method == "POST") ApiSettingsWrite(stream, req); else ApiSettings(stream); break;
                 case "/api/debridtest": await ApiDebridTestAsync(stream, req); break;
@@ -828,6 +830,31 @@ public static class WebServer
         WriteJson(stream, 200, new { ok = true, value });
     }
 
+    /// <summary>设置/取消作品"不喜欢"：POST { id, value }。命中后前端跳过 AS 扫描并置灰。</summary>
+    private static void ApiDislike(NetworkStream stream, Request req)
+    {
+        string id = "";
+        var value = false;
+        try
+        {
+            using var doc = JsonDocument.Parse(Encoding.UTF8.GetString(req.Body));
+            var root = doc.RootElement;
+            id = (root.TryGetProperty("id", out var i) ? i.GetString() ?? "" : "").ToUpperInvariant();
+            value = root.TryGetProperty("value", out var v) && v.ValueKind == JsonValueKind.True;
+        }
+        catch (Exception)
+        {
+            // 解析失败按非法请求处理
+        }
+        if (id.Length == 0)
+        {
+            WriteJson(stream, 400, new { error = "bad request" });
+            return;
+        }
+        Dislikes.Set(id, value);
+        WriteJson(stream, 200, new { ok = true, value });
+    }
+
     // ---------- API：图片 ----------
 
     private static void ApiCover(NetworkStream stream, Request req)
@@ -1117,8 +1144,9 @@ public static class WebServer
         if (page < 1)
             page = 1;
         var (works, hasMore) = await DlsiteApi.GetMakerWorksAsync(id, page);
-        // 校验后台：本页作品号哪些已在库（works 表已有记录），供前端置灰标记
+        // 校验后台：本页作品号哪些已在库（works 表已有记录）、哪些被标记不喜欢，供前端置灰/跳过 AS 扫描
         var states = LookupWorkStates(works.Select(w => w.WorkId));
+        var disliked = Dislikes.Lookup(works.Select(w => w.WorkId));
         WriteJson(stream, 200, new
         {
             works = works.Select(w => new
@@ -1126,6 +1154,39 @@ public static class WebServer
                 id = w.WorkId, title = w.Title, thumb = w.Thumb,
                 inLib = states.ContainsKey(w.WorkId),
                 state = states.GetValueOrDefault(w.WorkId, ""),
+                disliked = disliked.Contains(w.WorkId),
+            }),
+            hasMore,
+        });
+    }
+
+    /// <summary>按 DLsite 搜索/筛选/分类列表页（fsr 等 dlsite.com 链接）返回作品列表的某一页。</summary>
+    private static async Task ApiCatalogAsync(NetworkStream stream, Request req)
+    {
+        var url = (req.Query.GetValueOrDefault("url") ?? "").Trim();
+        // 仅允许真实的 dlsite.com 主机，避免被当作任意 URL 抓取
+        if (!(Uri.TryCreate(url, UriKind.Absolute, out var u)
+              && (u.Scheme == Uri.UriSchemeHttp || u.Scheme == Uri.UriSchemeHttps)
+              && (u.Host.Equals("dlsite.com", StringComparison.OrdinalIgnoreCase)
+                  || u.Host.EndsWith(".dlsite.com", StringComparison.OrdinalIgnoreCase))))
+        {
+            WriteJson(stream, 400, new { error = "链接格式错误（需为 DLsite 链接）" });
+            return;
+        }
+        var page = GetInt(req, "page");
+        if (page < 1)
+            page = 1;
+        var (works, hasMore) = await DlsiteApi.GetCatalogWorksAsync(url, page);
+        var states = LookupWorkStates(works.Select(w => w.WorkId));
+        var disliked = Dislikes.Lookup(works.Select(w => w.WorkId));
+        WriteJson(stream, 200, new
+        {
+            works = works.Select(w => new
+            {
+                id = w.WorkId, title = w.Title, thumb = w.Thumb,
+                inLib = states.ContainsKey(w.WorkId),
+                state = states.GetValueOrDefault(w.WorkId, ""),
+                disliked = disliked.Contains(w.WorkId),
             }),
             hasMore,
         });

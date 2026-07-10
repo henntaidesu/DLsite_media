@@ -30,11 +30,17 @@ function goBackToMaker() {
     requestAnimationFrame(() => window.scrollTo(0, makerState.scrollY || 0));
   }
 }
-// 识别输入：作品号 / 社团号 / DLsite 链接
+// 识别输入：作品号 / 社团号 / DLsite 链接（任意 dlsite.com 链接均可用）
 function parseInput(raw) {
   raw = (raw || '').trim();
-  let m = raw.match(/product_id\/((?:RJ|BJ|VJ)\d+)/i); if (m) return { kind: 'work', id: m[1].toUpperCase() };
-  m = raw.match(/maker_id\/(RG\d+)/i); if (m) return { kind: 'maker', id: m[1].toUpperCase() };
+  if (/dlsite\.com/i.test(raw)) {
+    // fsr 搜索/筛选/分类列表页：整页作为目录列表；须先于 maker_id 判定，否则带 maker_id 筛选的 fsr 链接会被误判为社团
+    if (/dlsite\.com\/[^/]+\/fsr\//i.test(raw)) return { kind: 'catalog', id: raw };
+    let m = raw.match(/product_id\/((?:RJ|BJ|VJ)\d+)/i); if (m) return { kind: 'work', id: m[1].toUpperCase() };
+    m = raw.match(/maker_id\/(RG\d+)/i); if (m) return { kind: 'maker', id: m[1].toUpperCase() };
+    // 其他任意 DLsite 列表页（分类/排行/搜索结果等）
+    return { kind: 'catalog', id: raw };
+  }
   const up = raw.toUpperCase();
   if (/^(?:RJ|BJ|VJ)\d+$/.test(up)) return { kind: 'work', id: up };
   if (/^RG\d+$/.test(up)) return { kind: 'maker', id: up };
@@ -42,7 +48,8 @@ function parseInput(raw) {
 }
 async function runSearch() {
   const p = parseInput($('sId').value);
-  if (p.kind === 'maker') { await runMakerSearch(p.id); return; }
+  if (p.kind === 'catalog') { await runGridSearch({ catalogUrl: p.id }); return; }
+  if (p.kind === 'maker') { await runGridSearch({ id: p.id }); return; }
   if (p.kind !== 'work') { showWorkPane(); $('workPane').innerHTML = '<div class="empty">请输入作品号(RJ/BJ/VJ)、社团号(RG) 或 DLsite 链接</div>'; return; }
   makerReturnId = null;
   $('sId').value = p.id;
@@ -63,7 +70,7 @@ async function runWorkSearch(id) {
   }
   if (!d.results.length) { box.innerHTML = ''; box.appendChild(el('div', 'empty', '无匹配数据')); return; }
   box.innerHTML = '';
-  if (makerReturnId) { const bk = el('button', 'icon-btn', '← 返回社团作品'); bk.style.marginBottom = '10px'; bk.onclick = goBackToMaker; box.appendChild(bk); }
+  if (makerReturnId) { const bk = el('button', 'icon-btn', makerState && makerState.catalogUrl ? '← 返回作品列表' : '← 返回社团作品'); bk.style.marginBottom = '10px'; bk.onclick = goBackToMaker; box.appendChild(bk); }
   $('count').textContent = `${d.work.name || d.id} · ${d.results.length} 个帖子`;
   const posts = [];
   d.results.forEach(r => {
@@ -130,15 +137,16 @@ async function scanPost(id, post, gen) {
   return anyValid;
 }
 
-// 社团（RG）搜索：作品缩略图网格 + 下拉到底自动加载下一页
+// 社团（RG）/ 目录列表（DLsite 链接）搜索：作品缩略图网格 + 下拉到底自动加载下一页
 let makerState = null, makerReturnId = null;
-async function runMakerSearch(makerId) {
+// src: { id } 走社团接口，{ catalogUrl } 走目录列表接口；两者共用同一作品网格与 AS 扫描
+async function runGridSearch(src) {
   showMakerPane();
   $('count').textContent = '';
   const box = $('makerPane');
-  box.innerHTML = '<div class="empty"><span class="spin"></span> 正在获取社团作品…</div>';
+  box.innerHTML = '<div class="empty"><span class="spin"></span> 正在获取作品…</div>';
   if (makerState && makerState.io) makerState.io.disconnect();
-  makerState = { id: makerId, page: 0, hasMore: true, loading: false, scanQueue: [], scanning: false, cards: {}, countText: '' };
+  makerState = { id: src.id || src.catalogUrl, catalogUrl: src.catalogUrl || null, page: 0, hasMore: true, loading: false, scanQueue: [], scanning: false, cards: {}, countText: '' };
   box.innerHTML = '';
   const grid = el('div', 'grid cards'); box.appendChild(grid); makerState.grid = grid;
   const sentinel = el('div'); sentinel.style.height = '1px'; box.appendChild(sentinel);
@@ -150,27 +158,61 @@ async function loadMakerPage() {
   const s = makerState; if (!s || s.loading || !s.hasMore) return;
   s.loading = true;
   let d;
-  try { d = await api(`/api/maker?id=${enc(s.id)}&page=${s.page + 1}`); } catch (e) { s.loading = false; return; }
+  try {
+    d = s.catalogUrl
+      ? await api(`/api/catalog?url=${enc(s.catalogUrl)}&page=${s.page + 1}`)
+      : await api(`/api/maker?id=${enc(s.id)}&page=${s.page + 1}`);
+  } catch (e) { s.loading = false; return; }
   if (d.error || !d.works || !d.works.length) {
-    if (s.page === 0) { const mp = $('makerPane'); mp.innerHTML = ''; mp.appendChild(el('div', 'empty', d.error || '未找到该社团的作品')); }
+    if (s.page === 0) { const mp = $('makerPane'); mp.innerHTML = ''; mp.appendChild(el('div', 'empty', d.error || (s.catalogUrl ? '未找到作品' : '未找到该社团的作品'))); }
     s.hasMore = false; s.loading = false; if (s.io) s.io.disconnect(); return;
   }
   s.page++; s.hasMore = d.hasMore;
   let hasDownloading = false;
   d.works.forEach(w => {
-    // 下载中 → 下载状态角标（同步下载页）；已下载/已品悦 → 置灰在库角标；无记录 → 排入 AS 扫描
+    // 下载中/等待下载 → 下载状态角标（同步下载页）；已下载/已品悦 → 在库角标；不喜欢 → 不喜欢角标；
+    // 以上均无需 AS 搜索 → 一律置灰。仅无记录且未被标记不喜欢者排入 AS 扫描
     const inLib = w.state === '已品悦' || w.state === '已下载';
     const downloading = w.state === '下载中';
-    const c = el('div', 'card mk' + (inLib ? ' dim' : ''));
+    let disliked = !!w.disliked;
+    const c = el('div', 'card mk' + ((inLib || downloading || disliked) ? ' dim' : ''));
     const cov = el('div', 'cover');
     if (w.thumb) { const img = el('img'); img.loading = 'lazy'; img.src = '/api/thumb?url=' + enc(w.thumb); cov.appendChild(img); }
     cov.appendChild(el('div', 'badge rj', w.id));
     let badge;
     if (inLib) { badge = el('div', 'badge lib', w.state); }
     else if (downloading) { badge = el('div', 'badge as', '下载中'); badge.style.color = '#60a5fa'; badge.dataset.dl = '1'; hasDownloading = true; }
+    else if (disliked) { badge = el('div', 'badge as', '不喜欢'); }
     else { badge = el('div', 'badge as', '待扫描'); s.scanQueue.push(w.id); }
     cov.appendChild(badge);
     s.cards[w.id] = badge;
+    // 不喜欢按钮（图片右下角）：仅对需要 / 已跳过 AS 搜索的作品显示（在库/下载中的作品本就无需搜索，不再叠加）
+    if (!inLib && !downloading) {
+      const dbtn = el('button', 'dislike' + (disliked ? ' on' : '')); dbtn.textContent = '👎';
+      dbtn.title = disliked ? '取消不喜欢' : '不喜欢（以后跳过 AS 搜索）';
+      dbtn.onclick = async (ev) => {
+        ev.stopPropagation();
+        const next = !disliked;
+        dbtn.disabled = true;
+        let r; try { r = await apiPost('/api/dislike', { id: w.id, value: next }); } catch (e) { dbtn.disabled = false; return; }
+        dbtn.disabled = false;
+        if (!r || !r.ok) return;
+        disliked = next;
+        dbtn.classList.toggle('on', disliked);
+        dbtn.title = disliked ? '取消不喜欢' : '不喜欢（以后跳过 AS 搜索）';
+        if (disliked) {
+          c.classList.add('dim');
+          badge.textContent = '不喜欢'; badge.style.color = ''; badge.style.background = '';
+          const qi = s.scanQueue.indexOf(w.id); if (qi >= 0) s.scanQueue.splice(qi, 1);   // 尚未扫描则移出队列
+        } else {
+          c.classList.remove('dim');
+          badge.textContent = '待扫描'; badge.style.color = ''; badge.style.background = '';
+          if (!s.scanQueue.includes(w.id)) s.scanQueue.push(w.id);
+          runMakerScans();   // 取消不喜欢 → 立即排入 AS 扫描
+        }
+      };
+      cov.appendChild(dbtn);
+    }
     c.appendChild(cov);
     // 底部区（占卡片高度 1/3）：标题 + 卡内常驻操作按钮（默认禁用/屏蔽，AS 命中帖子后由 runMakerScans 启用）
     const foot = el('div', 'mk-foot');
@@ -213,7 +255,7 @@ async function startMakerDownPoll() {
       b.textContent = g.statusText;
       b.style.background = 'rgba(0,0,0,.72)';
       b.style.color = g.color;
-      const card = b.closest('.card'); if (card) card.classList.remove('dim');
+      const card = b.closest('.card'); if (card) card.classList.add('dim');   // 下载中/等待下载：无需 AS 搜索 → 置灰
     });
     if (!(d.groups || []).length) break;   // 无活动下载则停止轮询
     await new Promise(r => setTimeout(r, 1000));
@@ -261,7 +303,7 @@ async function autoDownload(id, badge, btn) {
     btn.textContent = '已入队';   // 保持禁用，避免重复入队
     // 角标即刻转「搜索连接中」，随后由 startMakerDownPoll 按 /api/downloads 聚合状态刷新
     if (badge) { badge.dataset.dl = '1'; badge.textContent = '搜索连接中'; badge.style.background = 'rgba(0,0,0,.72)'; badge.style.color = '#facc15'; }
-    const mc = badge && badge.closest('.card'); if (mc) mc.classList.remove('dim');
+    const mc = badge && badge.closest('.card'); if (mc) mc.classList.add('dim');   // 已入队、无需 AS 搜索 → 置灰
     startMakerDownPoll();
   } else { btn.disabled = false; btn.textContent = orig; await uiAlert('自动下载失败：' + (r.error || r.message || '')); }
 }
@@ -281,7 +323,7 @@ async function enqueue(id, urls, card, st) {
     if (makerState && makerState.cards[id]) {
       const b = makerState.cards[id];
       b.dataset.dl = '1'; b.textContent = '待下载'; b.style.background = 'rgba(0,0,0,.72)'; b.style.color = '#facc15';
-      const mc = b.closest('.card'); if (mc) mc.classList.remove('dim');
+      const mc = b.closest('.card'); if (mc) mc.classList.add('dim');   // 已加入下载、无需 AS 搜索 → 置灰
       startMakerDownPoll();
     }
   } else { st.textContent = '加入失败'; st.style.color = '#f87171'; }

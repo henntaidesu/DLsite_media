@@ -194,6 +194,15 @@
                                         <TextBlock Text="{Binding DownText}" Foreground="{Binding DownBrush}"
                                                    FontSize="11" FontWeight="SemiBold" HorizontalAlignment="Center" />
                                     </Border>
+                                    <!-- 不喜欢按钮（右下角）：命中后跳过 AS 搜索、置灰，可再次点击取消 -->
+                                    <Border HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="6"
+                                            Width="24" Height="24" CornerRadius="12" Cursor="Hand"
+                                            Background="{Binding DislikeBg}" ToolTip="{Binding DislikeTip}"
+                                            Visibility="{Binding DislikeBtnVisibility}"
+                                            PreviewMouseLeftButtonDown="DislikeButton_MouseDown">
+                                        <TextBlock Text="&#x1F44E;" FontSize="12" Opacity="{Binding DislikeIconOpacity}"
+                                                   HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                    </Border>
                                 </Grid>
                                 <TextBlock Text="{Binding Title}" FontSize="12.5" FontWeight="Medium"
                                            TextWrapping="Wrap" MaxHeight="40" Margin="9,7,9,10" />

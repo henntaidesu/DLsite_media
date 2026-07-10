@@ -107,6 +107,15 @@
   .badge.lib { left: 6px; right: 6px; top: auto; bottom: 6px; max-width: none; text-align: center;
                background: rgba(110,110,122,.9); }
   .badge.as { left: 6px; right: 6px; top: auto; bottom: 6px; max-width: none; text-align: center; }
+  /* 不喜欢按钮：图片右下角，半透明常驻，命中后转红。置于置灰滤镜之上（提升自身层级不受父级 grayscale 影响有限，用红底强调） */
+  .cover .dislike { position: absolute; right: 6px; bottom: 6px; z-index: 3;
+                    width: 26px; height: 26px; padding: 0; border: none; border-radius: 50%;
+                    background: rgba(0,0,0,.5); color: #fff; font-size: 13px; line-height: 1;
+                    cursor: pointer; opacity: .65; filter: grayscale(1) brightness(1.4);
+                    display: flex; align-items: center; justify-content: center; }
+  .cover .dislike:hover { opacity: 1; background: rgba(0,0,0,.72); }
+  .cover .dislike.on { background: rgba(220,60,60,.92); opacity: 1; filter: none; }
+  .cover .dislike:disabled { cursor: default; opacity: .4; }
   /* 已在库作品：置灰降亮，仍可点击 */
   .card.dim { opacity: .5; filter: grayscale(.9); }
   .card.dim:hover { border-color: var(--line); }

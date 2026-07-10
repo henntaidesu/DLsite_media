@@ -111,7 +111,16 @@ function renderDlTree(id, node, host) {
       const bar = el('div', 'fbar'); const i = el('i'); i.style.width = f.pct + '%'; bar.appendChild(i); fr.appendChild(bar);
       fr.appendChild(el('div', 'fsp', f.speed || ''));
       const st = el('div', 'fst', f.statusText); st.style.color = f.color; fr.appendChild(st);
-      if (f.url) { const cp = el('button', 'mini', '复制链接'); cp.onclick = () => copyText(f.url); fr.appendChild(cp); }
+      if (f.url) {
+        const cp = el('button', 'mini', '复制链接');
+        cp.onclick = async () => {
+          const ok = await copyText(f.url);
+          const orig = '复制链接';
+          cp.textContent = ok ? '已复制' : '复制失败';
+          setTimeout(() => { cp.textContent = orig; }, 1200);
+        };
+        fr.appendChild(cp);
+      }
       host.appendChild(fr);
       if (f.errorReason) host.appendChild(el('div', 'ferr', f.errorReason));
     }

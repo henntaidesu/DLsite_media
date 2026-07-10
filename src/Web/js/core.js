@@ -3,17 +3,27 @@ const $ = (id) => document.getElementById(id);
 const el = (tag, cls, txt) => { const e = document.createElement(tag); if (cls) e.className = cls; if (txt != null) e.textContent = txt; if (tag === 'input') { e.autocomplete = 'off'; e.setAttribute('data-lpignore', 'true'); } return e; };
 const enc = encodeURIComponent;
 
-// 复制文本到剪贴板：优先 navigator.clipboard（需 https/localhost），否则退回 execCommand（局域网 http 下可用）
-function copyText(t) {
-  if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(t).catch(() => fallbackCopy(t)); }
-  else fallbackCopy(t);
+// 复制文本到剪贴板，返回 Promise<boolean> 表示是否成功。
+// 仅在安全上下文（https/localhost）用 navigator.clipboard；局域网 http 下该 API 被禁用（甚至 writeText 会挂起/拒绝），
+// 故此时直接退回 execCommand 方案（配合 focus + setSelectionRange 才能在多数浏览器/移动端可靠选中）。
+async function copyText(t) {
+  if (window.isSecureContext && navigator.clipboard && navigator.clipboard.writeText) {
+    try { await navigator.clipboard.writeText(t); return true; } catch (e) { /* 退回 execCommand */ }
+  }
+  return fallbackCopy(t);
 }
 function fallbackCopy(t) {
   const ta = document.createElement('textarea');
-  ta.value = t; ta.style.position = 'fixed'; ta.style.opacity = '0';
-  document.body.appendChild(ta); ta.select();
-  try { document.execCommand('copy'); } catch (e) { }
+  ta.value = t;
+  ta.style.position = 'fixed'; ta.style.top = '0'; ta.style.left = '0'; ta.style.opacity = '0';
+  ta.setAttribute('readonly', '');
+  document.body.appendChild(ta);
+  ta.focus(); ta.select();
+  try { ta.setSelectionRange(0, ta.value.length); } catch (e) { }
+  let ok = false;
+  try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
   document.body.removeChild(ta);
+  return ok;
 }
 
 // ---------- 页内弹窗（替代浏览器原生 alert/confirm/prompt，避免使用浏览器顶部弹窗）----------

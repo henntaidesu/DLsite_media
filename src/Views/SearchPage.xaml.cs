@@ -147,8 +147,31 @@ public class MakerWorkItem : INotifyPropertyChanged
     /// <summary>在库状态文本（下载中/已下载/已品悦），仅 InLib 时显示。</summary>
     public string StateText { get; init; } = "";
 
-    /// <summary>卡片不透明度：在库作品降到 0.45 以示区别。</summary>
-    public double CardOpacity { get; init; } = 1.0;
+    /// <summary>卡片不透明度：已在库 / 下载中 / 不喜欢（均无需 AS 搜索）的作品降到 0.45 以示区别。</summary>
+    public double CardOpacity => InLib || DownActive || Disliked ? 0.45 : 1.0;
+
+    // 不喜欢：命中的作品跳过 AS 扫描、直接置灰，可随时取消
+    private bool _disliked;
+    public bool Disliked
+    {
+        get => _disliked;
+        set
+        {
+            _disliked = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(CardOpacity));
+            OnPropertyChanged(nameof(DislikeBg));
+            OnPropertyChanged(nameof(DislikeTip));
+            OnPropertyChanged(nameof(DislikeIconOpacity));
+        }
+    }
+
+    /// <summary>不喜欢按钮：仅对未在库且非下载状态的作品显示（在库/下载中本就无需 AS 搜索）。</summary>
+    public Visibility DislikeBtnVisibility => !InLib && !DownActive ? Visibility.Visible : Visibility.Collapsed;
+    public Brush DislikeBg => Disliked ? new SolidColorBrush(Color.FromArgb(0xEB, 0xDC, 0x3C, 0x3C))
+                                       : new SolidColorBrush(Color.FromArgb(0x80, 0, 0, 0));
+    public string DislikeTip => Disliked ? I18n.Tr("取消不喜欢") : I18n.Tr("不喜欢");
+    public double DislikeIconOpacity => Disliked ? 1.0 : 0.7;
 
     // 下载状态角标（与下载页同步）：加入下载后展示 待下载 / 下载中 N/M / 解压中 X% / 已完成 …，优先于 AS/在库角标
     private bool _downActive;
@@ -159,9 +182,11 @@ public class MakerWorkItem : INotifyPropertyChanged
         {
             _downActive = value;
             OnPropertyChanged();
+            OnPropertyChanged(nameof(CardOpacity));
             OnPropertyChanged(nameof(LibBadgeVisibility));
             OnPropertyChanged(nameof(AsBadgeVisibility));
             OnPropertyChanged(nameof(DownBadgeVisibility));
+            OnPropertyChanged(nameof(DislikeBtnVisibility));
         }
     }
 
@@ -629,6 +654,7 @@ public partial class SearchPage : UserControl
         // 校验后台：本页作品号在 works 表中的状态。
         // 下载中 → 下载状态角标（实时同步下载页）；已下载/已品悦 → 置灰在库角标；无记录 → 排入 AS 扫描。
         var states = LookupWorkStates(page.Works.Select(w => w.WorkId));
+        var disliked = Dislikes.Lookup(page.Works.Select(w => w.WorkId));
         var added = new List<MakerWorkItem>();
         var hasDownloading = false;
         foreach (var w in page.Works)
@@ -636,23 +662,24 @@ public partial class SearchPage : UserControl
             var state = states.GetValueOrDefault(w.WorkId);
             var inLib = state is "已品悦" or "已下载";
             var downloading = state == "下载中";
+            var isDisliked = disliked.Contains(w.WorkId);
             var item = new MakerWorkItem
             {
                 WorkId = w.WorkId, Title = w.Title, ThumbUrl = w.Thumb,
                 InLib = inLib, StateText = inLib ? state ?? "" : "",
-                CardOpacity = inLib ? 0.45 : 1.0,
                 DownActive = downloading,
                 DownText = downloading ? I18n.Tr("下载中") : "",
                 DownBrush = (Brush)FindResource("BlueBrush"),
-                AsStatusText = inLib || downloading ? "" : I18n.Tr("待扫描"),
+                Disliked = isDisliked,
+                AsStatusText = inLib || downloading ? "" : (isDisliked ? I18n.Tr("不喜欢") : I18n.Tr("待扫描")),
                 AsStatusBrush = (Brush)FindResource("CaptionBrush"),
             };
             _makerWorks.Add(item);
             added.Add(item);
             if (downloading)
                 hasDownloading = true;
-            else if (!inLib)
-                _scanQueue.Enqueue(item);   // 无记录 → 排入 AS 扫描队列
+            else if (!inLib && !isDisliked)
+                _scanQueue.Enqueue(item);   // 无记录且未被标记不喜欢 → 排入 AS 扫描队列
         }
         _makerLoading = false;
         _ = LoadMakerThumbnailsAsync(added, gen);
@@ -850,6 +877,47 @@ public partial class SearchPage : UserControl
         InputBox.Text = item.WorkId;
         _fromMaker = true;
         await RunWorkSearchAsync(item.WorkId);
+    }
+
+    /// <summary>点击卡片右下角"不喜欢"按钮：切换标记。用 PreviewMouseLeftButtonDown 并吞掉事件，避免冒泡触发 ListBoxItem 选中导航。</summary>
+    private void DislikeButton_MouseDown(object sender, MouseButtonEventArgs e)
+    {
+        e.Handled = true;
+        if (sender is FrameworkElement { DataContext: MakerWorkItem item })
+            ToggleDislike(item);
+    }
+
+    /// <summary>切换某作品的"不喜欢"：记录入库；命中则移出 AS 扫描队列并置灰，取消则重新排入扫描。</summary>
+    private void ToggleDislike(MakerWorkItem item)
+    {
+        var next = !item.Disliked;
+        Dislikes.Set(item.WorkId, next);
+        item.Disliked = next;
+        if (next)
+        {
+            RemoveFromScanQueue(item);
+            item.AsStatusText = I18n.Tr("不喜欢");
+            item.AsStatusBrush = (Brush)FindResource("CaptionBrush");
+        }
+        else
+        {
+            item.AsStatusText = I18n.Tr("待扫描");
+            item.AsStatusBrush = (Brush)FindResource("CaptionBrush");
+            if (!_scanQueue.Contains(item))
+                _scanQueue.Enqueue(item);
+            _ = RunMakerScansAsync(_makerGeneration);   // 取消不喜欢 → 立即排入 AS 扫描
+        }
+    }
+
+    /// <summary>从 AS 扫描队列移除某作品（Queue 不支持随机删除，原地重建）。</summary>
+    private void RemoveFromScanQueue(MakerWorkItem item)
+    {
+        if (_scanQueue.Count == 0)
+            return;
+        var kept = _scanQueue.Where(it => it != item).ToList();
+        _scanQueue.Clear();
+        foreach (var it in kept)
+            _scanQueue.Enqueue(it);
     }
 
     /// <summary>后台加载社团作品缩略图。</summary>

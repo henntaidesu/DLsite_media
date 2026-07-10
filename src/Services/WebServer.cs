@@ -12,9 +12,9 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
-using DASD.Core;
+using DLsiteMedia.Core;
 
-namespace DASD.Services;
+namespace DLsiteMedia.Services;
 
 /// <summary>
 /// 内嵌的外部访问 HTTP 服务：把媒体库（已品悦作品）以响应式网页的形式暴露给手机/电脑浏览器。

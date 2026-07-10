@@ -2,11 +2,11 @@ using System;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
-using DASD.Core;
+using DLsiteMedia.Core;
 using LibVLCSharp.Shared;
 using MediaPlayer = LibVLCSharp.Shared.MediaPlayer;   // 消除与 System.Windows.Media.MediaPlayer 的歧义
 
-namespace DASD.Views;
+namespace DLsiteMedia.Views;
 
 /// <summary>
 /// 详情页内嵌视频播放器：用 LibVLC（VLC 引擎）渲染 + 播放/暂停 + 进度条。

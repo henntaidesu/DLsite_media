@@ -3,9 +3,9 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
-using DASD.Core;
+using DLsiteMedia.Core;
 
-namespace DASD.Services;
+namespace DLsiteMedia.Services;
 
 /// <summary>单个作品的入队结果。</summary>
 public class AsmrEnqueueResult

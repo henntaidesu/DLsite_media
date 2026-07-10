@@ -7,9 +7,10 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
-using DASD.Core;
+using System.Windows.Threading;
+using DLsiteMedia.Core;
 
-namespace DASD.Views;
+namespace DLsiteMedia.Views;
 
 /// <summary>已下载页一行数据。</summary>
 public class DownloadedRow
@@ -50,6 +51,11 @@ public partial class DownloadedPage : UserControl
     private string? _sortProp;
     private ListSortDirection _sortDirection;
 
+    // 搜索输入防抖：连续输入时只在停顿 250ms 后重建一次过滤视图，
+    // 避免每敲一个字就对全量 _all 过滤+排序+重填列表。
+    private readonly DispatcherTimer _searchDebounce =
+        new() { Interval = TimeSpan.FromMilliseconds(250) };
+
     // 表头 -> (列标题原文, 排序属性)
     private readonly (TextBlock Header, string Title, string Prop)[] _headers;
 
@@ -69,6 +75,11 @@ public partial class DownloadedPage : UserControl
             (HdrState, "状态", nameof(DownloadedRow.StateText)),
             (HdrTime, "下载时间", nameof(DownloadedRow.DownTime)),
         ];
+        _searchDebounce.Tick += (_, _) =>
+        {
+            _searchDebounce.Stop();
+            RebuildView();
+        };
         RetranslateUi();
         I18n.LanguageChanged += RetranslateUi;
     }
@@ -192,7 +203,8 @@ public partial class DownloadedPage : UserControl
     private void SearchBox_TextChanged(object sender, TextChangedEventArgs e)
     {
         _keyword = SearchBox.Text.Trim();
-        RebuildView();
+        _searchDebounce.Stop();
+        _searchDebounce.Start();
     }
 
     private void StateFilter_SelectionChanged(object sender, SelectionChangedEventArgs e)

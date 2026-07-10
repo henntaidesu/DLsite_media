@@ -5,11 +5,11 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using System.Threading;
-using DASD.Core;
+using DLsiteMedia.Core;
 using SharpCompress.Archives;
 using SharpCompress.Common;
 
-namespace DASD.Services;
+namespace DLsiteMedia.Services;
 
 /// <summary>
 /// 解压作品压缩包（对应 Python 版 unzip.py）：

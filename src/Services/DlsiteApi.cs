@@ -5,10 +5,10 @@ using System.Net.Http;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
-using DASD.Core;
+using DLsiteMedia.Core;
 using HtmlAgilityPack;
 
-namespace DASD.Services;
+namespace DLsiteMedia.Services;
 
 /// <summary>DL suggest API 返回的作品数据（对应 Python 版 get_work_data 的 dict）。</summary>
 public class DlWork

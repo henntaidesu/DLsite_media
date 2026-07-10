@@ -3,10 +3,11 @@ using System.Net.Http;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using System.Threading;
 using System.Threading.Tasks;
-using DASD.Core;
+using DLsiteMedia.Core;
 
-namespace DASD.Services;
+namespace DLsiteMedia.Services;
 
 /// <summary>直连检测下载链接是否有效，不经过中转站（对应 Python 版 doun_url_test.py）。</summary>
 public static class LinkChecker
@@ -71,21 +72,29 @@ public static class LinkChecker
     /// 4. 页面正文含明确的"文件不存在"提示语（rapidgator 等返回 200+错误页的网盘）。
     /// 其余视为有效。
     /// </summary>
-    public static async Task<bool> CheckUrlAsync(string url, HttpClient client)
+    /// <param name="ct">
+    /// 用户点击下载后由调用方触发取消：此时应立即中止正在进行的网络请求，而不是等到超时，
+    /// 因此显式区分"用户主动取消"（向上抛出，不判定为失效）与"HttpClient 自身超时"（判定为失效）。
+    /// </param>
+    public static async Task<bool> CheckUrlAsync(string url, HttpClient client, CancellationToken ct = default)
     {
         // mega 是纯前端应用，死链同样返回 200 + JS 页面，必须走 mega API 判断文件是否存在
         if (IsMega(url))
-            return await CheckMegaAsync(url, client);
+            return await CheckMegaAsync(url, client, ct);
 
         string text;
         Uri? finalUri;
         try
         {
-            using var response = await client.GetAsync(url);
+            using var response = await client.GetAsync(url, ct);
             if ((int)response.StatusCode >= 400)
                 return false;
             finalUri = response.RequestMessage?.RequestUri;  // 跟随重定向后的最终地址
-            text = await response.Content.ReadAsStringAsync();
+            text = await response.Content.ReadAsStringAsync(ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;  // 用户主动中断校验，不判定为失效
         }
         catch (Exception e) when (e is HttpRequestException or TaskCanceledException or UriFormatException)
         {
@@ -116,7 +125,7 @@ public static class LinkChecker
         // 5. SPA 空壳（turbobit 等）或 katfile：HTML 内容因代理 IP 不同而异（死链页 / 付费页均可能
         //    出现），仅靠文本无法可靠判断，改用 debrid-link 解析确认。
         if (IsKatfile(url) || IsSpaShell(text))
-            return await VerifyViaDebridAsync(url);
+            return await VerifyViaDebridAsync(url, ct);
 
         return true;
     }
@@ -146,19 +155,23 @@ public static class LinkChecker
     /// 用 debrid-link 解析链接来确认有效性（仅用于 HTML 无法判断的 SPA 网盘）：
     /// 成功拿到直链=有效；返回明确的"文件失效"错误=失效；其它情况(限流/不支持/未配置)不拦截。
     /// </summary>
-    private static async Task<bool> VerifyViaDebridAsync(string url)
+    private static async Task<bool> VerifyViaDebridAsync(string url, CancellationToken ct)
     {
         if (string.IsNullOrEmpty(AppConfig.DebridApiKey))
             return true;  // 未配置中转，无法验证则不误判为失效
         try
         {
             using var debrid = new DebridLinkClient();
-            var (value, error) = await debrid.AddDownloadDetailedAsync(url);
+            var (value, error) = await debrid.AddDownloadDetailedAsync(url, ct: ct);
             if (value is { } v && !string.IsNullOrEmpty(DlsiteApi.JStr(v, "downloadUrl")))
                 return true;  // 中转成功解析 → 有效
             // 仅在明确的"文件不存在/已失效"错误时判失效；限流/会员/不支持等无法判定 → 不拦截
             return error is not ("fileNotFound" or "fileUnavailable" or "notFound"
                 or "fileError" or "fileNotAvailable");
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;  // 用户主动中断校验，不判定为失效
         }
         catch (Exception e) when (e is HttpRequestException or TaskCanceledException)
         {
@@ -196,7 +209,7 @@ public static class LinkChecker
     /// 通过 mega API 判断公开文件是否存在：POST [{"a":"g","p":"&lt;id&gt;"}]，
     /// 返回含 "s"(大小) 视为有效；返回 -9(不存在)/-2(参数错误) 视为死链；其它(如 -3 限流)不误判。
     /// </summary>
-    private static async Task<bool> CheckMegaAsync(string url, HttpClient client)
+    private static async Task<bool> CheckMegaAsync(string url, HttpClient client, CancellationToken ct)
     {
         var id = ExtractMegaFileId(url);
         if (id == null)
@@ -205,8 +218,8 @@ public static class LinkChecker
         {
             var body = $"[{{\"a\":\"g\",\"p\":\"{id}\"}}]";
             using var content = new StringContent(body, Encoding.UTF8, "application/json");
-            using var response = await client.PostAsync("https://g.api.mega.co.nz/cs", content);
-            var text = await response.Content.ReadAsStringAsync();
+            using var response = await client.PostAsync("https://g.api.mega.co.nz/cs", content, ct);
+            var text = await response.Content.ReadAsStringAsync(ct);
             using var doc = JsonDocument.Parse(text);
             var root = doc.RootElement;
             var first = root.ValueKind == JsonValueKind.Array
@@ -221,6 +234,10 @@ public static class LinkChecker
                 return first.TryGetProperty("s", out _);  // 含文件大小=有效
             }
             return true;  // 无法识别的响应不误判为失效
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;  // 用户主动中断校验，不判定为失效
         }
         catch (Exception e) when (e is HttpRequestException or TaskCanceledException or JsonException)
         {

@@ -1,7 +1,7 @@
-<UserControl x:Class="DASD.Views.DownloadPage"
+<UserControl x:Class="DLsiteMedia.Views.DownloadPage"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-             xmlns:v="clr-namespace:DASD.Views"
+             xmlns:v="clr-namespace:DLsiteMedia.Views"
              IsVisibleChanged="Page_IsVisibleChanged">
     <UserControl.Resources>
         <!-- 目录树展开/收起小三角（文件夹节点用） -->

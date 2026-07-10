@@ -4,7 +4,7 @@ using System.Linq;
 using System.Reflection;
 using System.Text;
 
-namespace DASD.Services;
+namespace DLsiteMedia.Services;
 
 /// <summary>外部访问网页的静态资源：单文件响应式 SPA，作为嵌入资源打包（Web/index.html）。</summary>
 internal static class WebAssets

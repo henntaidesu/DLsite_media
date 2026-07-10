@@ -7,11 +7,11 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
-using DASD.Core;
-using DASD.Services;
+using DLsiteMedia.Core;
+using DLsiteMedia.Services;
 using Microsoft.Win32;
 
-namespace DASD.Views;
+namespace DLsiteMedia.Views;
 
 /// <summary>
 /// 媒体库设置（程序内覆盖层）：新建/删除媒体库、管理文件夹、触发扫描。

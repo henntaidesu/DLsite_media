@@ -6,9 +6,9 @@ publish/
 
 # ---- 本地数据（不入库）----
 CLAUDE.md
-DASD.db
-DASD.db-shm
-DASD.db-wal
+DLsiteMedia.db
+DLsiteMedia.db-shm
+DLsiteMedia.db-wal
 images/
 log/
 *.log

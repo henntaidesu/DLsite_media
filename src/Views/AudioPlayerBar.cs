@@ -9,10 +9,10 @@ using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
-using DASD.Core;
+using DLsiteMedia.Core;
 using NAudio.Wave;
 
-namespace DASD.Views;
+namespace DLsiteMedia.Views;
 
 /// <summary>
 /// 底部音频播放条：播放/暂停 + 播放列表 + 文件名 + （⏮ 进度条 ⏭）+ 时间 + 关闭。

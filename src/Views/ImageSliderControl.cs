@@ -7,7 +7,7 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 
-namespace DASD.Views;
+namespace DLsiteMedia.Views;
 
 /// <summary>详情页图片区：大图 + 缩略图切换条（对应 Python 版 ImageSlider，仿 DLsite 作品页）。</summary>
 public class ImageSliderControl : UserControl

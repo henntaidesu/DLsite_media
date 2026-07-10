@@ -4,9 +4,9 @@ using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
-using DASD.Core;
+using DLsiteMedia.Core;
 
-namespace DASD.Services;
+namespace DLsiteMedia.Services;
 
 /// <summary>媒体库扫描进度回调：(序号, 总数, RJ号, 是否成功)。</summary>
 public delegate void BackfillProgress(int index, int total, string rj, bool ok);

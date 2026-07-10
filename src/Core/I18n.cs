@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
 
-namespace DASD.Core;
+namespace DLsiteMedia.Core;
 
 /// <summary>
 /// 界面多语言支持（对应 Python 版 i18n.py）。
@@ -74,7 +74,7 @@ public static class I18n
     private static readonly Dictionary<string, Dictionary<string, string>> Translations = new()
     {
         // ---------- 导航 / 通用 ----------
-        ["DLsite 下载器"] = new() { ["zh_TW"] = "DLsite 下載器", ["ja"] = "DLsite ダウンローダー", ["en"] = "DLsite Downloader" },
+        ["DLsite媒体库"] = new() { ["zh_TW"] = "DLsite媒體庫", ["ja"] = "DLsiteメディアライブラリ", ["en"] = "DLsite Media Library" },
         ["搜索"] = new() { ["zh_TW"] = "搜尋", ["ja"] = "検索", ["en"] = "Search" },
         ["下载"] = new() { ["zh_TW"] = "下載", ["ja"] = "ダウンロード", ["en"] = "Download" },
         ["搜索/下载"] = new() { ["zh_TW"] = "搜尋/下載", ["ja"] = "検索/ダウンロード", ["en"] = "Search / Download" },
@@ -126,6 +126,8 @@ public static class I18n
         ["有效"] = new() { ["zh_TW"] = "有效", ["ja"] = "有効", ["en"] = "Valid" },
         ["已暂停校验"] = new() { ["zh_TW"] = "已暫停校驗", ["ja"] = "検証を一時停止", ["en"] = "Check paused" },
         ["失效"] = new() { ["zh_TW"] = "失效", ["ja"] = "無効", ["en"] = "Invalid" },
+        ["待检测"] = new() { ["zh_TW"] = "待檢測", ["ja"] = "確認待ち", ["en"] = "Pending" },
+        ["已暂停"] = new() { ["zh_TW"] = "已暫停", ["ja"] = "一時停止", ["en"] = "Paused" },
         ["部分有效 {valid}/{total}"] = new()
         {
             ["zh_TW"] = "部分有效 {valid}/{total}",

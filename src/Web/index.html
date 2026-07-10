@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="dark">
-<title>DLsite 下载器</title>
+<title>DLsite媒体库</title>
 <style>
   :root {
     --bg: #1b1b1f; --surface: #26262b; --surface2: #2f2f36; --line: #3a3a42;
@@ -25,7 +25,7 @@
     backdrop-filter: blur(8px); border-bottom: 1px solid var(--line);
     padding: 8px max(12px, env(safe-area-inset-left));
   }
-  .topbar { display: flex; align-items: center; gap: 8px; max-width: 1200px; margin: 0 auto; flex-wrap: wrap; }
+  .topbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
   .icon-btn {
     background: var(--surface2); border: 1px solid var(--line); color: var(--text);
     border-radius: 8px; padding: 7px 12px; cursor: pointer; font-size: 14px; white-space: nowrap;
@@ -77,13 +77,13 @@
   .layout-mobile #search { order: 5; flex-basis: 100%; }
   .layout-mobile #sort { order: 6; }
 
-  main { max-width: 1200px; margin: 0 auto; padding: 12px max(12px, env(safe-area-inset-left)) 40px; }
+  main { padding: 12px max(12px, env(safe-area-inset-left)) 40px; }
   .count { color: var(--muted); font-size: 13px; margin: 4px 2px 12px; }
   .toolbar { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; align-items: center; }
 
-  .grid { display: grid; gap: 12px; }
-  .grid.cards { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
-  .grid.groups { grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
+  .grid { display: grid; gap: 12px; justify-content: start; }
+  .grid.cards { grid-template-columns: repeat(auto-fill, minmax(150px, 200px)); }
+  .grid.groups { grid-template-columns: repeat(auto-fill, minmax(220px, 260px)); }
   .card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
           overflow: hidden; cursor: pointer; display: flex; flex-direction: column; transition: border-color .12s; }
   .card:hover { border-color: var(--accent-dim); }
@@ -410,7 +410,7 @@ $('pw').addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
 // ---------- 左侧导航（桌面常驻 / 移动抽屉） ----------
 function buildTabs() {
   const box = $('nav'); box.innerHTML = '';
-  box.appendChild(el('div', 'brand', 'DLsite 下载器'));
+  box.appendChild(el('div', 'brand', 'DLsite媒体库'));
   SECTIONS.forEach(s => {
     const b = el('div', 'navitem' + (s.key === section ? ' active' : ''));
     b.appendChild(el('span', 'ni', s.icon || ''));

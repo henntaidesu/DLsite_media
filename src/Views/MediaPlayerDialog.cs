@@ -4,9 +4,9 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Threading;
-using DASD.Core;
+using DLsiteMedia.Core;
 
-namespace DASD.Views;
+namespace DLsiteMedia.Views;
 
 /// <summary>程序内嵌播放器：视频用 MediaElement 渲染，音频只显示文件名，含播放/暂停与进度条。</summary>
 public class MediaPlayerDialog : Window

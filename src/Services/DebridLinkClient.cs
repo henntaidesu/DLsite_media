@@ -2,10 +2,11 @@ using System;
 using System.Collections.Generic;
 using System.Net.Http;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
-using DASD.Core;
+using DLsiteMedia.Core;
 
-namespace DASD.Services;
+namespace DLsiteMedia.Services;
 
 /// <summary>debrid-link.com 下载中转站 API 客户端（对应 Python 版 DebridLink 类）。</summary>
 public class DebridLinkClient : IDisposable
@@ -94,7 +95,7 @@ public class DebridLinkClient : IDisposable
 
     /// <summary>提交网盘链接并返回 (结果, 错误码)：解析失败时 error 为 debrid-link 返回的错误码。</summary>
     public async Task<(JsonElement? Value, string? Error)> AddDownloadDetailedAsync(
-        string url, string? password = null)
+        string url, string? password = null, CancellationToken ct = default)
     {
         var form = new Dictionary<string, string> { ["url"] = url };
         if (!string.IsNullOrEmpty(password))
@@ -103,8 +104,8 @@ public class DebridLinkClient : IDisposable
         {
             Content = new FormUrlEncodedContent(form),
         };
-        using var response = await _client.SendAsync(request);
-        var text = await response.Content.ReadAsStringAsync();
+        using var response = await _client.SendAsync(request, ct);
+        var text = await response.Content.ReadAsStringAsync(ct);
         using var doc = JsonDocument.Parse(text);
         var root = doc.RootElement;
         if (!root.TryGetProperty("success", out var success) || !success.GetBoolean())

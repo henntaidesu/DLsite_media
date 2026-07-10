@@ -34,6 +34,8 @@ public static class AppConfig
         },
         ["media_lib"] = new() { ["libs"] = "[]" },
         ["language"] = new() { ["lang"] = "zh_CN" },
+        // 关闭窗口时的行为：""=每次询问，"tray"=最小化到托盘，"exit"=退出程序
+        ["app"] = new() { ["close_action"] = "" },
         // 作品类型优先搜索来源：SOU(音声) 可选 asmr / anime-sharing，其他类型固定 anime-sharing
         ["search"] = new() { ["sou_source"] = "asmr" },
         ["web_server"] = new() { ["enabled"] = "False", ["port"] = "8080", ["password"] = "" },
@@ -192,6 +194,13 @@ public static class AppConfig
     public static string SysEncoding => Read("encoding", "encoding", "cp437") ?? "cp437";
 
     public static string Language => Read("language", "lang", "zh_CN") ?? "zh_CN";
+
+    /// <summary>点击关闭按钮时的行为：""=每次询问，"tray"=最小化到托盘，"exit"=退出程序。</summary>
+    public static string CloseAction
+    {
+        get => Read("app", "close_action", "") ?? "";
+        set => Write("app", "close_action", value);
+    }
 
     /// <summary>SOU(音声) 作品优先搜索来源："asmr" = asmr.one 直链；"anime-sharing" = 论坛+debrid。</summary>
     public static string SouSearchSource => Read("search", "sou_source", "asmr") ?? "asmr";

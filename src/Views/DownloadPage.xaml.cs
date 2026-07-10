@@ -329,6 +329,8 @@ public partial class DownloadPage : UserControl
     /// <summary>从下载链接提取文件名（前台不直接显示链接）。</summary>
     private static string FileNameOf(string url)
     {
+        if (url.StartsWith("placeholder://", StringComparison.Ordinal))
+            return "";   // 自动下载占位哨兵 url：无真实文件名，展示为空（分组状态已说明"搜索/无可用下载连接"）
         var raw = url.TrimEnd('/').Split('/')[^1].Split('?')[0];
         // 直链文件名常为 URL 百分号编码（asmr.one 的日文名尤其如此），解码为明文显示；
         // 普通未编码文件名解码后保持不变

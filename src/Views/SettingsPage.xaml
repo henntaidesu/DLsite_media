@@ -134,17 +134,24 @@
 
             <!-- 系统 -->
             <GroupBox x:Name="SystemGroup" Header="系统">
-                <StackPanel Orientation="Horizontal" Margin="0,4">
-                    <TextBlock x:Name="LanguageLabel" Text="语言" Style="{StaticResource FieldLabel}" />
-                    <ComboBox x:Name="LanguageCombo" Width="140"
-                              SelectionChanged="LanguageCombo_SelectionChanged" />
-                    <TextBlock x:Name="LogLevelLabel" Text="日志级别" Style="{StaticResource FieldLabel}"
-                               MinWidth="0" Margin="24,0,12,0" />
-                    <ComboBox x:Name="LogLevelCombo" Width="120"
-                              SelectionChanged="LogLevelCombo_SelectionChanged" />
-                    <TextBlock x:Name="EncodingLabel" Text="解压编码" Style="{StaticResource FieldLabel}"
-                               MinWidth="0" Margin="24,0,12,0" />
-                    <TextBox x:Name="EncodingBox" Width="120" LostFocus="EncodingBox_LostFocus" />
+                <StackPanel>
+                    <StackPanel Orientation="Horizontal" Margin="0,4">
+                        <TextBlock x:Name="LanguageLabel" Text="语言" Style="{StaticResource FieldLabel}" />
+                        <ComboBox x:Name="LanguageCombo" Width="140"
+                                  SelectionChanged="LanguageCombo_SelectionChanged" />
+                        <TextBlock x:Name="LogLevelLabel" Text="日志级别" Style="{StaticResource FieldLabel}"
+                                   MinWidth="0" Margin="24,0,12,0" />
+                        <ComboBox x:Name="LogLevelCombo" Width="120"
+                                  SelectionChanged="LogLevelCombo_SelectionChanged" />
+                        <TextBlock x:Name="EncodingLabel" Text="解压编码" Style="{StaticResource FieldLabel}"
+                                   MinWidth="0" Margin="24,0,12,0" />
+                        <TextBox x:Name="EncodingBox" Width="120" LostFocus="EncodingBox_LostFocus" />
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Margin="0,8,0,4">
+                        <TextBlock x:Name="CloseActionLabel" Text="关闭按钮" Style="{StaticResource FieldLabel}" />
+                        <ComboBox x:Name="CloseActionCombo" Width="180"
+                                  SelectionChanged="CloseActionCombo_SelectionChanged" />
+                    </StackPanel>
                 </StackPanel>
             </GroupBox>
         </StackPanel>

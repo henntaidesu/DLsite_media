@@ -262,6 +262,29 @@ async function startMakerDownPoll() {
   }
   s.dlPolling = false;
 }
+// AS·无 倒计时：命中 7 天缓存的作品在到期（可再扫）前显示剩余时间，卡片保持灰色
+let asCd = [];   // { badge, until }（until 为本地 epoch ms）
+let asCdTimer = null;
+function fmtRemain(ms) {
+  if (ms <= 0) return '可重扫';
+  let s = Math.floor(ms / 1000);
+  const d = Math.floor(s / 86400); s %= 86400;
+  const h = Math.floor(s / 3600); s %= 3600;
+  const m = Math.floor(s / 60), sec = s % 60;
+  const p = n => n.toString().padStart(2, '0');
+  return d > 0 ? `${d}天${h}时` : `${p(h)}:${p(m)}:${p(sec)}`;
+}
+function tickAsCd() {
+  const now = Date.now();
+  asCd = asCd.filter(it => document.body.contains(it.badge));   // 卡片随视图切换被移除即自动淘汰
+  asCd.forEach(it => { it.badge.textContent = `AS·无 ${fmtRemain(it.until - now)}`; });
+  if (!asCd.length && asCdTimer) { clearInterval(asCdTimer); asCdTimer = null; }
+}
+function addAsCd(badge, remainSec) {
+  asCd.push({ badge, until: Date.now() + remainSec * 1000 });
+  if (!asCdTimer) asCdTimer = setInterval(tickAsCd, 1000);
+  tickAsCd();
+}
 // 对未在库作品按 3 秒间隔逐个扫描 AS 论坛，把结果写回卡片角标
 async function runMakerScans() {
   const s = makerState;
@@ -280,24 +303,38 @@ async function runMakerScans() {
       st.textContent = `AS · ${d.count} 帖`; st.style.background = 'rgba(34,160,80,.88)';
       const card = st.closest('.card'); if (card) card.querySelectorAll('.mcard-actions button').forEach(b => b.disabled = false);   // 有帖子 → 解除按钮屏蔽
     }
-    else if (d.count === 0) { st.textContent = 'AS · 无'; st.style.background = 'rgba(0,0,0,.62)'; }
+    else if (d.count === 0) {
+      st.style.background = 'rgba(0,0,0,.62)';
+      const card = st.closest('.card'); if (card) card.classList.add('dim');   // AS·无 → 卡片置灰
+      if (d.remainSec > 0) addAsCd(st, d.remainSec); else st.textContent = 'AS · 无';   // 显示 7 天倒计时
+    }
     else { st.textContent = 'AS · 失败'; st.style.background = 'rgba(180,60,60,.88)'; }
-    if (s.scanQueue.length) await new Promise(r => setTimeout(r, 3000));   // 仅在还有待扫描项时间隔等待
+    // 仅在实际请求了 AS（非 7 天内缓存命中）且还有待扫描项时才限速等待
+    if (!d.cached && s.scanQueue.length) await new Promise(r => setTimeout(r, 3000));
   }
   s.scanning = false;
 }
-// 自动下载：选好下载目标库后，立即把作品以「搜索可用下载连接」状态加入下载队列；服务端后台
-// 逐帖检测并挑选最优源——命中则转正常下载，全无则队列状态置「无可用下载连接」。免去用户进结果列表手动挑源。
+// 选库对话框串行队列：pickTarget 共用同一个 #picker 覆盖层，连点多个自动下载时必须逐个弹出，
+// 否则多个对话框会互相覆盖。每个作品各自选库，用队列保证一次只弹一个。
+let pickChain = Promise.resolve();
+function pickTargetQueued(libs, label) {
+  const run = pickChain.then(() => pickTarget(libs, label));
+  pickChain = run.catch(() => {});   // 链不因取消/异常中断，后续作品仍能继续选库
+  return run;
+}
+// 自动下载：每个作品各自选择媒体库（连点多个时选库框逐个弹出），随即以「搜索可用下载连接」状态加入下载列表；
+// 服务端串行排队、逐帖检测并挑选最优源——命中则转正常下载，全无则置「无可用下载连接」。
 async function autoDownload(id, badge, btn) {
   if (btn.disabled) return;
-  const t = await api('/api/downtargets');
+  btn.disabled = true; const orig = btn.textContent;
   let lib = '', folder = '';
+  const t = await api('/api/downtargets');
   if (t.libs && t.libs.length) {
-    const target = await pickTarget(t.libs);
-    if (!target) return;   // 用户取消选库
+    const target = await pickTargetQueued(t.libs, id);
+    if (!target) { btn.disabled = false; return; }   // 用户取消选库
     lib = target.lib; folder = target.folder;
   }
-  btn.disabled = true; const orig = btn.textContent; btn.textContent = '入队中…';
+  btn.textContent = '入队中…';
   const r = await apiPost('/api/autodownload', { id, lib, folder });
   if (r.ok) {
     btn.textContent = '已入队';   // 保持禁用，避免重复入队
@@ -328,21 +365,27 @@ async function enqueue(id, urls, card, st) {
     }
   } else { st.textContent = '加入失败'; st.style.color = '#f87171'; }
 }
-function pickTarget(libs) {
+function pickTarget(libs, label) {
   return new Promise(resolve => {
     const ov = $('picker'), box = $('pickerBox');
-    const close = (v) => { ov.classList.remove('show'); resolve(v); };
+    const close = (v) => { ov.classList.remove('show'); box.classList.remove('pk-wide'); resolve(v); };
     function libPage() {
-      box.innerHTML = ''; box.appendChild(el('h3', null, '选择下载到哪个媒体库'));
+      box.classList.add('pk-wide');   // 卡片网格需要更宽的对话框
+      box.innerHTML = ''; box.appendChild(el('h3', null, label ? `将「${label}」下载到哪个媒体库` : '选择下载到哪个媒体库'));
+      const grid = el('div', 'pk-grid');
+      grid.style.gridTemplateColumns = `repeat(${Math.min(5, libs.length)}, minmax(0, 1fr))`;   // 一行最多 5 个
       libs.forEach(l => {
-        const b = el('button', 'icon-btn', l.folders.length > 1 ? `${l.name}（${l.folders.length} 个文件夹）` : l.name);
-        b.style.cssText = 'display:block;width:100%;text-align:left;margin-top:8px';
-        b.onclick = () => { if (l.folders.length === 1) close({ lib: l.name, folder: l.folders[0] }); else folderPage(l); };
-        box.appendChild(b);
+        const card = el('div', 'pk-card');
+        card.appendChild(el('div', 'pk-name', l.name));
+        if (l.folders.length > 1) card.appendChild(el('div', 'pk-sub', `${l.folders.length} 个文件夹`));
+        card.onclick = () => { if (l.folders.length === 1) close({ lib: l.name, folder: l.folders[0] }); else folderPage(l); };
+        grid.appendChild(card);
       });
+      box.appendChild(grid);
       const c = el('button', 'icon-btn', '取消'); c.style.cssText = 'display:block;width:100%;margin-top:16px'; c.onclick = () => close(null); box.appendChild(c);
     }
     function folderPage(l) {
+      box.classList.remove('pk-wide');   // 文件夹路径较长，用窄对话框竖排
       box.innerHTML = ''; box.appendChild(el('h3', null, '选择下载文件夹'));
       l.folders.forEach(f => { const b = el('button', 'icon-btn', f); b.style.cssText = 'display:block;width:100%;text-align:left;margin-top:8px;word-break:break-all'; b.onclick = () => close({ lib: l.name, folder: f }); box.appendChild(b); });
       const bk = el('button', 'icon-btn', '← 返回'); bk.style.cssText = 'display:block;width:100%;margin-top:16px'; bk.onclick = libPage; box.appendChild(bk);

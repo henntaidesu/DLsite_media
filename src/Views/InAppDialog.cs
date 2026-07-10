@@ -28,6 +28,130 @@ public static class InAppDialog
     public static bool Confirm(DependencyObject? owner, string message, string title) =>
         Show(owner, message, title, yesNo: true);
 
+    /// <summary>
+    /// 多按钮选择对话框（程序内覆盖层）。返回被点击按钮的索引；关闭/Esc 返回 -1。
+    /// buttons[0] 使用主按钮样式。rememberText 非空时额外显示一个复选框，其勾选状态经 out remember 返回。
+    /// </summary>
+    public static int Choose(DependencyObject? owner, string message, string title,
+        string[] buttons, out bool remember, string? rememberText = null)
+    {
+        var checkBox = rememberText != null ? new CheckBox
+        {
+            Content = rememberText,
+            Foreground = Res("TextBrush", Brushes.White),
+            Margin = new Thickness(0, 18, 0, 0),
+        } : null;
+
+        var window = ResolveWindow(owner);
+        var root = window?.Content as UIElement;
+        var layer = root != null ? AdornerLayer.GetAdornerLayer(root) : null;
+        if (layer == null || root == null)
+        {
+            remember = false;   // 兜底：无覆盖层时退回系统弹窗（丢弃"记住选择"能力）
+            var r = MessageBox.Show(message, title, MessageBoxButton.YesNoCancel);
+            return r switch
+            {
+                MessageBoxResult.Yes => 0,
+                MessageBoxResult.No => buttons.Length > 1 ? 1 : -1,
+                _ => -1,
+            };
+        }
+
+        var result = -1;
+        var frame = new DispatcherFrame();
+        OverlayAdorner? adorner = null;
+
+        void Close(int index)
+        {
+            if (adorner == null)
+                return;
+            result = index;
+            layer.Remove(adorner);
+            adorner = null;
+            frame.Continue = false;
+        }
+
+        var overlay = BuildChoiceOverlay(title, message, buttons, checkBox, Close);
+        adorner = new OverlayAdorner(root, overlay);
+        layer.Add(adorner);
+        overlay.Loaded += (_, _) => Keyboard.Focus(overlay);
+        overlay.Focus();
+
+        Dispatcher.PushFrame(frame);
+        remember = checkBox?.IsChecked == true;
+        return result;
+    }
+
+    private static FrameworkElement BuildChoiceOverlay(
+        string title, string message, string[] buttons, CheckBox? checkBox, Action<int> close)
+    {
+        var dim = new Grid
+        {
+            Background = new SolidColorBrush(Color.FromArgb(0x9A, 0, 0, 0)),
+            Focusable = true,
+        };
+        var card = new Border
+        {
+            Background = Res("CardBrush", Brushes.Black),
+            BorderBrush = Res("BorderBrush", Brushes.Gray),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(10),
+            Padding = new Thickness(24, 20, 24, 18),
+            MinWidth = 340,
+            MaxWidth = 480,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        var panel = new StackPanel();
+        panel.Children.Add(new TextBlock
+        {
+            Text = title,
+            FontWeight = FontWeights.SemiBold,
+            FontSize = 16,
+            Foreground = Res("TextBrush", Brushes.White),
+            TextTrimming = TextTrimming.CharacterEllipsis,
+        });
+        panel.Children.Add(new TextBlock
+        {
+            Text = message,
+            TextWrapping = TextWrapping.Wrap,
+            Foreground = Res("TextBrush", Brushes.White),
+            Margin = new Thickness(0, 14, 0, 0),
+            LineHeight = 22,
+        });
+        if (checkBox != null)
+            panel.Children.Add(checkBox);
+
+        var buttonBar = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            Margin = new Thickness(0, 20, 0, 0),
+        };
+        for (var i = 0; i < buttons.Length; i++)
+        {
+            var index = i;
+            var button = MakeButton(buttons[i], primary: i == 0);
+            if (i > 0)
+                button.Margin = new Thickness(10, 0, 0, 0);
+            button.Click += (_, _) => close(index);
+            buttonBar.Children.Add(button);
+        }
+        panel.Children.Add(buttonBar);
+
+        card.Child = panel;
+        dim.Children.Add(card);
+        dim.KeyDown += (_, e) =>
+        {
+            if (e.Key == Key.Escape)
+            {
+                close(-1);
+                e.Handled = true;
+            }
+        };
+        return dim;
+    }
+
     /// <summary>文本输入对话框（程序内覆盖层）：确定返回输入文本，取消返回 null。</summary>
     public static string? Prompt(DependencyObject? owner, string message, string title, string defaultValue = "")
     {

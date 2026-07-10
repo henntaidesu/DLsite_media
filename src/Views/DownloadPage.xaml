@@ -115,9 +115,17 @@
             <ProgressBar x:Name="UsageBar" Grid.Column="8" Height="10" VerticalAlignment="Center" />
         </Grid>
 
-        <!-- 下载列表（两级树：番号 -> 分卷文件） -->
-        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
-            <ItemsControl x:Name="GroupList">
+        <!-- 下载列表（两级树：番号 -> 分卷文件）；虚拟化：仅渲染视口内的番号卡，元素数量恒定 -->
+        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" CanContentScroll="True">
+            <ItemsControl x:Name="GroupList"
+                          VirtualizingPanel.IsVirtualizing="True"
+                          VirtualizingPanel.VirtualizationMode="Recycling"
+                          VirtualizingPanel.ScrollUnit="Pixel">
+                <ItemsControl.ItemsPanel>
+                    <ItemsPanelTemplate>
+                        <VirtualizingStackPanel />
+                    </ItemsPanelTemplate>
+                </ItemsControl.ItemsPanel>
                 <ItemsControl.ItemTemplate>
                     <DataTemplate>
                         <Border Style="{StaticResource Card}" Margin="0,3">
@@ -188,9 +196,21 @@
                                     </StackPanel>
                                 </Grid>
                                 <!-- 子树：作品内目录层级（文件夹/文件递归），最多约 10 行高，超出滚动 -->
+                                <!-- 顶层节点虚拟化：CanContentScroll + VirtualizingStackPanel 只渲染视口内的行 -->
                                 <ScrollViewer Visibility="{Binding ChildrenVisibility}" Margin="24,4,0,0"
-                                              MaxHeight="260" VerticalScrollBarVisibility="Auto">
-                                    <ItemsControl ItemsSource="{Binding Nodes}" />
+                                              MaxHeight="260" VerticalScrollBarVisibility="Auto"
+                                              CanContentScroll="True">
+                                    <!-- 文件/文件夹为异构模板，用 Standard 模式避免回收复用错模板 -->
+                                    <ItemsControl ItemsSource="{Binding Nodes}"
+                                                  VirtualizingPanel.IsVirtualizing="True"
+                                                  VirtualizingPanel.VirtualizationMode="Standard"
+                                                  VirtualizingPanel.ScrollUnit="Pixel">
+                                        <ItemsControl.ItemsPanel>
+                                            <ItemsPanelTemplate>
+                                                <VirtualizingStackPanel />
+                                            </ItemsPanelTemplate>
+                                        </ItemsControl.ItemsPanel>
+                                    </ItemsControl>
                                 </ScrollViewer>
                             </StackPanel>
                         </Border>

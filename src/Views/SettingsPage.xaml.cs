@@ -163,12 +163,18 @@ public partial class SettingsPage : UserControl
         UpdateWebStatus();
     }
 
+    private long _cfgVersionSeen = -1;
+
     private void Page_IsVisibleChanged(object sender, DependencyPropertyChangedEventArgs e)
     {
         if (!(bool)e.NewValue)
             return;
-        // 切换到本页时重新加载配置：先丢弃缓存从数据库重读，再回填控件
-        AppConfig.Reload();
+        // 切换到本页时若配置版本变过才重读数据库（未变则用进程缓存，避免每次进页都打库）
+        if (AppConfig.Version != _cfgVersionSeen)
+        {
+            AppConfig.Reload();
+            _cfgVersionSeen = AppConfig.Version;
+        }
         ReadConf();
     }
 

@@ -10,7 +10,6 @@ using System.Windows.Data;
 using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Media;
-using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using DLsiteMedia.Core;
 using DLsiteMedia.Services;
@@ -36,13 +35,34 @@ public enum MediaLibRoot
 /// </summary>
 public partial class MediaLibPage : UserControl
 {
-    private const int WorksPageSize = 30;   // 作品卡片懒加载：每批数量
     private const string UnknownMaker = ""; // maker_name 为空的作品归到"未知社团"
     private const double WorkCardW = 210, WorkCardH = 248;   // WorkCardW 作为卡片最小宽度
     private const double WorkCoverW = 186, WorkCoverH = 140;
     private const double CardGap = 10;                       // 卡片右/下外边距
     private const double CoverWidthDelta = WorkCardW - WorkCoverW; // 封面宽 = 卡片宽 - 内边距
-    private double _cardWidth = WorkCardW;                   // 动态卡片宽度：按视口宽度撑满整行，消除右侧留白
+    private const double _cardWidth = WorkCardW;             // 卡片固定宽度（虚拟化网格按此列宽排布）
+
+    // 虚拟化卡片网格的单元格尺寸（含卡片外边距 CardGap）；作品卡与分组卡高度不同，按层级切换。
+    public static readonly DependencyProperty CardCellWidthProperty = DependencyProperty.Register(
+        nameof(CardCellWidth), typeof(double), typeof(MediaLibPage),
+        new PropertyMetadata(WorkCardW + CardGap));
+    public static readonly DependencyProperty CardCellHeightProperty = DependencyProperty.Register(
+        nameof(CardCellHeight), typeof(double), typeof(MediaLibPage),
+        new PropertyMetadata(WorkCardH + CardGap));
+
+    public double CardCellWidth
+    {
+        get => (double)GetValue(CardCellWidthProperty);
+        set => SetValue(CardCellWidthProperty, value);
+    }
+
+    public double CardCellHeight
+    {
+        get => (double)GetValue(CardCellHeightProperty);
+        set => SetValue(CardCellHeightProperty, value);
+    }
+
+    private const double ClickCardH = 110;   // 分组卡（媒体库/社团/标签/形式）固定高
 
     private static readonly string[] VideoExts =
         [".mp4", ".mkv", ".avi", ".wmv", ".mov", ".flv", ".webm", ".m4v", ".ts", ".mpg", ".mpeg"];
@@ -65,7 +85,6 @@ public partial class MediaLibPage : UserControl
     };
 
     private readonly MediaLibRoot _root;
-    private readonly WrapPanel _cardsPanel = new();
 
     private string _level = "libs";  // libs / makers / works / detail / genres / types / filtered_works
     private string? _currentLib;
@@ -84,15 +103,19 @@ public partial class MediaLibPage : UserControl
 
     // 搜索作用域：分组层级（媒体库首页/社团页）输入关键字时改为在当前作用域内按 RJ号/作品名 搜索作品
     private bool _searchMode;        // 当前是否处于作品搜索结果视图
+    private int _scopedSearchGen;    // 作用域搜索世代号：异步查库返回后据此丢弃过期结果
     private bool _detailFromSearch;  // 当前详情是否由搜索结果打开（返回时回到搜索结果）
     private string _searchLevel = "libs";  // 进入详情前所处的搜索层级（libs/makers）
     private string _detailReturnLevel = "works";  // 进入详情前的作品列表层级（返回时复原）
 
-    // 所有卡片层级统一的懒加载来源：每项携带一个延迟构建器与搜索过滤键
-    private sealed record GridCard(Func<Border> Build, string FilterKey);
+    // 所有卡片层级统一的数据源：每项携带一个延迟构建器与搜索过滤键；
+    // Element 供虚拟化列表在实例化容器时才真正构建卡片元素（滚出视口即释放）。
+    private sealed record GridCard(Func<Border> Build, string FilterKey)
+    {
+        public UIElement Element => Build();
+    }
     private List<GridCard> _gridCards = [];   // 当前层级全部卡片
     private List<GridCard> _shownCards = [];  // 搜索过滤后的卡片
-    private int _loadedCards;                 // 已渲染数量
     private bool _workLevelCount;             // 计数文案样式：true=作品卡，false=分组卡
     private string _countUnit = "";           // 分组卡层级的单位文案（个社团/个媒体库/…）
 
@@ -166,6 +189,8 @@ public partial class MediaLibPage : UserControl
         Refresh();
     }
 
+    private long _cfgVersionSeen = -1;
+
     private void Page_IsVisibleChanged(object sender, DependencyPropertyChangedEventArgs e)
     {
         if (!(bool)e.NewValue)
@@ -173,8 +198,12 @@ public partial class MediaLibPage : UserControl
             AudioBar.Stop();  // 离开本页时停止音频播放
             return;
         }
-        // 切换到本页时重新加载数据：先丢弃配置缓存，再重查数据库刷新当前视图
-        AppConfig.Reload();
+        // 切换到本页时：仅当配置版本变过才重读配置库；始终重查作品数据刷新当前视图
+        if (AppConfig.Version != _cfgVersionSeen)
+        {
+            AppConfig.Reload();
+            _cfgVersionSeen = AppConfig.Version;
+        }
         Refresh();
     }
 
@@ -414,9 +443,6 @@ public partial class MediaLibPage : UserControl
 
     private void ClearCards()
     {
-        _cardWidth = ComputeCardWidth();  // 重建前按当前视口宽度算好动态卡片宽度
-        _cardsPanel.Children.Clear();
-        ContentHost.Content = _cardsPanel;
         OpenFolderButton.Visibility = Visibility.Collapsed;
         ViewModeBar.Visibility = Visibility.Collapsed;   // 仅文件树页显示视图切换
         ViewFilesButton.Visibility = Visibility.Collapsed;
@@ -432,6 +458,39 @@ public partial class MediaLibPage : UserControl
         RjLabel.Inlines.Clear();
         _currentWorkFolder = null;
         ClosePreview();
+    }
+
+    /// <summary>切到卡片视图：显示虚拟化卡片列表、隐藏详情/文件树容器，并绑定当前层级的卡片数据源。</summary>
+    private void ShowCardList()
+    {
+        // 分组卡与作品卡高度不同：切换单元格高度（含 CardGap 外边距）
+        CardCellWidth = _cardWidth + CardGap;
+        CardCellHeight = (_workLevelCount ? WorkCardH : ClickCardH) + CardGap;
+        CardList.ItemsSource = null;   // 强制重建容器，避免复用旧层级容器造成错位
+        CardList.ItemsSource = _shownCards;
+        CardList.Visibility = Visibility.Visible;
+        CardsScroll.Visibility = Visibility.Collapsed;
+        ContentHost.Content = null;
+    }
+
+    /// <summary>切到详情/文件树视图：隐藏卡片列表、显示 ContentHost 容器（承载任意内容）。</summary>
+    private void ShowContentHost()
+    {
+        CardList.ItemsSource = null;   // 释放卡片容器
+        CardList.Visibility = Visibility.Collapsed;
+        CardsScroll.Visibility = Visibility.Visible;
+    }
+
+    private ScrollViewer? _cardListScroll;
+
+    /// <summary>取得卡片列表模板内的 ScrollViewer（用于记录/恢复滚动位置）。</summary>
+    private ScrollViewer? CardListScrollViewer()
+    {
+        if (_cardListScroll != null)
+            return _cardListScroll;
+        CardList.ApplyTemplate();
+        _cardListScroll = CardList.Template?.FindName("CardListScroll", CardList) as ScrollViewer;
+        return _cardListScroll;
     }
 
     private Border MakeClickCard(string title, string caption, Action onClick)
@@ -792,20 +851,20 @@ public partial class MediaLibPage : UserControl
             return;
         }
         _searchMode = false;
-        // 其余层级（作品卡 / 标签 / 形式）：在全量卡片项上按关键字过滤，再分批懒加载
+        // 其余层级（作品卡 / 标签 / 形式）：在全量卡片项上按关键字过滤（内存过滤），由虚拟化列表按需渲染
         var key = keyword.ToLowerInvariant();
         _shownCards = key.Length == 0
             ? _gridCards.ToList()
             : _gridCards.Where(c => c.FilterKey.Contains(key)).ToList();
-        ClearCards();   // 统一关闭详情/设置按钮并清空面板
+        ClearCards();   // 统一关闭详情/设置按钮
         BackButton.Visibility = ShouldShowBack() ? Visibility.Visible : Visibility.Collapsed;
         if (_level == "libs")
             LibSettingButton.Visibility = Visibility.Visible;  // 媒体库设置仅在媒体库首页显示
         SortBox.Visibility = _level is "makers" or "works" or "filtered_works" or "favorites" or "lib_works"
             ? Visibility.Visible : Visibility.Collapsed;
         UpdateLibToggleButton();
-        _loadedCards = 0;
-        LoadMoreCards();
+        ShowCardList();
+        UpdateGridCountLabel();
     }
 
     /// <summary>
@@ -813,7 +872,7 @@ public partial class MediaLibPage : UserControl
     /// 媒体库首页搜全部库；进入某媒体库后限当前库；标签/形式下的社团页限对应分组。
     /// 不改动 _gridCards，清空搜索框后即可回到原分组视图。
     /// </summary>
-    private void ShowScopedSearch(string keyword)
+    private async void ShowScopedSearch(string keyword)
     {
         _searchMode = true;
         var conds = new List<string> { "\"state\" = '已品悦'", "(\"work_id\" LIKE @kw OR \"work_name\" LIKE @kw)" };
@@ -838,11 +897,15 @@ public partial class MediaLibPage : UserControl
                 pars.Add(("@lib", _currentLib ?? ""));
             }
         }
-        var rows = Db.Select(
-            "SELECT \"works\".\"work_id\", \"works\".\"work_name\", \"works\".\"maker_name\", " +
-            "\"works\".\"work_type\", \"works\".\"age_category\", \"works\".\"cover\" FROM \"works\" " +
-            join + "WHERE " + string.Join(" AND ", conds) + " " + WorkOrderClause("\"works\"."),
-            pars.ToArray()) ?? [];
+        var sql = "SELECT \"works\".\"work_id\", \"works\".\"work_name\", \"works\".\"maker_name\", " +
+                  "\"works\".\"work_type\", \"works\".\"age_category\", \"works\".\"cover\" FROM \"works\" " +
+                  join + "WHERE " + string.Join(" AND ", conds) + " " + WorkOrderClause("\"works\".");
+        // 查库放后台线程，避免逐字搜索阻塞 UI；用世代号丢弃已被更新搜索取代的结果
+        var gen = ++_scopedSearchGen;
+        var pary = pars.ToArray();
+        var rows = await Task.Run(() => Db.Select(sql, pary)) ?? [];
+        if (gen != _scopedSearchGen || _level != "makers" && _level != "libs")
+            return;
 
         _workLevelCount = true;
         _shownCards = rows.Select(row => new GridCard(
@@ -853,8 +916,8 @@ public partial class MediaLibPage : UserControl
         BackButton.Visibility = ShouldShowBack() ? Visibility.Visible : Visibility.Collapsed;
         SortBox.Visibility = Visibility.Visible;
         UpdateLibToggleButton();
-        _loadedCards = 0;
-        LoadMoreCards();
+        ShowCardList();
+        UpdateGridCountLabel();
     }
 
     /// <summary>返回按钮在当前层级是否显示（根视图层级不显示）。</summary>
@@ -867,40 +930,23 @@ public partial class MediaLibPage : UserControl
         _ => true,
     };
 
-    /// <summary>追加渲染下一批卡片（构建器在此刻才真正生成可视化元素）。</summary>
-    private void LoadMoreCards()
-    {
-        var batch = _shownCards.Skip(_loadedCards).Take(WorksPageSize).ToList();
-        foreach (var card in batch)
-            _cardsPanel.Children.Add(card.Build());
-        _loadedCards += batch.Count;
-        UpdateGridCountLabel();
-    }
-
-    /// <summary>刷新计数文案：作品卡显示作品总数+已加载，分组卡显示分组数+作品数。</summary>
+    /// <summary>刷新计数文案：作品卡显示作品总数，分组卡显示分组数+作品数（虚拟化后不再有"已加载"概念）。</summary>
     private void UpdateGridCountLabel()
     {
         var keyword = SearchBox.Text.Trim();
         if (_searchMode)
         {
             // 作用域搜索：仅统计命中的作品数
-            var matched = _shownCards.Count;
-            var text = I18n.Format(I18n.Tr("搜索到 {count} 个作品"), ("count", matched));
-            if (_loadedCards < matched)
-                text += I18n.Format(I18n.Tr("（已加载 {loaded}）"), ("loaded", _loadedCards));
-            CountLabel.Text = text;
+            CountLabel.Text = I18n.Format(I18n.Tr("搜索到 {count} 个作品"), ("count", _shownCards.Count));
             return;
         }
         var total = _gridCards.Count;
         var shown = _shownCards.Count;
         if (_workLevelCount)
         {
-            var text = keyword.Length > 0
+            CountLabel.Text = keyword.Length > 0
                 ? I18n.Format(I18n.Tr("共 {total} 个作品，匹配 {matched} 个"), ("total", total), ("matched", shown))
                 : I18n.Format(I18n.Tr("共 {total} 个作品"), ("total", total));
-            if (_loadedCards < shown)
-                text += I18n.Format(I18n.Tr("（已加载 {loaded}）"), ("loaded", _loadedCards));
-            CountLabel.Text = text;
         }
         else
         {
@@ -912,59 +958,25 @@ public partial class MediaLibPage : UserControl
         }
     }
 
-    private void CardsScroll_ScrollChanged(object sender, ScrollChangedEventArgs e)
-    {
-        // 视口宽度变化（窗口缩放 / 滚动条出现）时，按新宽度重排卡片以撑满整行
-        if (e.ViewportWidthChange != 0)
-            RelayoutCards();
-        // 滚动接近底部时加载下一批卡片（所有卡片层级通用）
-        if (_level == "detail" || _loadedCards >= _shownCards.Count)
-            return;
-        if (e.VerticalOffset >= CardsScroll.ScrollableHeight - 300)
-            LoadMoreCards();
-    }
-
-    /// <summary>按视口宽度计算卡片宽度：先求每行能放下的列数（按最小宽度），再让卡片均分整行宽度。</summary>
-    private double ComputeCardWidth()
-    {
-        var avail = CardsScroll.ViewportWidth;
-        if (avail <= 0)
-            return WorkCardW;  // 尚未布局时退回最小宽度，布局后由重排修正
-        var columns = Math.Max(1, (int)(avail / (WorkCardW + CardGap)));
-        return Math.Floor(avail / columns - CardGap);
-    }
-
-    /// <summary>视口宽度变化后，把新宽度套用到已生成的所有卡片（及作品卡封面）。</summary>
-    private void RelayoutCards()
-    {
-        if (ContentHost.Content != _cardsPanel)
-            return;  // 详情视图不是卡片流，跳过
-        var width = ComputeCardWidth();
-        if (Math.Abs(width - _cardWidth) < 0.5)
-            return;
-        _cardWidth = width;
-        foreach (var card in _cardsPanel.Children.OfType<Border>())
-        {
-            card.Width = width;
-            // 作品卡：StackPanel 首个子元素是固定高、宽随卡片变化的封面区
-            if (card.Child is StackPanel { Children: [Grid cover, ..] })
-                cover.Width = width - CoverWidthDelta;
-        }
-    }
-
     private void RestoreWorksScroll()
     {
         var target = _worksScrollPos;
         if (target <= 0)
             return;
-        // 预加载直到内容高度能容纳目标滚动位置
-        while (_loadedCards < _shownCards.Count &&
-               _cardsPanel.ActualHeight < target + CardsScroll.ViewportHeight)
-        {
-            LoadMoreCards();
-            _cardsPanel.UpdateLayout();
-        }
-        Dispatcher.BeginInvoke(() => CardsScroll.ScrollToVerticalOffset(target));
+        // 虚拟化列表：直接恢复滚动偏移即可（可见卡片按需实例化，无需预加载）
+        Dispatcher.BeginInvoke(() => CardListScrollViewer()?.ScrollToVerticalOffset(target),
+            DispatcherPriority.Loaded);
+    }
+
+    /// <summary>
+    /// 后台解码封面/缩略图并在完成后赋值（先显示占位底色，避免 UI 线程逐张同步解码卡顿）。
+    /// 用 image.Tag == path 作有效性判据：容器被回收改指其它图片时丢弃过期结果。
+    /// </summary>
+    private static async void LoadImageAsync(Image image, string path, int decodePixelWidth)
+    {
+        var bmp = await ThumbnailCache.LoadAsync(path, decodePixelWidth);
+        if (bmp != null && ReferenceEquals(image.Tag, path))
+            image.Source = bmp;
     }
 
     /// <summary>单个作品卡片：封面 + 角标（RJ号/形式）+ 标题。</summary>
@@ -994,25 +1006,12 @@ public partial class MediaLibPage : UserControl
             Background = new SolidColorBrush(Color.FromArgb(12, 255, 255, 255)),
             CornerRadius = new CornerRadius(4),
         });
-        if (cover != null && File.Exists(cover))
+        if (cover != null)
         {
-            var image = new Image { Stretch = Stretch.UniformToFill };
-            try
-            {
-                var bmp = new BitmapImage();
-                bmp.BeginInit();
-                bmp.CacheOption = BitmapCacheOption.OnLoad;
-                bmp.UriSource = new Uri(cover);
-                bmp.DecodePixelWidth = (int)WorkCoverW * 2;  // 控制解码尺寸防内存膨胀
-                bmp.EndInit();
-                bmp.Freeze();
-                image.Source = bmp;
-                coverGrid.Children.Add(image);
-            }
-            catch (Exception)
-            {
-                // 单张封面读取失败不影响整页
-            }
+            // 封面后台解码：存在性检查也并入后台流程（LoadAsync→ThumbnailCache 内做 FileInfo）
+            var image = new Image { Stretch = Stretch.UniformToFill, Tag = cover };
+            coverGrid.Children.Add(image);
+            LoadImageAsync(image, cover, (int)WorkCoverW * 2);
         }
         // RJ 号：封面左上角；作品形式：右上角
         var badgeStyleBg = new SolidColorBrush(Color.FromArgb(170, 0, 0, 0));
@@ -1053,7 +1052,7 @@ public partial class MediaLibPage : UserControl
         card.Child = panel;
         card.MouseLeftButtonUp += (_, _) =>
         {
-            _worksScrollPos = CardsScroll.VerticalOffset;
+            _worksScrollPos = CardListScrollViewer()?.VerticalOffset ?? 0;
             _currentWork = workId;
             // 记录进入详情前的层级，以便返回时回到原作品列表 / 搜索视图
             _detailFromSearch = _searchMode;
@@ -1066,7 +1065,10 @@ public partial class MediaLibPage : UserControl
 
     // ---------- 作品详情 ----------
 
-    private void ShowDetail()
+    /// <summary>正文/轮播图后台加载的产物：正文块（文本/图片）与轮播图路径。</summary>
+    private sealed record DetailContent(List<(string Kind, string Value)> BodyBlocks, List<string> SliderPaths);
+
+    private async void ShowDetail()
     {
         var rows = Db.Select(
             "SELECT \"work_id\", \"work_name\", \"maker_name\", \"sell_date\", \"series\", " +
@@ -1084,6 +1086,7 @@ public partial class MediaLibPage : UserControl
         _level = "detail";
         BackButton.Visibility = Visibility.Visible;
         ClearCards();
+        ShowContentHost();   // 详情用 ContentHost 承载，隐藏卡片列表
         CountLabel.Text = "";
         // 详情页不显示搜索框；RJ 号居左显示为可点击跳转 DLsite 作品页的超链接
         SearchBox.Visibility = Visibility.Collapsed;
@@ -1129,7 +1132,70 @@ public partial class MediaLibPage : UserControl
         if (!Directory.Exists(folder))
             folder = Path.Combine(DlsitePage.ImagesDir, workId);
 
-        // 正文：按 [img:文件名] 占位标记拆成 文本/图片 块
+        // 字段网格（带可点击链接）：右侧详情先建好，正文/轮播图随后台读盘完成再补
+        var infoPanel = BuildDetailFields(workId, r);
+        var content = new Grid { Margin = new Thickness(0, 10, 0, 0) };
+        content.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        content.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(2, GridUnitType.Star) });
+        var rightHost = new Grid { Margin = new Thickness(20, 0, 0, 0) };
+        rightHost.Children.Add(infoPanel);
+        Grid.SetColumn(rightHost, 1);
+        content.Children.Add(rightHost);
+        layout.Children.Add(content);
+        // 先显示标题 + 字段，正文与轮播图在读盘完成后填充（大量文件/长正文时不冻结 UI）
+        ContentHost.Content = root;
+        CardsScroll.ScrollToVerticalOffset(0);
+
+        // 正文文本与轮播图列表在后台线程读盘/解析
+        var detail = await Task.Run(() => LoadDetailContent(folder));
+        if (_currentWork != workId || _level != "detail")
+            return;   // 加载期间已导航离开，丢弃结果
+
+        if (detail.SliderPaths.Count > 0)
+        {
+            var slider = new ImageSliderControl(detail.SliderPaths) { VerticalAlignment = VerticalAlignment.Top };
+            Grid.SetColumn(slider, 0);
+            content.Children.Add(slider);
+        }
+
+        // 正文：文本与图片按原文顺序嵌入
+        var maxWidth = Math.Max(360, CardsScroll.ViewportWidth - 100);
+        foreach (var (kind, value) in detail.BodyBlocks)
+        {
+            if (kind == "text")
+            {
+                if (value.Trim().Length == 0)
+                    continue;
+                layout.Children.Add(new TextBox
+                {
+                    Text = value,
+                    IsReadOnly = true,
+                    TextWrapping = TextWrapping.Wrap,
+                    BorderThickness = new Thickness(0),
+                    Background = Brushes.Transparent,
+                    Margin = new Thickness(0, 10, 0, 0),
+                });
+            }
+            else
+            {
+                var path = Path.Combine(folder, value);
+                var img = new Image
+                {
+                    MaxWidth = maxWidth,
+                    Stretch = Stretch.Uniform,
+                    HorizontalAlignment = HorizontalAlignment.Left,
+                    Margin = new Thickness(0, 10, 0, 0),
+                    Tag = path,
+                };
+                layout.Children.Add(img);   // 正文图后台解码（缺失/损坏时留空占位，不影响其它块）
+                LoadImageAsync(img, path, (int)Math.Ceiling(maxWidth * 2));
+            }
+        }
+    }
+
+    /// <summary>后台读取作品正文（拆成文本/图片块）与轮播图文件列表（除正文图外，主图排最前）。</summary>
+    private static DetailContent LoadDetailContent(string folder)
+    {
         var bodyBlocks = new List<(string Kind, string Value)>();
         var bodyFiles = new HashSet<string>();
         var txtPath = Path.Combine(folder, DlsitePage.DescriptionTxt);
@@ -1167,7 +1233,6 @@ public partial class MediaLibPage : UserControl
                 bodyBlocks.Add(("text", string.Join('\n', buf)));
         }
 
-        // 轮播图：数据源中除正文图片外的图片，主图排最前
         var sliderPaths = new List<string>();
         if (Directory.Exists(folder))
         {
@@ -1182,75 +1247,7 @@ public partial class MediaLibPage : UserControl
                 .ToList();
             sliderPaths = names.Select(f => Path.Combine(folder, f)).ToList();
         }
-
-        // 字段网格（带可点击链接）
-        var infoPanel = BuildDetailFields(workId, r);
-
-        // 上半部分：左边轮播图（1/3），右边字段详情（2/3）
-        var content = new Grid { Margin = new Thickness(0, 10, 0, 0) };
-        content.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        content.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(2, GridUnitType.Star) });
-        if (sliderPaths.Count > 0)
-        {
-            var slider = new ImageSliderControl(sliderPaths) { VerticalAlignment = VerticalAlignment.Top };
-            Grid.SetColumn(slider, 0);
-            content.Children.Add(slider);
-        }
-        var rightHost = new Grid { Margin = new Thickness(20, 0, 0, 0) };
-        rightHost.Children.Add(infoPanel);
-        Grid.SetColumn(rightHost, 1);
-        content.Children.Add(rightHost);
-        layout.Children.Add(content);
-
-        // 正文：文本与图片按原文顺序嵌入
-        var maxWidth = Math.Max(360, CardsScroll.ViewportWidth - 100);
-        foreach (var (kind, value) in bodyBlocks)
-        {
-            if (kind == "text")
-            {
-                if (value.Trim().Length == 0)
-                    continue;
-                layout.Children.Add(new TextBox
-                {
-                    Text = value,
-                    IsReadOnly = true,
-                    TextWrapping = TextWrapping.Wrap,
-                    BorderThickness = new Thickness(0),
-                    Background = Brushes.Transparent,
-                    Margin = new Thickness(0, 10, 0, 0),
-                });
-            }
-            else
-            {
-                var path = Path.Combine(folder, value);
-                if (!File.Exists(path))
-                    continue;
-                try
-                {
-                    var bmp = new BitmapImage();
-                    bmp.BeginInit();
-                    bmp.CacheOption = BitmapCacheOption.OnLoad;
-                    bmp.UriSource = new Uri(path);
-                    bmp.EndInit();
-                    bmp.Freeze();
-                    layout.Children.Add(new Image
-                    {
-                        Source = bmp,
-                        MaxWidth = maxWidth,
-                        Stretch = Stretch.Uniform,
-                        HorizontalAlignment = HorizontalAlignment.Left,
-                        Margin = new Thickness(0, 10, 0, 0),
-                    });
-                }
-                catch (Exception)
-                {
-                    // 单张正文图加载失败跳过
-                }
-            }
-        }
-
-        ContentHost.Content = root;
-        CardsScroll.ScrollToVerticalOffset(0);
+        return new DetailContent(bodyBlocks, sliderPaths);
     }
 
     /// <summary>详情字段网格：社团/声优等渲染为可点击链接，标签来自 work_genres 表。</summary>
@@ -1379,7 +1376,7 @@ public partial class MediaLibPage : UserControl
     private static readonly FontFamily EmojiFont = new("Segoe UI Emoji");
 
     /// <summary>"查看作品"独立页面：以多级折叠列表展示作品文件树（默认仅显示根目录文件，文件夹折叠）。</summary>
-    private void ShowFileTree()
+    private async void ShowFileTree()
     {
         var folder = _treeFolder;
         if (folder == null || !Directory.Exists(folder))
@@ -1389,6 +1386,7 @@ public partial class MediaLibPage : UserControl
         }
         _level = "filetree";
         ClearCards();
+        ShowContentHost();   // 文件树用 ContentHost 承载，隐藏卡片列表
         BackButton.Visibility = Visibility.Visible;
         SearchBox.Visibility = Visibility.Collapsed;   // 文件树页不需要搜索框
         CountLabel.Text = "";
@@ -1402,12 +1400,23 @@ public partial class MediaLibPage : UserControl
         ViewModeBar.Visibility = Visibility.Visible;
         UpdateViewModeButtons();
 
-        if (_treeThumbView)
-            ContentHost.Content = BuildThumbView(folder);
+        var thumbView = _treeThumbView;
+        if (thumbView)
+        {
+            // 递归收集图片（可能上千文件）放后台线程，避免枚举时冻结 UI
+            var images = await Task.Run(() => CollectThumbImages(folder));
+            if (_level != "filetree" || _treeFolder != folder || _treeThumbView != thumbView)
+                return;
+            ContentHost.Content = BuildThumbWrap(images);
+        }
         else
         {
+            // 仅根层级在后台枚举；子文件夹在首次展开时才按需枚举（懒展开），不一次性递归建满整棵树
+            var level = await Task.Run(() => ListLevel(folder, isRoot: true));
+            if (_level != "filetree" || _treeFolder != folder || _treeThumbView != thumbView)
+                return;
             var list = new StackPanel { Margin = new Thickness(0, 0, 0, 12) };
-            AddTreeLevel(list, folder, depth: 0, isRoot: true);
+            BuildLevelInto(list, level, depth: 0);
             if (list.Children.Count == 0)
                 list.Children.Add(new TextBlock
                 {
@@ -1447,8 +1456,8 @@ public partial class MediaLibPage : UserControl
 
     private const double ThumbTileW = 160, ThumbTileH = 160, ThumbGap = 10;
 
-    /// <summary>缩略图视图：递归收集作品内所有图片（排除 DataSource），平铺成缩略图网格，单击整页预览。</summary>
-    private FrameworkElement BuildThumbView(string folder)
+    /// <summary>后台线程：递归收集作品内所有图片（排除 DataSource）并排序（可能上千文件）。</summary>
+    private static List<string> CollectThumbImages(string folder)
     {
         List<string> images = [];
         try
@@ -1468,7 +1477,12 @@ public partial class MediaLibPage : UserControl
         {
         }
         images.Sort((a, b) => string.Compare(a, b, StringComparison.OrdinalIgnoreCase));
+        return images;
+    }
 
+    /// <summary>缩略图视图：把后台收集到的图片平铺成缩略图网格（缩略图本身再后台解码），单击整页预览。</summary>
+    private FrameworkElement BuildThumbWrap(List<string> images)
+    {
         if (images.Count == 0)
             return new TextBlock
             {
@@ -1500,25 +1514,9 @@ public partial class MediaLibPage : UserControl
             Background = new SolidColorBrush(Color.FromArgb(12, 255, 255, 255)),
             CornerRadius = new CornerRadius(4),
         });
-        try
-        {
-            var bmp = new BitmapImage();
-            bmp.BeginInit();
-            bmp.CacheOption = BitmapCacheOption.OnLoad;
-            bmp.UriSource = new Uri(path);
-            bmp.DecodePixelWidth = (int)ThumbTileW * 2;  // 控制解码尺寸防内存膨胀
-            bmp.EndInit();
-            bmp.Freeze();
-            coverGrid.Children.Add(new Image
-            {
-                Source = bmp, Stretch = Stretch.UniformToFill,
-                ClipToBounds = true,
-            });
-        }
-        catch (Exception)
-        {
-            // 单张缩略图读取失败不影响整页
-        }
+        var thumb = new Image { Stretch = Stretch.UniformToFill, ClipToBounds = true, Tag = path };
+        coverGrid.Children.Add(thumb);
+        LoadImageAsync(thumb, path, (int)ThumbTileW * 2);   // 后台解码，避免整墙缩略图卡 UI
         panel.Children.Add(coverGrid);
         panel.Children.Add(new TextBlock
         {
@@ -1532,8 +1530,11 @@ public partial class MediaLibPage : UserControl
         return tile;
     }
 
-    /// <summary>递归填充某一层级：子文件夹（默认折叠）在前、文件在后；根目录排除 DataSource。</summary>
-    private void AddTreeLevel(StackPanel panel, string dir, int depth, bool isRoot)
+    /// <summary>单层文件树内容：子文件夹（含其项数）与文件（含大小），均已排序、已过滤根目录 DataSource。</summary>
+    private sealed record TreeLevel(List<(string Dir, int Count)> Dirs, List<(string Path, long Size)> Files);
+
+    /// <summary>后台线程：枚举 dir 的单层内容，并顺带 stat 子文件夹项数/文件大小（避免建行时在 UI 线程逐个打盘）。</summary>
+    private static TreeLevel ListLevel(string dir, bool isRoot)
     {
         string[] subDirs = [], files = [];
         try
@@ -1543,25 +1544,48 @@ public partial class MediaLibPage : UserControl
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
-            return;
+            return new TreeLevel([], []);
         }
         var dirs = subDirs
             .Where(d => !(isRoot && string.Equals(Path.GetFileName(d), DlsitePage.DataSourceDir,
                 StringComparison.OrdinalIgnoreCase)))
-            .OrderBy(Path.GetFileName, StringComparer.OrdinalIgnoreCase);
-        foreach (var sub in dirs)
-        {
-            var children = new StackPanel { Visibility = Visibility.Collapsed };  // 默认折叠
-            AddTreeLevel(children, sub, depth + 1, false);
-            panel.Children.Add(MakeTreeFolderRow(sub, children, depth));
-            panel.Children.Add(children);
-        }
-        foreach (var file in files.OrderBy(Path.GetFileName, StringComparer.OrdinalIgnoreCase))
-            panel.Children.Add(MakeTreeFileRow(file, depth));
+            .OrderBy(Path.GetFileName, StringComparer.OrdinalIgnoreCase)
+            .Select(d =>
+            {
+                var count = 0;
+                try { count = Directory.GetFileSystemEntries(d).Length; }
+                catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+                return (d, count);
+            })
+            .ToList();
+        var fileList = files
+            .OrderBy(Path.GetFileName, StringComparer.OrdinalIgnoreCase)
+            .Select(f =>
+            {
+                long size = 0;
+                try { size = new FileInfo(f).Length; }
+                catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+                return (f, size);
+            })
+            .ToList();
+        return new TreeLevel(dirs, fileList);
     }
 
-    /// <summary>文件夹行：箭头 + 📁 + 名称 + 项数，点击整行折叠/展开子级。</summary>
-    private Border MakeTreeFolderRow(string dir, StackPanel children, int depth)
+    /// <summary>把一层内容填入面板：子文件夹（默认折叠、懒展开）在前，文件在后。</summary>
+    private void BuildLevelInto(StackPanel panel, TreeLevel level, int depth)
+    {
+        foreach (var (sub, count) in level.Dirs)
+        {
+            var children = new StackPanel { Visibility = Visibility.Collapsed };  // 默认折叠，首次展开时才枚举
+            panel.Children.Add(MakeTreeFolderRow(sub, count, children, depth));
+            panel.Children.Add(children);
+        }
+        foreach (var (file, size) in level.Files)
+            panel.Children.Add(MakeTreeFileRow(file, size, depth));
+    }
+
+    /// <summary>文件夹行：箭头 + 📁 + 名称 + 项数，点击整行折叠/展开；子级在首次展开时才后台枚举并填充。</summary>
+    private Border MakeTreeFolderRow(string dir, int count, StackPanel children, int depth)
     {
         var row = new Border
         {
@@ -1600,14 +1624,6 @@ public partial class MediaLibPage : UserControl
         };
         Grid.SetColumn(name, 2);
         grid.Children.Add(name);
-        var count = 0;
-        try
-        {
-            count = Directory.GetFileSystemEntries(dir).Length;
-        }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
-        {
-        }
         var countText = new TextBlock
         {
             Text = I18n.Format(I18n.Tr("{count} 项"), ("count", count)),
@@ -1619,8 +1635,15 @@ public partial class MediaLibPage : UserControl
         grid.Children.Add(countText);
         row.Child = grid;
 
-        row.MouseLeftButtonUp += (_, _) =>
+        var built = false;   // 子级是否已枚举填充（懒展开：首次展开时才后台枚举）
+        row.MouseLeftButtonUp += async (_, _) =>
         {
+            if (!built)
+            {
+                built = true;
+                var level = await Task.Run(() => ListLevel(dir, isRoot: false));
+                BuildLevelInto(children, level, depth + 1);
+            }
             var show = children.Visibility != Visibility.Visible;
             children.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
             arrow.Text = show ? "▾" : "▸";
@@ -1631,7 +1654,7 @@ public partial class MediaLibPage : UserControl
     }
 
     /// <summary>文件行：类型图标 + 名称 + 大小。图片/视频单击整页预览；音频单击底部播放条播放；其它双击打开。</summary>
-    private Border MakeTreeFileRow(string path, int depth)
+    private Border MakeTreeFileRow(string path, long size, int depth)
     {
         var ext = Path.GetExtension(path).ToLowerInvariant();
         var previewable = DlsitePage.ImageExts.Contains(ext) || VideoExts.Contains(ext);
@@ -1664,14 +1687,6 @@ public partial class MediaLibPage : UserControl
         };
         Grid.SetColumn(name, 1);
         grid.Children.Add(name);
-        long size = 0;
-        try
-        {
-            size = new FileInfo(path).Length;
-        }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
-        {
-        }
         var sizeText = new TextBlock
         {
             Text = FormatSize(size),
@@ -1851,20 +1866,9 @@ public partial class MediaLibPage : UserControl
         PreviewTitle.Text = _previewImages.Count > 1
             ? $"{Path.GetFileName(path)}　{_previewIndex + 1} / {_previewImages.Count}"
             : Path.GetFileName(path);
-        try
-        {
-            var bmp = new BitmapImage();
-            bmp.BeginInit();
-            bmp.CacheOption = BitmapCacheOption.OnLoad;
-            bmp.UriSource = new Uri(path);
-            bmp.EndInit();
-            bmp.Freeze();
-            PreviewContent.Child = new Image { Source = bmp, Stretch = Stretch.Uniform };
-        }
-        catch (Exception)
-        {
-            PreviewContent.Child = null;
-        }
+        var img = new Image { Stretch = Stretch.Uniform, Tag = path };
+        PreviewContent.Child = img;
+        LoadImageAsync(img, path, 0);   // 整页预览用原始尺寸，后台解码避免大图卡顿
     }
 
     /// <summary>加载视频播放队列中当前索引的视频；订阅自然结束以自动续播下一个。</summary>

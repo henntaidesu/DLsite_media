@@ -1,6 +1,7 @@
 <UserControl x:Class="DLsiteMedia.Views.SearchPage"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:ctrl="clr-namespace:DLsiteMedia.Controls">
     <Grid>
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
@@ -140,15 +141,17 @@
                 </ListBox.ItemTemplate>
             </ListBox>
 
-            <!-- 社团作品卡片网格（RG 搜索：点击作品后自动用其 RJ 号搜索 AS） -->
+            <!-- 社团作品卡片网格（RG 搜索：点击作品后自动用其 RJ 号搜索 AS）；虚拟化换行网格，百级卡片只渲染视口内 -->
             <ListBox x:Name="MakerList" Visibility="Collapsed"
                      ScrollViewer.HorizontalScrollBarVisibility="Disabled"
-                     ScrollViewer.CanContentScroll="False"
+                     ScrollViewer.CanContentScroll="True"
+                     VirtualizingPanel.IsVirtualizing="True"
+                     VirtualizingPanel.VirtualizationMode="Standard"
                      ScrollViewer.ScrollChanged="MakerList_ScrollChanged"
                      SelectionChanged="MakerList_SelectionChanged">
                 <ListBox.ItemsPanel>
                     <ItemsPanelTemplate>
-                        <WrapPanel Orientation="Horizontal" />
+                        <ctrl:VirtualizingWrapPanel ItemWidth="168" ItemHeight="196" />
                     </ItemsPanelTemplate>
                 </ListBox.ItemsPanel>
                 <ListBox.ItemContainerStyle>

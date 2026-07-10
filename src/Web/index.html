@@ -82,15 +82,20 @@
   .toolbar { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; align-items: center; }
 
   .grid { display: grid; gap: 12px; justify-content: start; }
-  .grid.cards { grid-template-columns: repeat(auto-fill, minmax(150px, 200px)); }
-  .grid.groups { grid-template-columns: repeat(auto-fill, minmax(220px, 260px)); }
+  /* 列宽下限取 max(150px, 单行 8 列时每列的宽度)：一行最多 8 张，窄屏自动减列；
+     1fr 上限让列拉伸填满整行、右侧不留白。84px = 7 个 12px 间距（8 列 7 缝）。 */
+  .grid.cards { grid-template-columns: repeat(auto-fill, minmax(max(150px, (100% - 84px) / 8), 1fr)); }
+  /* 作品卡固定 高:宽 = 1.5:1（aspect-ratio 为 宽/高，故 2/3） */
+  .grid.cards > .card { aspect-ratio: 2 / 3; }
+  .grid.groups { grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
   .card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
           overflow: hidden; cursor: pointer; display: flex; flex-direction: column; transition: border-color .12s; }
   .card:hover { border-color: var(--accent-dim); }
   .group-card { padding: 14px; min-height: 92px; }
   .group-card .gt { font-weight: 600; font-size: 15px; word-break: break-word; }
   .group-card .gc { color: var(--muted); font-size: 13px; margin-top: 8px; }
-  .cover { position: relative; width: 100%; aspect-ratio: 4 / 3; background: #15151a; }
+  /* 封面占卡片高度的 2/3（flex-grow 2 : 文本 1，flex-basis 0 使按比例分配整卡高度） */
+  .cover { position: relative; width: 100%; flex: 2 1 0; min-height: 0; background: #15151a; }
   .cover img { width: 100%; height: 100%; object-fit: cover; display: block; }
   .badge { position: absolute; top: 6px; padding: 1px 7px; border-radius: 6px;
            background: rgba(0,0,0,.62); color: #f3f3f3; font-size: 11px; max-width: 70%;
@@ -102,7 +107,8 @@
   /* 已在库作品：置灰降亮，仍可点击 */
   .card.dim { opacity: .5; filter: grayscale(.9); }
   .card.dim:hover { border-color: var(--line); }
-  .card .wt { padding: 8px 10px 10px; font-size: 13.5px; font-weight: 500;
+  /* 文本占卡片高度的 1/3；min-height:0 允许收缩，超出按行夹取隐藏 */
+  .card .wt { flex: 1 1 0; min-height: 0; padding: 8px 10px 10px; font-size: 13.5px; font-weight: 500;
               display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 
   .detail { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px; }
@@ -599,13 +605,47 @@ function makeWorkCard(w) {
   c.onclick = () => pushView('detail', { id: w.id });
   return c;
 }
+// 分批懒加载：一次只建 CARD_BATCH 张卡片，滚动接近底部时再补下一批。
+// 媒体库上千个作品、或单个作品内上百张图片时，避免一次性构建 DOM + 发起大量图片请求。
+const CARD_BATCH = 30;
+let _cardIO = null;   // 全局仅一个 observer（同一时刻只有一个懒加载网格在展示）
+// 把 items 分批用 makeFn 渲染进「已在 DOM 中」的 grid；哨兵滚入视口（提前 600px）时补下一批。
+// unobserve→observe 触发一次新的相交回调，处理"补完后哨兵仍在视口"的连续加载。
+function lazyGridFill(grid, items, makeFn) {
+  if (_cardIO) { _cardIO.disconnect(); _cardIO = null; }
+  let idx = 0;
+  const renderNext = () => {
+    const end = Math.min(idx + CARD_BATCH, items.length);
+    const frag = document.createDocumentFragment();
+    for (; idx < end; idx++) frag.appendChild(makeFn(items[idx]));
+    grid.appendChild(frag);
+  };
+  renderNext();
+  if (idx >= items.length) return;
+  const sentinel = el('div'); sentinel.style.height = '1px'; grid.after(sentinel);
+  // rootMargin 为 0：哨兵（网格末尾）真正滚入视口——即滑块拉到底——时才加载下一批，
+  // 不做提前预取。unobserve→observe 触发新回调，处理"补完后仍在底部"的连续加载。
+  _cardIO = new IntersectionObserver(es => {
+    if (!es[0].isIntersecting) return;
+    _cardIO.unobserve(sentinel);
+    renderNext();
+    if (idx < items.length) _cardIO.observe(sentinel);
+    else { _cardIO.disconnect(); _cardIO = null; sentinel.remove(); }
+  }, { rootMargin: '0px' });
+  _cardIO.observe(sentinel);
+}
+function lazyCards(host, items, makeFn, emptyText) {
+  if (_cardIO) { _cardIO.disconnect(); _cardIO = null; }
+  host.innerHTML = '';
+  if (!items.length) { host.appendChild(el('div', 'empty', emptyText)); return; }
+  const grid = el('div', 'grid cards'); host.appendChild(grid);
+  lazyGridFill(grid, items, makeFn);
+}
 function drawWorks(items) {
   lastMap = null;
   const items2 = filtered();
   $('count').textContent = $('search').value.trim() ? `共 ${items.length} 个作品，匹配 ${items2.length} 个` : `共 ${items.length} 个作品`;
-  const grid = el('div', 'grid cards');
-  items2.forEach(w => grid.appendChild(makeWorkCard(w)));
-  const host = $('content'); host.innerHTML = ''; host.appendChild(items2.length ? grid : el('div', 'empty', '没有内容'));
+  lazyCards($('content'), items2, makeWorkCard, '没有内容');
 }
 
 // 作用域作品搜索：媒体库根搜全部库 / 库内搜该库 / 标签·形式社团页搜对应分组（服务端 LIKE，对齐 WPF）
@@ -625,9 +665,7 @@ async function scopedWorkSearch(st, kw, gen) {
   const works = d.works || [];
   $('sort').hidden = true;
   $('count').textContent = `搜索到 ${works.length} 个作品`;
-  const grid = el('div', 'grid cards');
-  works.forEach(w => grid.appendChild(makeWorkCard(w)));
-  const host = $('content'); host.innerHTML = ''; host.appendChild(works.length ? grid : el('div', 'empty', '没有匹配的作品'));
+  lazyCards($('content'), works, makeWorkCard, '没有匹配的作品');
 }
 
 async function renderDetail(id) {
@@ -1203,7 +1241,8 @@ async function renderFiles(ctx) {
   lb.onclick = () => { if (fileViewMode !== 'list') { fileViewMode = 'list'; renderFiles(ctx); } };
   bar.append(tb, lb); host.appendChild(bar);
   if (!nodes.length) { host.appendChild(el('div', 'empty', '此文件夹为空')); return; }
-  host.appendChild(fileViewMode === 'list' ? drawFileTree(nodes, ctx.id) : drawFileGrid(nodes, ctx.id));
+  if (fileViewMode === 'list') host.appendChild(drawFileTree(nodes, ctx.id));
+  else drawFileGrid(nodes, ctx.id, host);   // 缩略图网格自行分批填充到 host
 }
 // 文件列表视图：递归折叠树，文件夹默认收起，文件显示类型图标+名称+大小（镜像 WPF 文件列表）
 function drawFileTree(nodes, id) {
@@ -1246,14 +1285,13 @@ function buildTreeLevel(host, nodes, id, depth) {
     }
   });
 }
-function drawFileGrid(nodes, id) {
-  // 本层图片集合：图片缩略图点开后可在它们之间左右滑动
+function drawFileGrid(nodes, id, host) {
+  // 本层图片集合：图片缩略图点开后可在它们之间左右滑动（含全部图片，与是否已渲染无关）
   const imgs = nodes.filter(n => !n.dir && IMG_EXTS.includes((n.ext || '').toLowerCase())).map(n => fileUrl(id, n.rel));
   // 本层音频/视频集合：组成播放队列，支持上一/下一与自动续播（nodes 已按名称排序）
   const audios = nodes.filter(n => !n.dir && AUDIO_EXTS.includes((n.ext || '').toLowerCase())).map(n => ({ url: fileUrl(id, n.rel), name: n.name }));
   const videos = nodes.filter(n => !n.dir && VIDEO_EXTS.includes((n.ext || '').toLowerCase())).map(n => ({ url: fileUrl(id, n.rel), name: n.name }));
-  const grid = el('div', 'fgrid');
-  nodes.forEach(n => {
+  const makeCard = (n) => {
     const ext = (n.ext || '').toLowerCase();
     const card = el('div', 'fcard');
     const thumb = el('div', 'fthumb');
@@ -1278,9 +1316,10 @@ function drawFileGrid(nodes, id) {
       card.onclick = () => window.open(fileUrl(id, n.rel), '_blank');
     }
     card.append(thumb, el('div', 'fname', n.name));
-    grid.appendChild(card);
-  });
-  return grid;
+    return card;
+  };
+  const grid = el('div', 'fgrid'); host.appendChild(grid);
+  lazyGridFill(grid, nodes, makeCard);   // 分批渲染缩略图卡片（图片多时避免一次性建 DOM/加载）
 }
 // ---------- 视频播放队列 ----------
 let videoQueue = [], videoIndex = -1;

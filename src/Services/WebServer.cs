@@ -146,13 +146,14 @@ public static class WebServer
             {
                 break;  // 监听器已关闭
             }
-            _ = Task.Run(() => HandleClient(client));
+            // 交给线程池起步（同步读请求头不占用 accept 线程），进入外部网络调用后 await 又会让出线程
+            _ = Task.Run(() => HandleClientAsync(client));
         }
     }
 
     // ---------- 请求处理 ----------
 
-    private static void HandleClient(TcpClient client)
+    private static async Task HandleClientAsync(TcpClient client)
     {
         try
         {
@@ -164,7 +165,9 @@ public static class WebServer
                 var request = ReadRequest(stream);
                 if (request == null)
                     return;
-                Route(stream, request);
+                // 路由异步到底：处理链路中的外部网络调用（debrid/dlsite/asmr）await 让出线程池线程，
+                // 多客户端并发访问时线程不被阻塞、响应不排队。
+                await RouteAsync(stream, request);
             }
         }
         catch (Exception e)
@@ -264,7 +267,7 @@ public static class WebServer
 
     // ---------- 路由 ----------
 
-    private static void Route(NetworkStream stream, Request req)
+    private static async Task RouteAsync(NetworkStream stream, Request req)
     {
         var path = req.Path;
         if (path is "/" or "/index.html")
@@ -305,23 +308,23 @@ public static class WebServer
                 case "/api/detail": ApiDetail(stream, req); break;
                 case "/api/toggle": ApiToggle(stream, req); break;
                 case "/api/searchworks": ApiSearchWorks(stream, req); break;
-                case "/api/movework": ApiMoveWork(stream, req); break;
+                case "/api/movework": await ApiMoveWorkAsync(stream, req); break;
                 case "/api/cover": ApiCover(stream, req); break;
                 case "/api/asset": ApiAsset(stream, req); break;
                 case "/api/files": ApiFiles(stream, req); break;
                 case "/api/file": ApiFile(stream, req); break;
                 // 搜索
-                case "/api/search": ApiSearch(stream, req); break;
-                case "/api/maker": ApiMaker(stream, req); break;
-                case "/api/asscan": ApiAsScan(stream, req); break;
-                case "/api/thumb": ApiThumb(stream, req); break;
-                case "/api/posturls": ApiPostUrls(stream, req); break;
-                case "/api/checkhost": ApiCheckHost(stream, req); break;
+                case "/api/search": await ApiSearchAsync(stream, req); break;
+                case "/api/maker": await ApiMakerAsync(stream, req); break;
+                case "/api/asscan": await ApiAsScanAsync(stream, req); break;
+                case "/api/thumb": await ApiThumbAsync(stream, req); break;
+                case "/api/posturls": await ApiPostUrlsAsync(stream, req); break;
+                case "/api/checkhost": await ApiCheckHostAsync(stream, req); break;
                 case "/api/downtargets": ApiDownTargets(stream); break;
                 case "/api/enqueue": ApiEnqueue(stream, req); break;
                 // 下载 / 已下载
                 case "/api/downloads": ApiDownloads(stream); break;
-                case "/api/usage": ApiUsage(stream); break;
+                case "/api/usage": await ApiUsageAsync(stream); break;
                 case "/api/engine": ApiEngine(stream, req); break;
                 case "/api/reparse": ApiReparse(stream, req); break;
                 case "/api/pausework": ApiPauseWork(stream, req); break;
@@ -334,7 +337,7 @@ public static class WebServer
                 case "/api/mark": ApiMark(stream, req); break;
                 // 设置
                 case "/api/settings": if (req.Method == "POST") ApiSettingsWrite(stream, req); else ApiSettings(stream); break;
-                case "/api/debridtest": ApiDebridTest(stream, req); break;
+                case "/api/debridtest": await ApiDebridTestAsync(stream, req); break;
                 default: WriteJson(stream, 404, new { error = "not found" }); break;
             }
         }
@@ -902,7 +905,7 @@ public static class WebServer
 
     // ---------- API：搜索 ----------
 
-    private static void ApiSearch(NetworkStream stream, Request req)
+    private static async Task ApiSearchAsync(NetworkStream stream, Request req)
     {
         var id = (req.Query.GetValueOrDefault("id") ?? "").Trim().ToUpperInvariant();
         if (!WorkIdRe.IsMatch(id))
@@ -924,7 +927,7 @@ public static class WebServer
         var searchTask = AnimeSharing.SearchWorkAsync(id);
         try
         {
-            Task.WhenAll(workTask, searchTask).GetAwaiter().GetResult();
+            await Task.WhenAll(workTask, searchTask);
         }
         catch (Exception e)
         {
@@ -947,7 +950,7 @@ public static class WebServer
     }
 
     /// <summary>按社团号（RG）返回该社团作品列表的某一页。</summary>
-    private static void ApiMaker(NetworkStream stream, Request req)
+    private static async Task ApiMakerAsync(NetworkStream stream, Request req)
     {
         var id = (req.Query.GetValueOrDefault("id") ?? "").Trim().ToUpperInvariant();
         if (!Regex.IsMatch(id, @"^RG\d+$"))
@@ -958,7 +961,7 @@ public static class WebServer
         var page = GetInt(req, "page");
         if (page < 1)
             page = 1;
-        var (works, hasMore) = DlsiteApi.GetMakerWorksAsync(id, page).GetAwaiter().GetResult();
+        var (works, hasMore) = await DlsiteApi.GetMakerWorksAsync(id, page);
         // 校验后台：本页作品号哪些已在库（works 表已有记录），供前端置灰标记
         var states = LookupWorkStates(works.Select(w => w.WorkId));
         WriteJson(stream, 200, new
@@ -997,7 +1000,7 @@ public static class WebServer
 
     /// <summary>对单个作品号做一次 AS 论坛扫描，返回匹配帖子数（-1 表示扫描出错）。
     /// 供 RG 搜索时前端按 3 秒间隔逐个探测未在库作品的可下载性。</summary>
-    private static void ApiAsScan(NetworkStream stream, Request req)
+    private static async Task ApiAsScanAsync(NetworkStream stream, Request req)
     {
         var id = (req.Query.GetValueOrDefault("id") ?? "").Trim().ToUpperInvariant();
         if (!WorkIdRe.IsMatch(id))
@@ -1008,7 +1011,7 @@ public static class WebServer
         int count;
         try
         {
-            count = AnimeSharing.SearchWorkAsync(id).GetAwaiter().GetResult().Count;
+            count = (await AnimeSharing.SearchWorkAsync(id)).Count;
         }
         catch (Exception)
         {
@@ -1023,7 +1026,7 @@ public static class WebServer
             .Select(l => string.Join(' ', l.Split(' ', StringSplitOptions.RemoveEmptyEntries)))
             .Where(l => l.Length > 0).Take(6));
 
-    private static void ApiThumb(NetworkStream stream, Request req)
+    private static async Task ApiThumbAsync(NetworkStream stream, Request req)
     {
         var url = req.Query.GetValueOrDefault("url") ?? "";
         if (!url.StartsWith("http://", StringComparison.OrdinalIgnoreCase) &&
@@ -1035,7 +1038,7 @@ public static class WebServer
         try
         {
             using var client = Http.CreateClient(TimeSpan.FromSeconds(15));
-            var bytes = client.GetByteArrayAsync(url).GetAwaiter().GetResult();
+            var bytes = await client.GetByteArrayAsync(url);
             WriteBytes(stream, 200, "OK", ContentType(url), bytes, ("Cache-Control", "max-age=86400"));
         }
         catch (Exception)
@@ -1044,13 +1047,13 @@ public static class WebServer
         }
     }
 
-    private static void ApiPostUrls(NetworkStream stream, Request req)
+    private static async Task ApiPostUrlsAsync(NetworkStream stream, Request req)
     {
         var threadPath = req.Query.GetValueOrDefault("url") ?? "";
         List<string> urls;
         try
         {
-            (urls, _) = AnimeSharing.GetWorkDownUrlsAsync(threadPath).GetAwaiter().GetResult();
+            (urls, _) = await AnimeSharing.GetWorkDownUrlsAsync(threadPath);
         }
         catch (Exception e)
         {
@@ -1085,7 +1088,7 @@ public static class WebServer
         }
     }
 
-    private static void ApiCheckHost(NetworkStream stream, Request req)
+    private static async Task ApiCheckHostAsync(NetworkStream stream, Request req)
     {
         var urls = ReadStringArray(req.Body, "urls");
         if (urls.Count == 0)
@@ -1096,7 +1099,7 @@ public static class WebServer
         var valid = 0;
         using (var client = LinkChecker.MakeClient())
             foreach (var u in urls)
-                if (LinkChecker.CheckUrlAsync(u, client).GetAwaiter().GetResult())
+                if (await LinkChecker.CheckUrlAsync(u, client))
                     valid++;
         var status = valid == urls.Count ? "valid" : valid == 0 ? "invalid" : "partial";
         WriteJson(stream, 200, new { valid, total = urls.Count, status });
@@ -1269,13 +1272,13 @@ public static class WebServer
 
     private static string FileNameOf(string url) => url.TrimEnd('/').Split('/')[^1].Split('?')[0];
 
-    private static void ApiUsage(NetworkStream stream)
+    private static async Task ApiUsageAsync(NetworkStream stream)
     {
         try
         {
             JsonElement? value;
             using (var client = new DebridLinkClient())
-                value = client.DownloadLimitsAsync().GetAwaiter().GetResult();
+                value = await client.DownloadLimitsAsync();
             double? current = null;
             double resetSeconds = 0;
             if (value is { } v && v.ValueKind == JsonValueKind.Object)
@@ -1379,7 +1382,7 @@ public static class WebServer
     }
 
     /// <summary>把作品移动到另一个媒体库（镜像详情页"移动媒体库"）。</summary>
-    private static void ApiMoveWork(NetworkStream stream, Request req)
+    private static async Task ApiMoveWorkAsync(NetworkStream stream, Request req)
     {
         string id = "", lib = "", folder = "";
         try
@@ -1399,7 +1402,7 @@ public static class WebServer
             WriteJson(stream, 400, new { ok = false, message = "参数缺失" });
             return;
         }
-        var (ok, message) = MediaLibraryService.MoveWorkToLibraryAsync(id, lib, folder).GetAwaiter().GetResult();
+        var (ok, message) = await MediaLibraryService.MoveWorkToLibraryAsync(id, lib, folder);
         WriteJson(stream, 200, new { ok, message });
     }
 
@@ -1565,13 +1568,13 @@ public static class WebServer
         WriteJson(stream, 200, new { ok = true });
     }
 
-    private static void ApiDebridTest(NetworkStream stream, Request req)
+    private static async Task ApiDebridTestAsync(NetworkStream stream, Request req)
     {
         var key = ReadStringField(req.Body, "key");
         try
         {
             using var client = new DebridLinkClient(key.Length > 0 ? key : null);
-            var info = client.AccountInfosAsync().GetAwaiter().GetResult();
+            var info = await client.AccountInfosAsync();
             var ok = info is { } v && v.ValueKind == JsonValueKind.Object;
             WriteJson(stream, 200, new { ok });
         }

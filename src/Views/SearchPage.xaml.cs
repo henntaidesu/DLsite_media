@@ -347,9 +347,9 @@ public partial class SearchPage : UserControl
         _results.Clear();
         _selectId = workId;
 
-        // 已下载过的作品提示用户
-        var existed = Db.Select(
-            "SELECT \"work_name\", \"down_time\" FROM \"works\" WHERE \"work_id\" = @w", ("@w", _selectId));
+        // 已下载过的作品提示用户（DB 查询放后台线程，点击搜索后按钮即时响应）
+        var existed = await Task.Run(() => Db.Select(
+            "SELECT \"work_name\", \"down_time\" FROM \"works\" WHERE \"work_id\" = @w", ("@w", _selectId)));
         if (existed is { Count: > 0 })
         {
             var workName = existed[0][0] as string ?? "";

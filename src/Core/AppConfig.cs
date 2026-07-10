@@ -55,6 +55,9 @@ public static class AppConfig
     private static Dictionary<string, Dictionary<string, string>>? _cache;
     private static readonly object Lock = new();
 
+    /// <summary>配置版本戳：每次写入/失效自增。页面据此判断"配置是否变过"，未变则跳过 Reload。</summary>
+    public static long Version { get; private set; }
+
     /// <summary>Logger 用的级别快捷缓存（避免日志路径反查数据库造成递归）。</summary>
     internal static string LogLevelCached { get; private set; } = "info";
 
@@ -74,6 +77,16 @@ public static class AppConfig
     {
         lock (Lock)
             _cache = Load();
+    }
+
+    /// <summary>惰性失效：仅丢弃缓存并自增版本戳，下次读取时才真正 Load（不立即打库）。</summary>
+    public static void Invalidate()
+    {
+        lock (Lock)
+        {
+            _cache = null;
+            Version++;
+        }
     }
 
     private static Dictionary<string, Dictionary<string, string>> Load()
@@ -134,6 +147,7 @@ public static class AppConfig
             dict[key] = value;
             if (section == "loglevel" && key == "level")
                 LogLevelCached = value;
+            Version++;   // 通知各页"配置已变更"，下次可见时才 Reload
         }
     }
 

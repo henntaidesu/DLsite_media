@@ -94,29 +94,36 @@ public static class DlsiteApi
     private static readonly Regex UrlWorkRe = new(@"product_id/((?:RJ|BJ|VJ)\d+)", RegexOptions.IgnoreCase | RegexOptions.Compiled);
     private static readonly Regex UrlMakerRe = new(@"maker_id/(RG\d+)", RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
-    /// <summary>DLsite 搜索/筛选列表页前缀（必须以此开头才按目录列表整页解析）。</summary>
-    private const string CatalogPrefix = "https://www.dlsite.com/maniax/fsr/";
+    /// <summary>DLsite 搜索/筛选/分类列表页（任意版块下的 fsr 路径，如 /maniax/fsr/、/home/fsr/）。</summary>
+    private static readonly Regex CatalogUrlRe = new(@"dlsite\.com/[^/]+/fsr/", RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     /// <summary>
-    /// 识别搜索框输入：作品号 / 社团号 / DLsite 搜索筛选列表页（fsr）/ DLsite 链接（从中提取 product_id 或 maker_id）。
-    /// 返回归一化后的大写编号，或（Catalog）原始 fsr URL。
+    /// 识别搜索框输入：作品号 / 社团号 / DLsite 链接。
+    /// DLsite 链接优先提取 product_id（作品）/ maker_id（社团）；其余任意 DLsite 列表页（fsr 搜索/筛选/分类/排行等）整页作为目录列表解析。
+    /// 返回归一化后的大写编号，或（Catalog）原始 URL。
     /// </summary>
     public static (SearchKind Kind, string Id) ParseSearchInput(string raw)
     {
         raw = (raw ?? "").Trim();
         if (raw.Length == 0)
             return (SearchKind.Invalid, "");
-        // DLsite 搜索/筛选列表页（fsr）：整页作为目录列表解析。
-        // 须先于 product_id/maker_id 提取，否则带 maker_id 筛选的 fsr URL 会被误判为社团搜索。
-        if (raw.StartsWith(CatalogPrefix, StringComparison.OrdinalIgnoreCase))
+        // 任意 DLsite 链接均可用
+        if (raw.Contains("dlsite.com", StringComparison.OrdinalIgnoreCase))
+        {
+            // 搜索/筛选/分类列表页（fsr）：整页作为目录列表解析。
+            // 须先于 maker_id 提取，否则带 maker_id 筛选的 fsr URL 会被误判为社团搜索。
+            if (CatalogUrlRe.IsMatch(raw))
+                return (SearchKind.Catalog, raw);
+            // 具体作品/社团链接
+            var m = UrlWorkRe.Match(raw);
+            if (m.Success)
+                return (SearchKind.Work, m.Groups[1].Value.ToUpperInvariant());
+            m = UrlMakerRe.Match(raw);
+            if (m.Success)
+                return (SearchKind.Maker, m.Groups[1].Value.ToUpperInvariant());
+            // 其他任意 DLsite 列表页（分类/排行/搜索结果等）：整页作为目录列表解析
             return (SearchKind.Catalog, raw);
-        // 再看是否为 DLsite 作品/社团链接
-        var m = UrlWorkRe.Match(raw);
-        if (m.Success)
-            return (SearchKind.Work, m.Groups[1].Value.ToUpperInvariant());
-        m = UrlMakerRe.Match(raw);
-        if (m.Success)
-            return (SearchKind.Maker, m.Groups[1].Value.ToUpperInvariant());
+        }
         // 纯编号
         var up = raw.ToUpperInvariant();
         if (WorkRe.IsMatch(up))

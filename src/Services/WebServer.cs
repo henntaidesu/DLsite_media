@@ -33,6 +33,7 @@ public static class WebServer
     private static string _expectedToken = "";   // SHA256(password) 的十六进制；密码为空时不鉴权
     private static bool _authRequired;
     private static readonly object Sync = new();
+    private static readonly object LibSync = new();   // 媒体库配置读改写串行化（并发请求安全）
 
     public static bool IsRunning => _running;
     public static int RunningPort { get; private set; }
@@ -55,6 +56,8 @@ public static class WebServer
 
     // 搜索页：番号 → DL API 作品数据缓存，供加入下载时写 works 表（避免重复请求）。
     private static readonly ConcurrentDictionary<string, DlWork?> SearchCache = new();
+    // 已尝试补齐元数据（作品名等）的番号，避免下载页每秒轮询重复拉取 DL API
+    private static readonly ConcurrentDictionary<string, byte> MetaBackfilled = new();
 
     private static readonly Regex WorkIdRe = new(@"^(?:RJ|BJ|VJ)\d+$", RegexOptions.Compiled);
 
@@ -66,6 +69,8 @@ public static class WebServer
         ["1"] = ("已完成", "#4ade80"),
         ["2"] = ("解析失败", "#f87171"),
         ["4"] = ("已暂停", "#9aa4b2"),
+        ["5"] = ("搜索可用下载连接", "#facc15"),
+        ["6"] = ("无可用下载连接", "#f87171"),
     };
 
     // 设置页可写入的 section/key 白名单（web_server 段不允许从网页改，避免自我锁死）。
@@ -146,13 +151,14 @@ public static class WebServer
             {
                 break;  // 监听器已关闭
             }
-            _ = Task.Run(() => HandleClient(client));
+            // 交给线程池起步（同步读请求头不占用 accept 线程），进入外部网络调用后 await 又会让出线程
+            _ = Task.Run(() => HandleClientAsync(client));
         }
     }
 
     // ---------- 请求处理 ----------
 
-    private static void HandleClient(TcpClient client)
+    private static async Task HandleClientAsync(TcpClient client)
     {
         try
         {
@@ -164,7 +170,9 @@ public static class WebServer
                 var request = ReadRequest(stream);
                 if (request == null)
                     return;
-                Route(stream, request);
+                // 路由异步到底：处理链路中的外部网络调用（debrid/dlsite/asmr）await 让出线程池线程，
+                // 多客户端并发访问时线程不被阻塞、响应不排队。
+                await RouteAsync(stream, request);
             }
         }
         catch (Exception e)
@@ -264,12 +272,23 @@ public static class WebServer
 
     // ---------- 路由 ----------
 
-    private static void Route(NetworkStream stream, Request req)
+    private static async Task RouteAsync(NetworkStream stream, Request req)
     {
-        var path = req.Path;
-        if (path is "/" or "/index.html")
+        // 防 DNS 重绑定：仅允许通过 IP 直连或 localhost 访问（本程序对外只用 IP 地址宣告）。
+        // 用域名访问一律拒绝——恶意网站借 DNS 重绑定把自身域名指到本机 LAN IP 时会被挡在此处。
+        if (!HostAllowed(req))
         {
-            WriteBytes(stream, 200, "OK", "text/html; charset=utf-8", WebAssets.IndexHtml());
+            WriteJson(stream, 403, new { error = "forbidden host" });
+            return;
+        }
+
+        var path = req.Path;
+        if (path == "/")
+            path = "/index.html";
+        // 静态资源（外壳 / 样式 / 各页面 JS 模块）在鉴权前放行：登录页本身要靠这些 CSS/JS 才能渲染
+        if (WebAssets.TryGet(path, out var assetBytes, out var assetType))
+        {
+            WriteBytes(stream, 200, "OK", assetType, assetBytes);
             return;
         }
         if (path == "/api/state")
@@ -297,6 +316,7 @@ public static class WebServer
                 case "/api/libs": ApiLibs(stream); break;
                 case "/api/makers": ApiMakers(stream, req); break;
                 case "/api/works": ApiWorks(stream, req); break;
+                case "/api/genreworks": ApiGenreWorks(stream, req); break;
                 case "/api/libworks": ApiLibWorks(stream, req); break;
                 case "/api/genres": ApiGenres(stream); break;
                 case "/api/types": ApiTypes(stream); break;
@@ -305,23 +325,25 @@ public static class WebServer
                 case "/api/detail": ApiDetail(stream, req); break;
                 case "/api/toggle": ApiToggle(stream, req); break;
                 case "/api/searchworks": ApiSearchWorks(stream, req); break;
-                case "/api/movework": ApiMoveWork(stream, req); break;
+                case "/api/movework": await ApiMoveWorkAsync(stream, req); break;
                 case "/api/cover": ApiCover(stream, req); break;
                 case "/api/asset": ApiAsset(stream, req); break;
                 case "/api/files": ApiFiles(stream, req); break;
                 case "/api/file": ApiFile(stream, req); break;
                 // 搜索
-                case "/api/search": ApiSearch(stream, req); break;
-                case "/api/maker": ApiMaker(stream, req); break;
-                case "/api/asscan": ApiAsScan(stream, req); break;
-                case "/api/thumb": ApiThumb(stream, req); break;
-                case "/api/posturls": ApiPostUrls(stream, req); break;
-                case "/api/checkhost": ApiCheckHost(stream, req); break;
+                case "/api/search": await ApiSearchAsync(stream, req); break;
+                case "/api/maker": await ApiMakerAsync(stream, req); break;
+                case "/api/catalog": await ApiCatalogAsync(stream, req); break;
+                case "/api/asscan": await ApiAsScanAsync(stream, req); break;
+                case "/api/thumb": await ApiThumbAsync(stream, req); break;
+                case "/api/posturls": await ApiPostUrlsAsync(stream, req); break;
+                case "/api/checkhost": await ApiCheckHostAsync(stream, req); break;
                 case "/api/downtargets": ApiDownTargets(stream); break;
                 case "/api/enqueue": ApiEnqueue(stream, req); break;
+                case "/api/autodownload": ApiAutoDownload(stream, req); break;
                 // 下载 / 已下载
                 case "/api/downloads": ApiDownloads(stream); break;
-                case "/api/usage": ApiUsage(stream); break;
+                case "/api/usage": await ApiUsageAsync(stream); break;
                 case "/api/engine": ApiEngine(stream, req); break;
                 case "/api/reparse": ApiReparse(stream, req); break;
                 case "/api/pausework": ApiPauseWork(stream, req); break;
@@ -332,9 +354,19 @@ public static class WebServer
                 case "/api/clearall": ApiClearAll(stream); break;
                 case "/api/downloaded": ApiDownloaded(stream); break;
                 case "/api/mark": ApiMark(stream, req); break;
+                case "/api/dislike": ApiDislike(stream, req); break;
                 // 设置
                 case "/api/settings": if (req.Method == "POST") ApiSettingsWrite(stream, req); else ApiSettings(stream); break;
-                case "/api/debridtest": ApiDebridTest(stream, req); break;
+                case "/api/debridtest": await ApiDebridTestAsync(stream, req); break;
+                // 媒体库管理
+                case "/api/medialibs": ApiMediaLibs(stream); break;
+                case "/api/lib/create": ApiLibCreate(stream, req); break;
+                case "/api/lib/delete": ApiLibDelete(stream, req); break;
+                case "/api/lib/addfolder": ApiLibAddFolder(stream, req); break;
+                case "/api/lib/removefolder": ApiLibRemoveFolder(stream, req); break;
+                case "/api/lib/scan": ApiLibScan(stream, req); break;
+                case "/api/lib/scanall": ApiLibScanAll(stream); break;
+                case "/api/lib/scanstatus": ApiLibScanStatus(stream); break;
                 default: WriteJson(stream, 404, new { error = "not found" }); break;
             }
         }
@@ -355,13 +387,27 @@ public static class WebServer
         {
             var kv = part.Trim();
             if (kv.StartsWith("dasd_auth=", StringComparison.Ordinal))
-                return string.Equals(kv[10..], _expectedToken, StringComparison.Ordinal);
+                return TokensEqual(kv[10..], _expectedToken);
         }
         return false;
     }
 
+    // 登录暴力破解限流：全局共享一个密码，故失败次数按整体计。达到阈值即锁定一个窗口。
+    private const int MaxLoginFails = 10;
+    private static readonly TimeSpan LockoutWindow = TimeSpan.FromMinutes(1);
+    private static int _loginFails;
+    private static DateTime _lockoutUntil = DateTime.MinValue;
+
     private static void HandleLogin(NetworkStream stream, Request req)
     {
+        lock (Sync)
+        {
+            if (DateTime.UtcNow < _lockoutUntil)
+            {
+                WriteJson(stream, 429, new { ok = false, error = "尝试过于频繁，请稍后再试" });
+                return;
+            }
+        }
         var password = "";
         try
         {
@@ -373,16 +419,103 @@ public static class WebServer
         {
             password = "";
         }
-        if (!_authRequired || Sha256Hex(password) == _expectedToken)
+        if (!_authRequired || TokensEqual(Sha256Hex(password), _expectedToken))
         {
+            lock (Sync) { _loginFails = 0; }
             // 令牌写入 Cookie（HttpOnly，1 天）
             WriteJson(stream, 200, new { ok = true },
                 ("Set-Cookie", $"dasd_auth={_expectedToken}; Path=/; Max-Age=86400; HttpOnly; SameSite=Lax"));
         }
         else
         {
+            lock (Sync)
+            {
+                if (++_loginFails >= MaxLoginFails)
+                {
+                    _lockoutUntil = DateTime.UtcNow + LockoutWindow;
+                    _loginFails = 0;
+                }
+            }
             WriteJson(stream, 401, new { ok = false });
         }
+    }
+
+    /// <summary>恒定时间比较两个令牌/哈希字符串，避免通过响应时间侧信道逐字符猜测。</summary>
+    private static bool TokensEqual(string a, string b) =>
+        CryptographicOperations.FixedTimeEquals(Encoding.ASCII.GetBytes(a), Encoding.ASCII.GetBytes(b));
+
+    // ---------- 安全：Host 校验与 SSRF 目标过滤 ----------
+
+    /// <summary>仅允许 IP 直连或 localhost 访问，用域名访问一律拒绝（防 DNS 重绑定）。</summary>
+    private static bool HostAllowed(Request req)
+    {
+        if (!req.Headers.TryGetValue("Host", out var host) || host.Length == 0)
+            return false;
+        var hostname = host;
+        if (hostname.StartsWith('['))   // IPv6 字面量形如 [::1]:8080
+        {
+            var end = hostname.IndexOf(']');
+            if (end > 0) hostname = hostname[1..end];
+        }
+        else
+        {
+            var colon = hostname.LastIndexOf(':');
+            if (colon >= 0) hostname = hostname[..colon];
+        }
+        if (hostname.Equals("localhost", StringComparison.OrdinalIgnoreCase))
+            return true;
+        return IPAddress.TryParse(hostname, out _);
+    }
+
+    /// <summary>SSRF 防护：目标必须是 http(s) 且解析后的 IP 不落在环回/私有/链路本地网段，
+    /// 否则拒绝——避免把本服务当作探测内网或读取云元数据端点的跳板。</summary>
+    private static bool IsSafeFetchUrl(string url)
+    {
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) ||
+            (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
+            return false;
+        try
+        {
+            IPAddress[] addrs = IPAddress.TryParse(uri.Host, out var direct)
+                ? [direct]
+                : Dns.GetHostAddresses(uri.DnsSafeHost);
+            if (addrs.Length == 0)
+                return false;
+            foreach (var ip in addrs)
+                if (IsPrivateOrLocal(ip))
+                    return false;
+            return true;
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
+    private static bool IsPrivateOrLocal(IPAddress ip)
+    {
+        if (IPAddress.IsLoopback(ip) || ip.Equals(IPAddress.Any) || ip.Equals(IPAddress.IPv6Any))
+            return true;
+        if (ip.AddressFamily == AddressFamily.InterNetwork)
+        {
+            var b = ip.GetAddressBytes();
+            return b[0] switch
+            {
+                0 or 10 or 127 => true,                     // 0/8、10/8、127/8
+                169 => b[1] == 254,                         // 169.254/16 链路本地
+                172 => b[1] is >= 16 and <= 31,             // 172.16/12
+                192 => b[1] == 168,                         // 192.168/16
+                100 => b[1] is >= 64 and <= 127,            // 100.64/10 运营商级 NAT
+                _ => false,
+            };
+        }
+        if (ip.AddressFamily == AddressFamily.InterNetworkV6)
+        {
+            if (ip.IsIPv4MappedToIPv6)
+                return IsPrivateOrLocal(ip.MapToIPv4());
+            return ip.IsIPv6LinkLocal || ip.IsIPv6SiteLocal || ip.IsIPv6UniqueLocal;
+        }
+        return true;   // 未知地址族一律视为不安全
     }
 
     // ---------- API：卡片层级 ----------
@@ -424,12 +557,18 @@ public static class WebServer
                 "WHERE \"state\" = '已品悦' AND \"work_type\" = @t " +
                 "GROUP BY \"maker_name\" " + order.Replace("{p}", ""),
                 ("@t", type));
-        else
+        else if (!string.IsNullOrEmpty(lib))
             rows = Db.Select(
                 "SELECT \"maker_name\", COUNT(*) FROM \"works\" " +
                 "WHERE \"state\" = '已品悦' AND \"library\" = @lib " +
                 "GROUP BY \"maker_name\" " + order.Replace("{p}", ""),
-                ("@lib", lib ?? ""));
+                ("@lib", lib));
+        else
+            // 顶级"作品社团"分区：不限媒体库，聚合全部社团
+            rows = Db.Select(
+                "SELECT \"maker_name\", COUNT(*) FROM \"works\" " +
+                "WHERE \"state\" = '已品悦' " +
+                "GROUP BY \"maker_name\" " + order.Replace("{p}", ""));
         var makers = (rows ?? []).Select(r => new
         {
             maker = r[0] as string ?? "",
@@ -464,12 +603,33 @@ public static class WebServer
                 "FROM \"works\" WHERE \"state\" = '已品悦' AND \"work_type\" = @t AND " + makerCond.Replace("{p}", "") + " " +
                 order.Replace("{p}", ""),
                 ("@t", type), ("@maker", maker));
-        else
+        else if (!string.IsNullOrEmpty(lib))
             rows = Db.Select(
                 "SELECT \"work_id\", \"work_name\", \"maker_name\", \"work_type\", \"age_category\", \"cover\" " +
                 "FROM \"works\" WHERE \"state\" = '已品悦' AND \"library\" = @lib AND " + makerCond.Replace("{p}", "") + " " +
                 order.Replace("{p}", ""),
-                ("@lib", lib ?? ""), ("@maker", maker));
+                ("@lib", lib), ("@maker", maker));
+        else
+            // 顶级"作品社团"分区：不限媒体库，仅按社团过滤
+            rows = Db.Select(
+                "SELECT \"work_id\", \"work_name\", \"maker_name\", \"work_type\", \"age_category\", \"cover\" " +
+                "FROM \"works\" WHERE \"state\" = '已品悦' AND " + makerCond.Replace("{p}", "") + " " +
+                order.Replace("{p}", ""),
+                ("@maker", maker));
+        WriteJson(stream, 200, new { works = WorksJson(rows) });
+    }
+
+    /// <summary>某标签下全部已品悦作品（不分社团）——作品详情页点击类型标签直接列出作品。</summary>
+    private static void ApiGenreWorks(NetworkStream stream, Request req)
+    {
+        var genre = req.Query.GetValueOrDefault("genre") ?? "";
+        var rows = Db.Select(
+            "SELECT w.\"work_id\", w.\"work_name\", w.\"maker_name\", w.\"work_type\", " +
+            "w.\"age_category\", w.\"cover\" FROM \"works\" w " +
+            "JOIN \"work_genres\" g ON g.\"work_id\" = w.\"work_id\" " +
+            "WHERE w.\"state\" = '已品悦' AND g.\"genre\" = @g " +
+            WorkOrderClause(GetInt(req, "sort")).Replace("{p}", "w."),
+            ("@g", genre));
         WriteJson(stream, 200, new { works = WorksJson(rows) });
     }
 
@@ -667,6 +827,31 @@ public static class WebServer
         }
         Db.Execute($"UPDATE \"works\" SET \"{col}\" = @v WHERE \"work_id\" = @w",
             ("@v", value ? "1" : null), ("@w", id));
+        WriteJson(stream, 200, new { ok = true, value });
+    }
+
+    /// <summary>设置/取消作品"不喜欢"：POST { id, value }。命中后前端跳过 AS 扫描并置灰。</summary>
+    private static void ApiDislike(NetworkStream stream, Request req)
+    {
+        string id = "";
+        var value = false;
+        try
+        {
+            using var doc = JsonDocument.Parse(Encoding.UTF8.GetString(req.Body));
+            var root = doc.RootElement;
+            id = (root.TryGetProperty("id", out var i) ? i.GetString() ?? "" : "").ToUpperInvariant();
+            value = root.TryGetProperty("value", out var v) && v.ValueKind == JsonValueKind.True;
+        }
+        catch (Exception)
+        {
+            // 解析失败按非法请求处理
+        }
+        if (id.Length == 0)
+        {
+            WriteJson(stream, 400, new { error = "bad request" });
+            return;
+        }
+        Dislikes.Set(id, value);
         WriteJson(stream, 200, new { ok = true, value });
     }
 
@@ -902,7 +1087,7 @@ public static class WebServer
 
     // ---------- API：搜索 ----------
 
-    private static void ApiSearch(NetworkStream stream, Request req)
+    private static async Task ApiSearchAsync(NetworkStream stream, Request req)
     {
         var id = (req.Query.GetValueOrDefault("id") ?? "").Trim().ToUpperInvariant();
         if (!WorkIdRe.IsMatch(id))
@@ -924,7 +1109,7 @@ public static class WebServer
         var searchTask = AnimeSharing.SearchWorkAsync(id);
         try
         {
-            Task.WhenAll(workTask, searchTask).GetAwaiter().GetResult();
+            await Task.WhenAll(workTask, searchTask);
         }
         catch (Exception e)
         {
@@ -947,7 +1132,7 @@ public static class WebServer
     }
 
     /// <summary>按社团号（RG）返回该社团作品列表的某一页。</summary>
-    private static void ApiMaker(NetworkStream stream, Request req)
+    private static async Task ApiMakerAsync(NetworkStream stream, Request req)
     {
         var id = (req.Query.GetValueOrDefault("id") ?? "").Trim().ToUpperInvariant();
         if (!Regex.IsMatch(id, @"^RG\d+$"))
@@ -958,9 +1143,10 @@ public static class WebServer
         var page = GetInt(req, "page");
         if (page < 1)
             page = 1;
-        var (works, hasMore) = DlsiteApi.GetMakerWorksAsync(id, page).GetAwaiter().GetResult();
-        // 校验后台：本页作品号哪些已在库（works 表已有记录），供前端置灰标记
+        var (works, hasMore) = await DlsiteApi.GetMakerWorksAsync(id, page);
+        // 校验后台：本页作品号哪些已在库（works 表已有记录）、哪些被标记不喜欢，供前端置灰/跳过 AS 扫描
         var states = LookupWorkStates(works.Select(w => w.WorkId));
+        var disliked = Dislikes.Lookup(works.Select(w => w.WorkId));
         WriteJson(stream, 200, new
         {
             works = works.Select(w => new
@@ -968,6 +1154,39 @@ public static class WebServer
                 id = w.WorkId, title = w.Title, thumb = w.Thumb,
                 inLib = states.ContainsKey(w.WorkId),
                 state = states.GetValueOrDefault(w.WorkId, ""),
+                disliked = disliked.Contains(w.WorkId),
+            }),
+            hasMore,
+        });
+    }
+
+    /// <summary>按 DLsite 搜索/筛选/分类列表页（fsr 等 dlsite.com 链接）返回作品列表的某一页。</summary>
+    private static async Task ApiCatalogAsync(NetworkStream stream, Request req)
+    {
+        var url = (req.Query.GetValueOrDefault("url") ?? "").Trim();
+        // 仅允许真实的 dlsite.com 主机，避免被当作任意 URL 抓取
+        if (!(Uri.TryCreate(url, UriKind.Absolute, out var u)
+              && (u.Scheme == Uri.UriSchemeHttp || u.Scheme == Uri.UriSchemeHttps)
+              && (u.Host.Equals("dlsite.com", StringComparison.OrdinalIgnoreCase)
+                  || u.Host.EndsWith(".dlsite.com", StringComparison.OrdinalIgnoreCase))))
+        {
+            WriteJson(stream, 400, new { error = "链接格式错误（需为 DLsite 链接）" });
+            return;
+        }
+        var page = GetInt(req, "page");
+        if (page < 1)
+            page = 1;
+        var (works, hasMore) = await DlsiteApi.GetCatalogWorksAsync(url, page);
+        var states = LookupWorkStates(works.Select(w => w.WorkId));
+        var disliked = Dislikes.Lookup(works.Select(w => w.WorkId));
+        WriteJson(stream, 200, new
+        {
+            works = works.Select(w => new
+            {
+                id = w.WorkId, title = w.Title, thumb = w.Thumb,
+                inLib = states.ContainsKey(w.WorkId),
+                state = states.GetValueOrDefault(w.WorkId, ""),
+                disliked = disliked.Contains(w.WorkId),
             }),
             hasMore,
         });
@@ -997,7 +1216,7 @@ public static class WebServer
 
     /// <summary>对单个作品号做一次 AS 论坛扫描，返回匹配帖子数（-1 表示扫描出错）。
     /// 供 RG 搜索时前端按 3 秒间隔逐个探测未在库作品的可下载性。</summary>
-    private static void ApiAsScan(NetworkStream stream, Request req)
+    private static async Task ApiAsScanAsync(NetworkStream stream, Request req)
     {
         var id = (req.Query.GetValueOrDefault("id") ?? "").Trim().ToUpperInvariant();
         if (!WorkIdRe.IsMatch(id))
@@ -1008,7 +1227,7 @@ public static class WebServer
         int count;
         try
         {
-            count = AnimeSharing.SearchWorkAsync(id).GetAwaiter().GetResult().Count;
+            count = (await AnimeSharing.SearchWorkAsync(id)).Count;
         }
         catch (Exception)
         {
@@ -1023,11 +1242,10 @@ public static class WebServer
             .Select(l => string.Join(' ', l.Split(' ', StringSplitOptions.RemoveEmptyEntries)))
             .Where(l => l.Length > 0).Take(6));
 
-    private static void ApiThumb(NetworkStream stream, Request req)
+    private static async Task ApiThumbAsync(NetworkStream stream, Request req)
     {
         var url = req.Query.GetValueOrDefault("url") ?? "";
-        if (!url.StartsWith("http://", StringComparison.OrdinalIgnoreCase) &&
-            !url.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+        if (!IsSafeFetchUrl(url))
         {
             WriteBytes(stream, 400, "Bad Request", "text/plain", []);
             return;
@@ -1035,7 +1253,7 @@ public static class WebServer
         try
         {
             using var client = Http.CreateClient(TimeSpan.FromSeconds(15));
-            var bytes = client.GetByteArrayAsync(url).GetAwaiter().GetResult();
+            var bytes = await client.GetByteArrayAsync(url);
             WriteBytes(stream, 200, "OK", ContentType(url), bytes, ("Cache-Control", "max-age=86400"));
         }
         catch (Exception)
@@ -1044,13 +1262,13 @@ public static class WebServer
         }
     }
 
-    private static void ApiPostUrls(NetworkStream stream, Request req)
+    private static async Task ApiPostUrlsAsync(NetworkStream stream, Request req)
     {
         var threadPath = req.Query.GetValueOrDefault("url") ?? "";
         List<string> urls;
         try
         {
-            (urls, _) = AnimeSharing.GetWorkDownUrlsAsync(threadPath).GetAwaiter().GetResult();
+            (urls, _) = await AnimeSharing.GetWorkDownUrlsAsync(threadPath);
         }
         catch (Exception e)
         {
@@ -1085,7 +1303,7 @@ public static class WebServer
         }
     }
 
-    private static void ApiCheckHost(NetworkStream stream, Request req)
+    private static async Task ApiCheckHostAsync(NetworkStream stream, Request req)
     {
         var urls = ReadStringArray(req.Body, "urls");
         if (urls.Count == 0)
@@ -1096,7 +1314,7 @@ public static class WebServer
         var valid = 0;
         using (var client = LinkChecker.MakeClient())
             foreach (var u in urls)
-                if (LinkChecker.CheckUrlAsync(u, client).GetAwaiter().GetResult())
+                if (await LinkChecker.CheckUrlAsync(u, client))
                     valid++;
         var status = valid == urls.Count ? "valid" : valid == 0 ? "invalid" : "partial";
         WriteJson(stream, 200, new { valid, total = urls.Count, status });
@@ -1147,6 +1365,140 @@ public static class WebServer
         WriteJson(stream, 200, new { ok = true });
     }
 
+    /// <summary>自动下载：立即以「搜索可用下载连接」('5') 占位入队，后台异步挑选最优源。
+    /// 命中则占位行转正常下载分卷；全无可用则占位行转「无可用下载连接」('6')。</summary>
+    private static void ApiAutoDownload(NetworkStream stream, Request req)
+    {
+        string id = "", lib = "", folder = "";
+        try
+        {
+            using var doc = JsonDocument.Parse(Encoding.UTF8.GetString(req.Body));
+            var root = doc.RootElement;
+            id = (root.TryGetProperty("id", out var i) ? i.GetString() ?? "" : "").ToUpperInvariant();
+            lib = root.TryGetProperty("lib", out var l) ? l.GetString() ?? "" : "";
+            folder = root.TryGetProperty("folder", out var f) ? f.GetString() ?? "" : "";
+        }
+        catch (Exception)
+        {
+            // 解析失败按非法请求处理
+        }
+        if (!WorkIdRe.IsMatch(id))
+        {
+            WriteJson(stream, 400, new { error = "番号格式错误（RJ/BJ/VJ + 数字）" });
+            return;
+        }
+        // 占位分卷：状态 '5'，url 留空；DownloadEngine 只领取 '0' 行，故不会被误下载
+        var placeholder = Guid.NewGuid().ToString();
+        Db.Execute(
+            "INSERT INTO \"download_list\" (\"UUID\", \"work_id\", \"url\", \"status\", \"long\", \"delete\") " +
+            "VALUES (@uuid, @w, '', '5', '0', '1')",
+            ("@uuid", placeholder), ("@w", id));
+        RecordWork(id, SearchCache.GetValueOrDefault(id));
+        if (folder.Length > 0)
+            DownloadEngine.SetWorkTargetPath(id, folder, lib.Length > 0 ? lib : null);
+        _ = EnsureWorkMetaAsync(id);   // 后台补齐作品名（自动下载未经搜索，works.work_name 可能为空）
+        _ = Task.Run(() => AutoResolveLinksAsync(id, placeholder));
+        WriteJson(stream, 200, new { ok = true });
+    }
+
+    /// <summary>后台逐帖抓取网盘链接并检测有效性，选出「最优」源（首个完整有效；否则有效比例最高者）。
+    /// 选中即把占位行替换为真实下载分卷并启动引擎；全程未命中则把占位行标记为「无可用下载连接」。</summary>
+    private static async Task AutoResolveLinksAsync(string id, string placeholder)
+    {
+        try
+        {
+            List<string>? best = null;
+            var bestRatio = 0.0;
+            var posts = await AnimeSharing.SearchWorkAsync(id);
+            foreach (var post in posts)
+            {
+                if (!PlaceholderAlive(placeholder))
+                    return;   // 占位行已被用户删除 → 中止
+                List<string> urls;
+                try { (urls, _) = await AnimeSharing.GetWorkDownUrlsAsync(post.Url); }
+                catch (Exception) { continue; }
+                if (urls.Count == 0)
+                    continue;
+                // 按网盘域名分组（同一贴内可能多个网盘）
+                var groups = new Dictionary<string, List<string>>();
+                foreach (var u in urls)
+                {
+                    var host = HostOf(u);
+                    if (!groups.TryGetValue(host, out var list))
+                        groups[host] = list = [];
+                    list.Add(u);
+                }
+                using var client = LinkChecker.MakeClient();
+                foreach (var g in groups.Values)
+                {
+                    var valid = 0;
+                    foreach (var u in g)
+                        if (await LinkChecker.CheckUrlAsync(u, client))
+                            valid++;
+                    if (valid == g.Count) { best = g; bestRatio = 1; break; }   // 完整有效即选定
+                    if (valid > 0)
+                    {
+                        var ratio = (double)valid / g.Count;
+                        if (ratio > bestRatio) { best = g; bestRatio = ratio; }
+                    }
+                }
+                if (best != null && bestRatio >= 1)
+                    break;   // 已找到完整有效源，不再扫描后续帖子
+            }
+            if (!PlaceholderAlive(placeholder))
+                return;
+            if (best == null || best.Count == 0)
+            {
+                Db.Execute("UPDATE \"download_list\" SET \"status\" = '6' WHERE \"UUID\" = @u", ("@u", placeholder));
+                return;
+            }
+            // 命中：占位行换成真实分卷（状态 '0'），启动引擎开始下载
+            Db.Execute("DELETE FROM \"download_list\" WHERE \"UUID\" = @u", ("@u", placeholder));
+            foreach (var downUrl in best)
+                Db.Execute(
+                    "INSERT OR REPLACE INTO \"download_list\" (\"UUID\", \"work_id\", \"url\", \"status\", \"long\", \"delete\") " +
+                    "VALUES (@uuid, @w, @url, '0', '0', '1')",
+                    ("@uuid", Guid.NewGuid().ToString()), ("@w", id), ("@url", downUrl));
+            DownloadEngine.Start();
+        }
+        catch (Exception e)
+        {
+            Logger.Error($"{id} 自动下载解析失败: {e.Message}");
+            Db.Execute("UPDATE \"download_list\" SET \"status\" = '6' WHERE \"UUID\" = @u AND \"status\" = '5'", ("@u", placeholder));
+        }
+    }
+
+    /// <summary>占位分卷是否仍存在且处于「搜索中」('5')——用户删除后后台解析即应停止。</summary>
+    private static bool PlaceholderAlive(string placeholder)
+    {
+        var r = Db.Select("SELECT 1 FROM \"download_list\" WHERE \"UUID\" = @u AND \"status\" = '5'", ("@u", placeholder));
+        return r is { Count: > 0 };
+    }
+
+    /// <summary>补齐 works 行的作品名等元数据（仅在为空时写入，避免覆盖已刮削的数据、不触碰目标库/状态）。
+    /// 自动下载入队时未经作品搜索，works.work_name 常为空 → 下载页会退显番号，此处按番号拉取 DL API 补上。</summary>
+    private static async Task EnsureWorkMetaAsync(string id)
+    {
+        if (!MetaBackfilled.TryAdd(id, 0))
+            return;   // 已尝试过则跳过（去重，防轮询重复拉取）
+        try
+        {
+            var work = SearchCache.GetValueOrDefault(id) ?? await DlsiteApi.GetWorkDataAsync(id);
+            if (work == null || string.IsNullOrEmpty(work.WorkName))
+                return;   // 确实查不到该作品数据 → 保留去重标记，不再重试（避免每秒轮询空拉）
+            SearchCache[id] = work;
+            Db.Execute(
+                "UPDATE \"works\" SET \"work_name\" = @n, \"maker_id\" = @mi, \"maker_name\" = @mn, \"work_type\" = @t " +
+                "WHERE \"work_id\" = @w AND (\"work_name\" IS NULL OR \"work_name\" = '')",
+                ("@w", id), ("@n", work.WorkName), ("@mi", work.MakerId ?? ""),
+                ("@mn", work.MakerName ?? ""), ("@t", work.WorkType ?? ""));
+        }
+        catch (Exception)
+        {
+            MetaBackfilled.TryRemove(id, out _);
+        }
+    }
+
     /// <summary>把 DL API 作品数据写入 works 表（镜像 SearchPage.RecordWork）。</summary>
     private static void RecordWork(string id, DlWork? work)
     {
@@ -1172,9 +1524,9 @@ public static class WebServer
     private static void ApiDownloads(NetworkStream stream)
     {
         var rows = Db.Select(
-            "SELECT \"UUID\", \"work_id\", \"url\", \"status\", \"long\", \"error\" FROM \"download_list\" ORDER BY rowid");
+            "SELECT \"UUID\", \"work_id\", \"url\", \"status\", \"long\", \"error\", \"sub_path\" FROM \"download_list\" ORDER BY rowid");
         var order = new List<string>();
-        var grouped = new Dictionary<string, List<(string Uuid, string Url, string Status, string Long, string? Error)>>();
+        var grouped = new Dictionary<string, List<(string Uuid, string Url, string Status, string Long, string? Error, string? SubPath)>>();
         foreach (var row in rows ?? [])
         {
             var workId = row[1] as string ?? "";
@@ -1184,7 +1536,23 @@ public static class WebServer
                 order.Add(workId);
             }
             list.Add((row[0] as string ?? "", row[2] as string ?? "",
-                row[3] as string ?? "", row[4]?.ToString() ?? "", row[5] as string));
+                row[3] as string ?? "", row[4]?.ToString() ?? "", row[5] as string, row[6] as string));
+        }
+        // 下载列表内番号对应的作品名（下载页以作品名代替番号显示；仅查列表内的番号，避免全表扫描）
+        var nameMap = new Dictionary<string, string>();
+        var ids = order.Where(w => w.Length > 0).ToList();
+        if (ids.Count > 0)
+        {
+            var pars = ids.Select((v, idx) => ($"@w{idx}", (object?)v)).ToArray();
+            var inClause = string.Join(",", ids.Select((_, idx) => $"@w{idx}"));
+            var nameRows = Db.Select(
+                $"SELECT \"work_id\", \"work_name\" FROM \"works\" WHERE \"work_id\" IN ({inClause})", pars);
+            foreach (var nr in nameRows ?? [])
+                nameMap[nr[0] as string ?? ""] = nr[1] as string ?? "";
+            // 仍缺作品名的番号（多为自动下载入队、尚未刮削元数据）后台补齐，下一次轮询即显示作品名
+            foreach (var wid in ids)
+                if (string.IsNullOrEmpty(nameMap.GetValueOrDefault(wid)))
+                    _ = EnsureWorkMetaAsync(wid);
         }
         var groups = order.Select(workId =>
         {
@@ -1200,9 +1568,14 @@ public static class WebServer
                 if (speed is { } s) totalSpeed += s;
                 var (text, color) = StatusMap.TryGetValue(it.Status, out var m)
                     ? m : ($"未知({it.Status})", "#cdd3de");
+                // asmr 直链带作品内目录层级（sub_path 含子目录），用于前端构建目录树；
+                // 论坛源无 sub_path，回退到 URL 解码后的文件名（位于根层级），对齐 WPF 下载页
+                var rel = string.IsNullOrEmpty(it.SubPath) ? FileNameOf(it.Url) : it.SubPath!;
+                var slash = rel.LastIndexOf('/');
                 return new
                 {
-                    fileName = FileNameOf(it.Url), url = it.Url, pct,
+                    fileName = slash >= 0 ? rel[(slash + 1)..] : rel, relPath = rel,
+                    url = it.Url, pct,
                     speed = speed is { } sp ? FormatSpeed(sp) : "",
                     statusText = text, color,
                     // 解析失败的分卷附带可读错误原因
@@ -1213,7 +1586,8 @@ public static class WebServer
                 ? unzip.Pct : (double)totalPct / Math.Max(1, items.Count);
             return new
             {
-                id = workId, pct = (int)groupPct, statusText = aggText, color = aggColor,
+                id = workId, name = nameMap.GetValueOrDefault(workId, ""),
+                pct = (int)groupPct, statusText = aggText, color = aggColor,
                 speed = totalSpeed > 0 ? FormatSpeed(totalSpeed) : "",
                 canReparse = statuses.Contains("2") && workId.Length > 0,
                 // 有下载中/等待分卷可"停止"；有已暂停分卷可"下载"（继续）；非空番号始终可"删除"
@@ -1235,15 +1609,20 @@ public static class WebServer
         var done = statuses.Count(s => s == "1");
         if (statuses.Contains("3"))
             return ($"下载中 {done}/{statuses.Count}", "#60a5fa");
+        if (statuses.Contains("5"))
+            return ("搜索可用下载连接", "#facc15");
         if (statuses.Contains("0"))
             return ($"等待下载 {done}/{statuses.Count}", "#facc15");
         if (statuses.Contains("4"))
             return ($"已暂停 {done}/{statuses.Count}", "#9aa4b2");
         if (statuses.Contains("2"))
             return ($"{statuses.Count(s => s == "2")} 个解析失败", "#f87171");
+        if (statuses.Contains("6"))
+            return ("无可用下载连接", "#f87171");
         if (DownloadEngine.UnzipProgress.TryGetValue(workId, out var unzip))
         {
             if (unzip.State == "pending") return ("待解压", "#facc15");
+            if (unzip.State == "movewait") return ("等待移动", "#facc15");
             if (unzip.State == "moving") return ($"移动中 {unzip.Pct}%", "#a78bfa");
             return ($"解压中 {unzip.Pct}%", "#60a5fa");
         }
@@ -1267,15 +1646,21 @@ public static class WebServer
         _ => $"{speed:F0} B/s",
     };
 
-    private static string FileNameOf(string url) => url.TrimEnd('/').Split('/')[^1].Split('?')[0];
+    private static string FileNameOf(string url)
+    {
+        var raw = url.TrimEnd('/').Split('/')[^1].Split('?')[0];
+        // 直链文件名常为 URL 百分号编码（asmr.one 的日文名尤其如此），解码为明文显示（对齐 WPF）
+        try { return Uri.UnescapeDataString(raw); }
+        catch (Exception) { return raw; }
+    }
 
-    private static void ApiUsage(NetworkStream stream)
+    private static async Task ApiUsageAsync(NetworkStream stream)
     {
         try
         {
             JsonElement? value;
             using (var client = new DebridLinkClient())
-                value = client.DownloadLimitsAsync().GetAwaiter().GetResult();
+                value = await client.DownloadLimitsAsync();
             double? current = null;
             double resetSeconds = 0;
             if (value is { } v && v.ValueKind == JsonValueKind.Object)
@@ -1379,7 +1764,7 @@ public static class WebServer
     }
 
     /// <summary>把作品移动到另一个媒体库（镜像详情页"移动媒体库"）。</summary>
-    private static void ApiMoveWork(NetworkStream stream, Request req)
+    private static async Task ApiMoveWorkAsync(NetworkStream stream, Request req)
     {
         string id = "", lib = "", folder = "";
         try
@@ -1399,7 +1784,7 @@ public static class WebServer
             WriteJson(stream, 400, new { ok = false, message = "参数缺失" });
             return;
         }
-        var (ok, message) = MediaLibraryService.MoveWorkToLibraryAsync(id, lib, folder).GetAwaiter().GetResult();
+        var (ok, message) = await MediaLibraryService.MoveWorkToLibraryAsync(id, lib, folder);
         WriteJson(stream, 200, new { ok, message });
     }
 
@@ -1524,7 +1909,8 @@ public static class WebServer
             autoDownload = AppConfig.AutoDownload,
             autoUnzip = AppConfig.AutoUnzip,
             proxy = new { open = proxyOpen == "True", host = proxyHost, port = proxyPort, type = proxyType },
-            debridKey = AppConfig.DebridApiKey,
+            // 敏感值不回传明文，仅告知是否已设置（编辑时留空表示不修改）
+            debridKeySet = AppConfig.DebridApiKey.Length > 0,
             downProc = AppConfig.DownloadProcesses,
             minSpeed = AppConfig.MinSpeedKb,
             speedLimit = AppConfig.SpeedLimitKb,
@@ -1533,7 +1919,7 @@ public static class WebServer
             logLevel = AppConfig.Read("loglevel", "level", "info"),
             encoding = AppConfig.SysEncoding,
             mediaLibs = libs,                       // 只读：文件夹管理需桌面端原生选择器
-            web = new { enabled = AppConfig.WebEnabled, port = AppConfig.WebPort, password = AppConfig.WebPassword },
+            web = new { enabled = AppConfig.WebEnabled, port = AppConfig.WebPort, password = AppConfig.WebPassword.Length > 0 },
         });
     }
 
@@ -1565,13 +1951,136 @@ public static class WebServer
         WriteJson(stream, 200, new { ok = true });
     }
 
-    private static void ApiDebridTest(NetworkStream stream, Request req)
+    // ---------- API：媒体库管理 ----------
+
+    /// <summary>媒体库列表（含文件夹），供设置页管理区渲染/刷新。</summary>
+    private static void ApiMediaLibs(NetworkStream stream)
+    {
+        var libs = AppConfig.ReadMediaLibs().Select(l => new { name = l.Name, folders = l.Folders });
+        WriteJson(stream, 200, new { libs });
+    }
+
+    private static void ApiLibCreate(NetworkStream stream, Request req)
+    {
+        var name = ReadStringField(req.Body, "name").Trim();
+        if (name.Length == 0)
+        {
+            WriteJson(stream, 400, new { error = "名称不能为空" });
+            return;
+        }
+        string? err = null;
+        lock (LibSync)
+        {
+            var libs = AppConfig.ReadMediaLibs();
+            if (libs.Any(l => l.Name == name))
+                err = "已存在同名媒体库";
+            else
+            {
+                libs.Add(new MediaLib { Name = name });
+                AppConfig.WriteMediaLibs(libs);
+            }
+        }
+        if (err != null) WriteJson(stream, 400, new { error = err });
+        else WriteJson(stream, 200, new { ok = true });
+    }
+
+    private static void ApiLibDelete(NetworkStream stream, Request req)
+    {
+        var name = ReadStringField(req.Body, "name").Trim();
+        bool removed;
+        lock (LibSync)
+        {
+            var libs = AppConfig.ReadMediaLibs();
+            removed = libs.RemoveAll(l => l.Name == name) > 0;
+            if (removed) AppConfig.WriteMediaLibs(libs);
+        }
+        // 不删本地文件，仅解除作品与该库的关联（镜像桌面端 DeleteLib）
+        if (removed)
+            Db.Execute("UPDATE \"works\" SET \"library\" = NULL WHERE \"library\" = @l", ("@l", name));
+        WriteJson(stream, 200, new { ok = removed });
+    }
+
+    private static void ApiLibAddFolder(NetworkStream stream, Request req)
+    {
+        var name = ReadStringField(req.Body, "name").Trim();
+        var folderRaw = ReadStringField(req.Body, "folder").Trim();
+        if (folderRaw.Length == 0)
+        {
+            WriteJson(stream, 400, new { error = "路径不能为空" });
+            return;
+        }
+        string folder;
+        try { folder = Path.GetFullPath(folderRaw); }
+        catch (Exception) { WriteJson(stream, 400, new { error = "路径格式错误" }); return; }
+        if (!Directory.Exists(folder))
+        {
+            WriteJson(stream, 400, new { error = "文件夹不存在或无法访问（需为运行本程序的电脑上的路径）" });
+            return;
+        }
+        string? err = null;
+        lock (LibSync)
+        {
+            var libs = AppConfig.ReadMediaLibs();
+            var lib = libs.FirstOrDefault(l => l.Name == name);
+            if (lib == null)
+                err = "媒体库不存在";
+            else if (libs.Any(l => l.Folders.Contains(folder)))
+                err = "该文件夹已在某个媒体库中";
+            else
+            {
+                lib.Folders.Add(folder);
+                AppConfig.WriteMediaLibs(libs);
+            }
+        }
+        if (err != null) WriteJson(stream, 400, new { error = err });
+        else WriteJson(stream, 200, new { ok = true, folder });
+    }
+
+    private static void ApiLibRemoveFolder(NetworkStream stream, Request req)
+    {
+        var name = ReadStringField(req.Body, "name").Trim();
+        var folder = ReadStringField(req.Body, "folder");
+        var removed = false;
+        lock (LibSync)
+        {
+            var libs = AppConfig.ReadMediaLibs();
+            var lib = libs.FirstOrDefault(l => l.Name == name);
+            if (lib != null && lib.Folders.Remove(folder))
+            {
+                removed = true;
+                AppConfig.WriteMediaLibs(libs);
+            }
+        }
+        WriteJson(stream, 200, new { ok = removed });
+    }
+
+    private static void ApiLibScan(NetworkStream stream, Request req)
+    {
+        var name = ReadStringField(req.Body, "name").Trim();
+        var force = ReadBoolField(req.Body, "force");
+        MediaLibScanner.Scan(name, force);
+        WriteJson(stream, 200, new { ok = true });
+    }
+
+    private static void ApiLibScanAll(NetworkStream stream)
+    {
+        MediaLibScanner.ScanAll();
+        WriteJson(stream, 200, new { ok = true });
+    }
+
+    private static void ApiLibScanStatus(NetworkStream stream)
+    {
+        var (scanning, status) = MediaLibScanner.State();
+        WriteJson(stream, 200, new { scanning, status });
+    }
+
+    private static async Task ApiDebridTestAsync(NetworkStream stream, Request req)
     {
         var key = ReadStringField(req.Body, "key");
         try
         {
             using var client = new DebridLinkClient(key.Length > 0 ? key : null);
-            var info = client.AccountInfosAsync().GetAwaiter().GetResult();
+            var info = await client.AccountInfosAsync();
             var ok = info is { } v && v.ValueKind == JsonValueKind.Object;
             WriteJson(stream, 200, new { ok });
         }
@@ -1593,6 +2102,19 @@ public static class WebServer
         catch (Exception)
         {
             return "";
+        }
+    }
+
+    private static bool ReadBoolField(byte[] body, string field)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(Encoding.UTF8.GetString(body));
+            return doc.RootElement.TryGetProperty(field, out var v) && v.ValueKind == JsonValueKind.True;
+        }
+        catch (Exception)
+        {
+            return false;
         }
     }
 
@@ -1664,8 +2186,8 @@ public static class WebServer
 
     private static string StatusText(int status) => status switch
     {
-        200 => "OK", 400 => "Bad Request", 401 => "Unauthorized",
-        404 => "Not Found", 500 => "Internal Server Error", _ => "OK",
+        200 => "OK", 400 => "Bad Request", 401 => "Unauthorized", 403 => "Forbidden",
+        404 => "Not Found", 429 => "Too Many Requests", 500 => "Internal Server Error", _ => "OK",
     };
 
     // ---------- 工具 ----------

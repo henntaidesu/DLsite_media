@@ -146,6 +146,11 @@ public static class Db
                         "genre" text NOT NULL,
                         PRIMARY KEY ("work_id", "genre")
                     );
+                    CREATE TABLE IF NOT EXISTS "dislikes" (
+                        "work_id" text NOT NULL,
+                        "time" text,
+                        PRIMARY KEY ("work_id")
+                    );
                     """;
                 cmd.ExecuteNonQuery();
             }

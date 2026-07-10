@@ -17,6 +17,7 @@ public partial class MainWindow : Window
     private DownloadPage? _downloadPageField;
     private MediaLibPage? _tagPage;
     private MediaLibPage? _typePage;
+    private MediaLibPage? _makerPage;
     private MediaLibPage? _favoritePage;
     private SettingsPage? _settingsPage;
 
@@ -68,6 +69,7 @@ public partial class MainWindow : Window
         NavSearchDownload.Content = I18n.Tr("搜索/下载");
         NavTag.Content = I18n.Tr("标签");
         NavType.Content = I18n.Tr("作品形式");
+        NavMaker.Content = I18n.Tr("社团");
         NavFavorite.Content = I18n.Tr("收藏夹");
         NavSetting.Content = I18n.Tr("设置");
     }
@@ -81,6 +83,7 @@ public partial class MainWindow : Window
             "searchdownload" => DownloadPage,
             "tag" => _tagPage ??= new MediaLibPage(MediaLibRoot.Genre),
             "type" => _typePage ??= new MediaLibPage(MediaLibRoot.WorkType),
+            "maker" => _makerPage ??= new MediaLibPage(MediaLibRoot.Maker),
             "favorite" => _favoritePage ??= new MediaLibPage(MediaLibRoot.Favorite),
             "setting" => _settingsPage ??= new SettingsPage(),
             _ => (object)_mediaLibPage,

@@ -21,6 +21,8 @@
                              Checked="Nav_Checked" Tag="tag" Content="标签" />
                 <RadioButton x:Name="NavType" Style="{StaticResource NavButton}" GroupName="nav"
                              Checked="Nav_Checked" Tag="type" Content="作品形式" />
+                <RadioButton x:Name="NavMaker" Style="{StaticResource NavButton}" GroupName="nav"
+                             Checked="Nav_Checked" Tag="maker" Content="社团" />
                 <RadioButton x:Name="NavFavorite" Style="{StaticResource NavButton}" GroupName="nav"
                              Checked="Nav_Checked" Tag="favorite" Content="收藏夹" />
                 <RadioButton x:Name="NavSearchDownload" Style="{StaticResource NavButton}" GroupName="nav"

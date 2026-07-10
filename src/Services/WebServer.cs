@@ -33,6 +33,7 @@ public static class WebServer
     private static string _expectedToken = "";   // SHA256(password) 的十六进制；密码为空时不鉴权
     private static bool _authRequired;
     private static readonly object Sync = new();
+    private static readonly object LibSync = new();   // 媒体库配置读改写串行化（并发请求安全）
 
     public static bool IsRunning => _running;
     public static int RunningPort { get; private set; }
@@ -300,6 +301,7 @@ public static class WebServer
                 case "/api/libs": ApiLibs(stream); break;
                 case "/api/makers": ApiMakers(stream, req); break;
                 case "/api/works": ApiWorks(stream, req); break;
+                case "/api/genreworks": ApiGenreWorks(stream, req); break;
                 case "/api/libworks": ApiLibWorks(stream, req); break;
                 case "/api/genres": ApiGenres(stream); break;
                 case "/api/types": ApiTypes(stream); break;
@@ -338,6 +340,15 @@ public static class WebServer
                 // 设置
                 case "/api/settings": if (req.Method == "POST") ApiSettingsWrite(stream, req); else ApiSettings(stream); break;
                 case "/api/debridtest": await ApiDebridTestAsync(stream, req); break;
+                // 媒体库管理
+                case "/api/medialibs": ApiMediaLibs(stream); break;
+                case "/api/lib/create": ApiLibCreate(stream, req); break;
+                case "/api/lib/delete": ApiLibDelete(stream, req); break;
+                case "/api/lib/addfolder": ApiLibAddFolder(stream, req); break;
+                case "/api/lib/removefolder": ApiLibRemoveFolder(stream, req); break;
+                case "/api/lib/scan": ApiLibScan(stream, req); break;
+                case "/api/lib/scanall": ApiLibScanAll(stream); break;
+                case "/api/lib/scanstatus": ApiLibScanStatus(stream); break;
                 default: WriteJson(stream, 404, new { error = "not found" }); break;
             }
         }
@@ -473,6 +484,20 @@ public static class WebServer
                 "FROM \"works\" WHERE \"state\" = '已品悦' AND \"library\" = @lib AND " + makerCond.Replace("{p}", "") + " " +
                 order.Replace("{p}", ""),
                 ("@lib", lib ?? ""), ("@maker", maker));
+        WriteJson(stream, 200, new { works = WorksJson(rows) });
+    }
+
+    /// <summary>某标签下全部已品悦作品（不分社团）——作品详情页点击类型标签直接列出作品。</summary>
+    private static void ApiGenreWorks(NetworkStream stream, Request req)
+    {
+        var genre = req.Query.GetValueOrDefault("genre") ?? "";
+        var rows = Db.Select(
+            "SELECT w.\"work_id\", w.\"work_name\", w.\"maker_name\", w.\"work_type\", " +
+            "w.\"age_category\", w.\"cover\" FROM \"works\" w " +
+            "JOIN \"work_genres\" g ON g.\"work_id\" = w.\"work_id\" " +
+            "WHERE w.\"state\" = '已品悦' AND g.\"genre\" = @g " +
+            WorkOrderClause(GetInt(req, "sort")).Replace("{p}", "w."),
+            ("@g", genre));
         WriteJson(stream, 200, new { works = WorksJson(rows) });
     }
 
@@ -1175,9 +1200,9 @@ public static class WebServer
     private static void ApiDownloads(NetworkStream stream)
     {
         var rows = Db.Select(
-            "SELECT \"UUID\", \"work_id\", \"url\", \"status\", \"long\", \"error\" FROM \"download_list\" ORDER BY rowid");
+            "SELECT \"UUID\", \"work_id\", \"url\", \"status\", \"long\", \"error\", \"sub_path\" FROM \"download_list\" ORDER BY rowid");
         var order = new List<string>();
-        var grouped = new Dictionary<string, List<(string Uuid, string Url, string Status, string Long, string? Error)>>();
+        var grouped = new Dictionary<string, List<(string Uuid, string Url, string Status, string Long, string? Error, string? SubPath)>>();
         foreach (var row in rows ?? [])
         {
             var workId = row[1] as string ?? "";
@@ -1187,7 +1212,7 @@ public static class WebServer
                 order.Add(workId);
             }
             list.Add((row[0] as string ?? "", row[2] as string ?? "",
-                row[3] as string ?? "", row[4]?.ToString() ?? "", row[5] as string));
+                row[3] as string ?? "", row[4]?.ToString() ?? "", row[5] as string, row[6] as string));
         }
         var groups = order.Select(workId =>
         {
@@ -1203,9 +1228,14 @@ public static class WebServer
                 if (speed is { } s) totalSpeed += s;
                 var (text, color) = StatusMap.TryGetValue(it.Status, out var m)
                     ? m : ($"未知({it.Status})", "#cdd3de");
+                // asmr 直链带作品内目录层级（sub_path 含子目录），用于前端构建目录树；
+                // 论坛源无 sub_path，回退到 URL 解码后的文件名（位于根层级），对齐 WPF 下载页
+                var rel = string.IsNullOrEmpty(it.SubPath) ? FileNameOf(it.Url) : it.SubPath!;
+                var slash = rel.LastIndexOf('/');
                 return new
                 {
-                    fileName = FileNameOf(it.Url), url = it.Url, pct,
+                    fileName = slash >= 0 ? rel[(slash + 1)..] : rel, relPath = rel,
+                    url = it.Url, pct,
                     speed = speed is { } sp ? FormatSpeed(sp) : "",
                     statusText = text, color,
                     // 解析失败的分卷附带可读错误原因
@@ -1247,6 +1277,7 @@ public static class WebServer
         if (DownloadEngine.UnzipProgress.TryGetValue(workId, out var unzip))
         {
             if (unzip.State == "pending") return ("待解压", "#facc15");
+            if (unzip.State == "movewait") return ("等待移动", "#facc15");
             if (unzip.State == "moving") return ($"移动中 {unzip.Pct}%", "#a78bfa");
             return ($"解压中 {unzip.Pct}%", "#60a5fa");
         }
@@ -1270,7 +1301,13 @@ public static class WebServer
         _ => $"{speed:F0} B/s",
     };
 
-    private static string FileNameOf(string url) => url.TrimEnd('/').Split('/')[^1].Split('?')[0];
+    private static string FileNameOf(string url)
+    {
+        var raw = url.TrimEnd('/').Split('/')[^1].Split('?')[0];
+        // 直链文件名常为 URL 百分号编码（asmr.one 的日文名尤其如此），解码为明文显示（对齐 WPF）
+        try { return Uri.UnescapeDataString(raw); }
+        catch (Exception) { return raw; }
+    }
 
     private static async Task ApiUsageAsync(NetworkStream stream)
     {
@@ -1568,6 +1605,129 @@ public static class WebServer
         WriteJson(stream, 200, new { ok = true });
     }
 
+    // ---------- API：媒体库管理 ----------
+
+    /// <summary>媒体库列表（含文件夹），供设置页管理区渲染/刷新。</summary>
+    private static void ApiMediaLibs(NetworkStream stream)
+    {
+        var libs = AppConfig.ReadMediaLibs().Select(l => new { name = l.Name, folders = l.Folders });
+        WriteJson(stream, 200, new { libs });
+    }
+
+    private static void ApiLibCreate(NetworkStream stream, Request req)
+    {
+        var name = ReadStringField(req.Body, "name").Trim();
+        if (name.Length == 0)
+        {
+            WriteJson(stream, 400, new { error = "名称不能为空" });
+            return;
+        }
+        string? err = null;
+        lock (LibSync)
+        {
+            var libs = AppConfig.ReadMediaLibs();
+            if (libs.Any(l => l.Name == name))
+                err = "已存在同名媒体库";
+            else
+            {
+                libs.Add(new MediaLib { Name = name });
+                AppConfig.WriteMediaLibs(libs);
+            }
+        }
+        if (err != null) WriteJson(stream, 400, new { error = err });
+        else WriteJson(stream, 200, new { ok = true });
+    }
+
+    private static void ApiLibDelete(NetworkStream stream, Request req)
+    {
+        var name = ReadStringField(req.Body, "name").Trim();
+        bool removed;
+        lock (LibSync)
+        {
+            var libs = AppConfig.ReadMediaLibs();
+            removed = libs.RemoveAll(l => l.Name == name) > 0;
+            if (removed) AppConfig.WriteMediaLibs(libs);
+        }
+        // 不删本地文件，仅解除作品与该库的关联（镜像桌面端 DeleteLib）
+        if (removed)
+            Db.Execute("UPDATE \"works\" SET \"library\" = NULL WHERE \"library\" = @l", ("@l", name));
+        WriteJson(stream, 200, new { ok = removed });
+    }
+
+    private static void ApiLibAddFolder(NetworkStream stream, Request req)
+    {
+        var name = ReadStringField(req.Body, "name").Trim();
+        var folderRaw = ReadStringField(req.Body, "folder").Trim();
+        if (folderRaw.Length == 0)
+        {
+            WriteJson(stream, 400, new { error = "路径不能为空" });
+            return;
+        }
+        string folder;
+        try { folder = Path.GetFullPath(folderRaw); }
+        catch (Exception) { WriteJson(stream, 400, new { error = "路径格式错误" }); return; }
+        if (!Directory.Exists(folder))
+        {
+            WriteJson(stream, 400, new { error = "文件夹不存在或无法访问（需为运行本程序的电脑上的路径）" });
+            return;
+        }
+        string? err = null;
+        lock (LibSync)
+        {
+            var libs = AppConfig.ReadMediaLibs();
+            var lib = libs.FirstOrDefault(l => l.Name == name);
+            if (lib == null)
+                err = "媒体库不存在";
+            else if (libs.Any(l => l.Folders.Contains(folder)))
+                err = "该文件夹已在某个媒体库中";
+            else
+            {
+                lib.Folders.Add(folder);
+                AppConfig.WriteMediaLibs(libs);
+            }
+        }
+        if (err != null) WriteJson(stream, 400, new { error = err });
+        else WriteJson(stream, 200, new { ok = true, folder });
+    }
+
+    private static void ApiLibRemoveFolder(NetworkStream stream, Request req)
+    {
+        var name = ReadStringField(req.Body, "name").Trim();
+        var folder = ReadStringField(req.Body, "folder");
+        var removed = false;
+        lock (LibSync)
+        {
+            var libs = AppConfig.ReadMediaLibs();
+            var lib = libs.FirstOrDefault(l => l.Name == name);
+            if (lib != null && lib.Folders.Remove(folder))
+            {
+                removed = true;
+                AppConfig.WriteMediaLibs(libs);
+            }
+        }
+        WriteJson(stream, 200, new { ok = removed });
+    }
+
+    private static void ApiLibScan(NetworkStream stream, Request req)
+    {
+        var name = ReadStringField(req.Body, "name").Trim();
+        var force = ReadBoolField(req.Body, "force");
+        MediaLibScanner.Scan(name, force);
+        WriteJson(stream, 200, new { ok = true });
+    }
+
+    private static void ApiLibScanAll(NetworkStream stream)
+    {
+        MediaLibScanner.ScanAll();
+        WriteJson(stream, 200, new { ok = true });
+    }
+
+    private static void ApiLibScanStatus(NetworkStream stream)
+    {
+        var (scanning, status) = MediaLibScanner.State();
+        WriteJson(stream, 200, new { scanning, status });
+    }
+
     private static async Task ApiDebridTestAsync(NetworkStream stream, Request req)
     {
         var key = ReadStringField(req.Body, "key");
@@ -1596,6 +1756,19 @@ public static class WebServer
         catch (Exception)
         {
             return "";
+        }
+    }
+
+    private static bool ReadBoolField(byte[] body, string field)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(Encoding.UTF8.GetString(body));
+            return doc.RootElement.TryGetProperty(field, out var v) && v.ValueKind == JsonValueKind.True;
+        }
+        catch (Exception)
+        {
+            return false;
         }
     }
 

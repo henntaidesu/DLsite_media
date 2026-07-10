@@ -27,6 +27,8 @@ public enum MediaLibRoot
     WorkType,
     /// <summary>收藏夹页：收藏的作品平铺 → 作品详情。</summary>
     Favorite,
+    /// <summary>社团页：社团（跨全部媒体库）→ 作品。</summary>
+    Maker,
 }
 
 /// <summary>
@@ -164,6 +166,7 @@ public partial class MediaLibPage : UserControl
             MediaLibRoot.Genre => "genres",
             MediaLibRoot.WorkType => "types",
             MediaLibRoot.Favorite => "favorites",
+            MediaLibRoot.Maker => "all_makers",
             _ => "libs",
         };
         _searchDebounce.Tick += (_, _) =>
@@ -246,7 +249,10 @@ public partial class MediaLibPage : UserControl
                 break;
             case "works":
                 _currentMaker = null;
-                ShowMakers();
+                if (_root == MediaLibRoot.Maker)
+                    ShowAllMakers();   // 社团页：作品返回社团根视图
+                else
+                    ShowMakers();
                 break;
             case "makers":
                 if (_currentGenre != null)
@@ -406,6 +412,8 @@ public partial class MediaLibPage : UserControl
             ShowDetail();
         else if (_level == "favorites")
             ShowFavorites();
+        else if (_level == "all_makers")
+            ShowAllMakers();
         else if (_level == "lib_works" && _currentLib != null)
             ShowLibWorks();
         else if (_level is "works" && _currentMaker != null)
@@ -432,6 +440,9 @@ public partial class MediaLibPage : UserControl
                 break;
             case MediaLibRoot.Favorite:
                 ShowFavorites();
+                break;
+            case MediaLibRoot.Maker:
+                ShowAllMakers();
                 break;
             default:
                 ShowLibs();
@@ -597,6 +608,39 @@ public partial class MediaLibPage : UserControl
         ApplyCardFilter();
     }
 
+    /// <summary>社团根视图：跨全部媒体库按社团分组的社团卡片，可按作品数/社团名排序。</summary>
+    private void ShowAllMakers()
+    {
+        _level = "all_makers";
+        _currentLib = null;
+        _currentGenre = null;
+        _currentType = null;
+        _currentMaker = null;
+        var rows = Db.Select(
+            "SELECT \"maker_name\", COUNT(*) FROM \"works\" " +
+            "WHERE \"state\" = '已品悦' GROUP BY \"maker_name\" " + MakerOrderClause());
+        if (rows == null)
+            return;
+        _totalWorks = (int)rows.Sum(r => Convert.ToInt64(r[1]));
+        _workLevelCount = false;
+        _countUnit = I18n.Tr("个社团");
+        _gridCards = rows.Select(row =>
+        {
+            var maker = row[0] as string ?? "";
+            var count = Convert.ToInt64(row[1]);
+            var title = maker.Length > 0 ? maker : I18n.Tr("未知社团");
+            return new GridCard(() => MakeClickCard(
+                title, I18n.Format(I18n.Tr("{count} 个作品"), ("count", count)),
+                () =>
+                {
+                    _currentMaker = maker.Length > 0 ? maker : UnknownMaker;
+                    ShowWorks();
+                }), title.ToLowerInvariant());
+        }).ToList();
+        PopulateSortBox(MakerSortOptions, _makerSort);
+        ApplyCardFilter();
+    }
+
     /// <summary>标签视图：全部已品悦作品的ジャンル标签卡片。</summary>
     private void ShowGenres()
     {
@@ -685,12 +729,18 @@ public partial class MediaLibPage : UserControl
                 $"FROM \"works\" WHERE \"state\" = '已品悦' AND \"work_type\" = @t AND {makerCond} " +
                 WorkOrderClause(),
                 ("@t", _currentType), ("@maker", _currentMaker ?? ""));
-        else
+        else if (_currentLib != null)
             rows = Db.Select(
                 "SELECT \"work_id\", \"work_name\", \"maker_name\", \"work_type\", \"age_category\", \"cover\" " +
                 $"FROM \"works\" WHERE \"state\" = '已品悦' AND \"library\" = @lib AND {makerCond} " +
                 WorkOrderClause(),
                 ("@lib", _currentLib ?? ""), ("@maker", _currentMaker ?? ""));
+        else
+            // 社团根视图：按社团跨全部媒体库
+            rows = Db.Select(
+                "SELECT \"work_id\", \"work_name\", \"maker_name\", \"work_type\", \"age_category\", \"cover\" " +
+                $"FROM \"works\" WHERE \"state\" = '已品悦' AND {makerCond} " + WorkOrderClause(),
+                ("@maker", _currentMaker ?? ""));
         if (rows != null)
             SetWorkCards(rows);
     }
@@ -812,6 +862,10 @@ public partial class MediaLibPage : UserControl
                 _makerSort = idx;
                 ShowMakers();
                 break;
+            case "all_makers":
+                _makerSort = idx;
+                ShowAllMakers();
+                break;
             case "works":
                 _workSort = idx;
                 ShowWorks();
@@ -845,7 +899,7 @@ public partial class MediaLibPage : UserControl
             return;
         var keyword = SearchBox.Text.Trim();
         // 分组层级（媒体库首页 / 社团页）输入关键字时，改为在当前作用域内按 RJ号/作品名 搜索作品
-        if (keyword.Length > 0 && _level is "libs" or "makers")
+        if (keyword.Length > 0 && _level is "libs" or "makers" or "all_makers")
         {
             ShowScopedSearch(keyword);
             return;
@@ -860,7 +914,7 @@ public partial class MediaLibPage : UserControl
         BackButton.Visibility = ShouldShowBack() ? Visibility.Visible : Visibility.Collapsed;
         if (_level == "libs")
             LibSettingButton.Visibility = Visibility.Visible;  // 媒体库设置仅在媒体库首页显示
-        SortBox.Visibility = _level is "makers" or "works" or "filtered_works" or "favorites" or "lib_works"
+        SortBox.Visibility = _level is "makers" or "all_makers" or "works" or "filtered_works" or "favorites" or "lib_works"
             ? Visibility.Visible : Visibility.Collapsed;
         UpdateLibToggleButton();
         ShowCardList();
@@ -904,7 +958,7 @@ public partial class MediaLibPage : UserControl
         var gen = ++_scopedSearchGen;
         var pary = pars.ToArray();
         var rows = await Task.Run(() => Db.Select(sql, pary)) ?? [];
-        if (gen != _scopedSearchGen || _level != "makers" && _level != "libs")
+        if (gen != _scopedSearchGen || _level != "makers" && _level != "libs" && _level != "all_makers")
             return;
 
         _workLevelCount = true;
@@ -925,6 +979,7 @@ public partial class MediaLibPage : UserControl
     {
         "libs" => false,
         "favorites" => false,
+        "all_makers" => false,
         "genres" => _root != MediaLibRoot.Genre,
         "types" => _root != MediaLibRoot.WorkType,
         _ => true,

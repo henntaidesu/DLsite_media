@@ -49,7 +49,7 @@
          display: flex; flex-direction: column; gap: 4px;
          padding: 12px 10px max(12px, env(safe-area-inset-bottom)); overflow-y: auto; }
   .nav .brand { font-weight: 700; font-size: 16px; padding: 6px 10px 14px; color: var(--text); }
-  .navitem { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 8px;
+  .navitem { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 8px; font-size: 16pt;
              cursor: pointer; color: var(--muted); font-size: 14.5px; white-space: nowrap; }
   .navitem:hover { background: var(--surface2); color: var(--text); }
   .navitem.active { background: var(--accent-dim); color: #fff; }
@@ -62,6 +62,8 @@
   .layout-desktop .drawer-backdrop { display: none !important; }
   .layout-desktop #menuBtn { display: none !important; }
   .layout-desktop .abar { left: var(--nav-w); }
+  /* 返回键放到顶栏最右边（标题 margin-right:auto 已把其后的元素推到右侧，order 再保证它排在最后） */
+  .layout-desktop #back { order: 10; margin-left: 8px; }
 
   /* 移动端（iOS/Android 手机）：侧栏改为左侧抽屉，顶部左侧目录键、返回键移到右侧 */
   .layout-mobile .nav { width: 264px; transform: translateX(-100%);
@@ -87,6 +89,15 @@
   .grid.cards { grid-template-columns: repeat(auto-fill, minmax(max(150px, (100% - 84px) / 8), 1fr)); }
   /* 作品卡固定 高:宽 = 1.5:1（aspect-ratio 为 宽/高，故 2/3） */
   .grid.cards > .card { aspect-ratio: 2 / 3; }
+  /* 社团搜索卡：卡片外再包一层单元格，卡片保持 2/3 比例，下方留出操作按钮行 */
+  .grid.cards > .mcell { display: flex; flex-direction: column; align-self: start; }
+  .grid.cards > .mcell > .card { aspect-ratio: 2 / 3; }
+  .mcard-actions { display: flex; gap: 6px; margin-top: 6px; }
+  .mcard-actions button { flex: 1 1 0; min-width: 0; padding: 6px 4px; font-size: 12.5px; white-space: nowrap;
+    background: var(--surface2); border: 1px solid var(--line); color: var(--text); border-radius: 8px; cursor: pointer; }
+  .mcard-actions button:hover { border-color: var(--accent-dim); }
+  .mcard-actions button.primary { background: var(--accent-dim); border-color: var(--accent-dim); color: #fff; }
+  .mcard-actions button:disabled { opacity: .6; cursor: default; }
   .grid.groups { grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
   .card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
           overflow: hidden; cursor: pointer; display: flex; flex-direction: column; transition: border-color .12s; }
@@ -126,9 +137,17 @@
   .fields .v { word-break: break-word; }
   .tag { display: inline-block; margin: 0 8px 4px 0; }
   .actions { display: flex; gap: 8px; margin: 14px 0 4px; flex-wrap: wrap; }
+  .topbar-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
   .toggle { background: var(--surface2); border: 1px solid var(--line); color: var(--text);
             border-radius: 8px; padding: 7px 14px; cursor: pointer; font-size: 14px; }
   .toggle.on { background: var(--accent-dim); border-color: var(--accent-dim); color: #fff; }
+  .topbar-actions .toggle { padding: 5px 12px; font-size: 13px; }
+  /* 作品详情页：顶栏不显示作品名（正文已有 h1），仅留按钮 —— 操作按钮靠左成组，返回键靠右 */
+  #topbar.detail-mode #title { display: none; }
+  #topbar.detail-mode #detailActions { order: 1; margin-right: auto; }
+  /* 详情页移动端：返回键与目录键同一行、靠右；操作按钮另起一行铺满 */
+  .layout-mobile #topbar.detail-mode #back { order: 1; margin-left: auto; }
+  .layout-mobile #topbar.detail-mode #detailActions { order: 2; flex-basis: 100%; margin-right: 0; }
   .body { margin-top: 16px; }
   .body p { white-space: pre-wrap; word-break: break-word; margin: 10px 0; }
   .body img { max-width: 100%; border-radius: 8px; margin: 10px 0; display: block; cursor: zoom-in; }
@@ -159,20 +178,44 @@
   .rhosts { margin-top: 8px; }
   .rhosts .host { margin: 6px 0 0; background: var(--surface2); }
 
-  /* 下载 */
+  /* 下载（父行番号 + 目录树，对齐 WPF 下载页颗粒度） */
   .dl { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
-        padding: 12px 14px; margin-bottom: 10px; }
-  .dl .row { display: flex; align-items: center; gap: 10px; }
-  .dl .rj { font-weight: 600; cursor: pointer; }
-  .dl .st { font-size: 13px; } .dl .sp { color: var(--muted); font-size: 12.5px; margin-left: auto; }
+        padding: 10px 14px; margin-bottom: 8px; }
+  .dl .drow { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .dl .dtoggle { width: 16px; text-align: center; color: var(--muted); cursor: pointer; flex: none; user-select: none; }
+  .dl .rj { font-weight: 600; cursor: pointer; flex: none; min-width: 108px; }
+  /* 番号进度条：带居中百分比覆盖文字（镜像 WPF 18px 进度条 + PctText） */
+  .dprog { position: relative; flex: 1 1 180px; min-width: 120px; height: 18px; overflow: hidden;
+           background: var(--surface2); border-radius: 5px; }
+  .dprog > i { display: block; height: 100%; border-radius: 5px; background: var(--accent-dim); transition: width .3s; }
+  .dprog .dpct { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+                 font-size: 11px; color: var(--text); }
+  .dl .dsp { color: var(--muted); font-size: 12.5px; flex: none; min-width: 62px; text-align: right; }
+  .dl .dst { font-size: 13px; font-weight: 600; flex: none; }
+  .dl .dacts { display: flex; gap: 6px; margin-left: auto; flex-wrap: wrap; }
+  /* usage-card 复用（保留细进度条样式） */
   .bar { height: 6px; background: var(--surface2); border-radius: 4px; overflow: hidden; margin-top: 8px; }
   .bar > i { display: block; height: 100%; background: var(--accent); border-radius: 4px; transition: width .3s; }
-  .children { margin-top: 10px; padding-left: 4px; display: none; }
+  .children { margin-top: 8px; padding-left: 22px; display: none; }
   .children.open { display: block; }
-  .frow { display: flex; align-items: center; gap: 8px; font-size: 12.5px; padding: 3px 0; color: var(--muted); }
-  .frow .fn { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .usage { margin-bottom: 12px; }
-  .usage .ut { font-size: 12.5px; color: var(--muted); margin-bottom: 4px; }
+  /* 下载目录树：文件夹节点（可折叠）+ 文件叶子（进度条/速度/状态/复制链接） */
+  .dtree { font-size: 12.5px; }
+  .dfhead { display: flex; align-items: center; gap: 6px; padding: 3px 0; cursor: pointer; }
+  .dfhead .arrow { width: 14px; color: var(--muted); flex: none; }
+  .dfhead .fname { font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .dfhead .fcnt { color: var(--muted); flex: none; }
+  .dfbody { padding-left: 16px; }
+  .dfile { display: flex; align-items: center; gap: 8px; padding: 3px 0; color: var(--muted); flex-wrap: wrap; }
+  .dfile .fn { flex: 1 1 120px; min-width: 80px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .dfile .fbar { position: relative; flex: 0 0 120px; height: 8px; overflow: hidden; background: var(--surface2); border-radius: 4px; }
+  .dfile .fbar > i { display: block; height: 100%; border-radius: 4px; background: var(--accent-dim); transition: width .3s; }
+  .dfile .fsp { flex: none; min-width: 54px; text-align: right; font-size: 11.5px; }
+  .dfile .fst { flex: none; min-width: 52px; }
+  /* debrid-link 使用量卡片：与工具栏按钮同一行、靠右显示 */
+  .usage-card { margin-left: auto; align-self: stretch; background: var(--surface2); border: 1px solid var(--line);
+                border-radius: var(--radius); padding: 7px 12px; min-width: 220px;
+                display: flex; flex-direction: column; justify-content: center; gap: 6px; }
+  .usage-card .ut { font-size: 12.5px; color: var(--muted); white-space: nowrap; }
 
   /* 已下载表 */
   .dt { width: 100%; border-collapse: collapse; font-size: 13.5px; }
@@ -198,6 +241,13 @@
   .frm input, .frm select { width: 100%; }
   .frm .ro { color: var(--muted); font-size: 13px; word-break: break-all; }
   .note { color: var(--muted); font-size: 12.5px; margin-top: 8px; }
+  /* 媒体库管理卡片 */
+  .libcard { background: var(--surface2); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; margin-top: 8px; }
+  .libcard .lh { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .libcard .lh .nm { font-weight: 600; }
+  .libcard .lh .ct { color: var(--muted); font-size: 12.5px; margin-right: auto; }
+  .librow { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+  .librow .fp { color: var(--muted); font-size: 13px; word-break: break-all; flex: 1; }
 
   /* 文件树（查看作品） */
   .tree { font-size: 14px; }
@@ -210,7 +260,7 @@
   .trow .tsize { color: var(--muted); font-size: 12.5px; flex: none; }
 
   /* 文件网格（查看作品：缩略图视图） */
-  .fgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(108px, 1fr)); gap: 10px; }
+  .fgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(max(150px, (100% - 90px) / 10), 1fr)); gap: 10px; }
   .fcard { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; cursor: pointer; }
   .fcard:hover { border-color: var(--accent-dim); }
   .fthumb { width: 100%; aspect-ratio: 1 / 1; background: #15151a; position: relative;
@@ -287,6 +337,12 @@
   .overlay .card2 { background: var(--surface); border: 1px solid var(--line); border-radius: 12px;
                     padding: 20px; max-width: 360px; width: 100%; }
   .overlay h3 { margin: 0 0 12px; font-size: 16px; }
+  /* 页内弹窗（替代浏览器原生 alert/confirm/prompt）*/
+  .modal-msg { white-space: pre-wrap; word-break: break-word; color: var(--text); font-size: 14px; line-height: 1.6; }
+  .modal-input { width: 100%; margin-top: 12px; }
+  .modal-btns { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+  .icon-btn.danger { color: #f87171; border-color: #6b3030; }
+  .icon-btn.danger:hover { border-color: #f87171; }
 </style>
 </head>
 <body>
@@ -294,12 +350,14 @@
 <aside id="nav" class="nav"></aside>
 <div class="main-wrap">
   <header>
-    <div class="topbar">
+    <div id="topbar" class="topbar">
       <button id="menuBtn" class="icon-btn" onclick="toggleDrawer()" title="目录" aria-label="目录">☰ 目录</button>
       <button id="back" class="icon-btn" hidden>← 返回</button>
       <span id="title" class="title">媒体库</span>
       <input id="search" class="grow" type="search" placeholder="搜索 RJ号 / 作品名 / 社团" autocomplete="off" hidden>
+      <button id="libToggle" class="icon-btn" hidden></button>
       <select id="sort" hidden></select>
+      <div id="detailActions" class="topbar-actions" hidden></div>
     </div>
   </header>
   <main>
@@ -316,6 +374,8 @@
 </div>
 
 <div id="picker" class="overlay"><div class="card2" id="pickerBox"></div></div>
+
+<div id="modal" class="overlay"><div class="card2" id="modalBox"></div></div>
 
 <div id="videoOverlay" class="voverlay">
   <div class="vtop">
@@ -369,10 +429,46 @@ function fallbackCopy(t) {
   document.body.removeChild(ta);
 }
 
+// ---------- 页内弹窗（替代浏览器原生 alert/confirm/prompt，避免使用浏览器顶部弹窗）----------
+// 返回 Promise：alert→resolve(undefined)；confirm→resolve(true/false)；prompt→resolve(字符串或 null)
+let _modalCancel = null;   // 遮罩点击时用于取消当前弹窗的回调（保证 Promise 一定被 resolve，不悬挂）
+function uiModal({ title, message, input, defaultValue, okText = '确定', cancelText, danger }) {
+  return new Promise(resolve => {
+    const ov = $('modal'), box = $('modalBox');
+    box.innerHTML = '';
+    const done = (v) => { _modalCancel = null; ov.classList.remove('show'); document.removeEventListener('keydown', onKey); resolve(v); };
+    if (title) box.appendChild(el('h3', null, title));
+    if (message != null && message !== '') box.appendChild(el('div', 'modal-msg', message));
+    let field = null;
+    if (input) {
+      field = el('input', 'modal-input'); field.value = defaultValue || '';
+      field.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); done(field.value); } });
+      box.appendChild(field);
+    }
+    const btns = el('div', 'modal-btns');
+    if (cancelText) { const c = el('button', 'icon-btn', cancelText); c.onclick = () => done(input ? null : false); btns.appendChild(c); }
+    const ok = el('button', 'icon-btn primary' + (danger ? ' danger' : ''), okText);
+    ok.onclick = () => done(input ? field.value : true);
+    btns.appendChild(ok); box.appendChild(btns);
+    // Esc 取消 / Enter 确认（有输入框时 Enter 由输入框处理）
+    function onKey(e) {
+      if (e.key === 'Escape') { e.preventDefault(); done(input ? null : false); }
+      else if (e.key === 'Enter' && !input) { e.preventDefault(); done(true); }
+    }
+    _modalCancel = () => done(input ? null : false);
+    document.addEventListener('keydown', onKey);
+    ov.classList.add('show');
+    (field || ok).focus();
+  });
+}
+function uiAlert(message, title) { return uiModal({ title: title || '提示', message, okText: '确定' }); }
+function uiConfirm(message, opts = {}) { return uiModal({ title: opts.title || '确认', message, okText: opts.okText || '确定', cancelText: opts.cancelText || '取消', danger: opts.danger }); }
+function uiPrompt(message, defaultValue, title) { return uiModal({ title: title || '输入', message, input: true, defaultValue, cancelText: '取消' }); }
+$('modal').addEventListener('click', e => { if (e.target.id === 'modal' && _modalCancel) _modalCancel(); });
+
 const SECTIONS = [
   { key: 'medialib', label: '媒体库', root: 'libs',     icon: '📚' },
-  { key: 'download', label: '下载',                     icon: '⬇' },
-  { key: 'search',   label: '搜索',                     icon: '🔍' },
+  { key: 'searchdownload', label: '下载搜索',            icon: '⬇' },
   { key: 'tag',      label: '标签',   root: 'genres',   icon: '🏷' },
   { key: 'type',     label: '作品形式', root: 'types',   icon: '🎬' },
   { key: 'favorite', label: '收藏',   root: 'favorites', icon: '♥' },
@@ -419,7 +515,6 @@ function buildTabs() {
   box.appendChild(el('div', 'brand', 'DLsite媒体库'));
   SECTIONS.forEach(s => {
     const b = el('div', 'navitem' + (s.key === section ? ' active' : ''));
-    b.appendChild(el('span', 'ni', s.icon || ''));
     b.appendChild(el('span', null, s.label));
     b.onclick = () => selectSection(s.key);
     box.appendChild(b);
@@ -456,11 +551,44 @@ function selectSection(key) {
   $('count').textContent = '';
   $('content').innerHTML = '';
   $('search').value = '';
-  history.replaceState({ nav: true }, '');   // 重置历史基线，切换分区不累积层级
-  if (s.root) { makerSort = 0; workSort = 0; stack = [{ view: s.root, ctx: {} }]; render(); }
-  else if (key === 'search') renderSearch();
-  else if (key === 'download') renderDownloadSection();
+  $('detailActions').hidden = true; $('detailActions').innerHTML = '';   // 清除上一分区遗留的详情操作按钮
+  $('topbar').classList.remove('detail-mode');
+  if (s.root) { makerSort = 0; workSort = 0; stack = [{ view: s.root, ctx: {} }]; }
+  // 反映到地址栏；切换分区重置历史基线（不累积层级），但 URL 可见当前分区
+  history.replaceState({ nav: true, depth: s.root ? 1 : 0 }, '', encodeHash());
+  if (s.root) render();
+  else if (key === 'searchdownload') { sdView = 'download'; renderSearchDownload(); }
   else if (key === 'settings') renderSettings();
+}
+
+// ---------- URL 路由（可见地址栏路由，非隐藏）----------
+// 地址栏哈希反映当前分区 + 卡片区导航路径，可分享/刷新恢复。
+// 内存 stack 仍是渲染与滚动恢复的主数据源；哈希仅作 URL 呈现与新开页面时的恢复。
+function encodeHash() {
+  const s = SECTIONS.find(x => x.key === section);
+  if (!s || !s.root) return '#/' + section;             // 叶子分区（下载/搜索/设置）
+  const segs = stack.slice(1).map(e => {
+    const ctx = { ...e.ctx }; delete ctx.nodes;          // nodes 为运行时文件树缓存，过大不入 URL
+    const c = Object.keys(ctx).length ? '~' + encodeURIComponent(JSON.stringify(ctx)) : '';
+    return e.view + c;
+  });
+  return '#/' + s.key + (segs.length ? '/' + segs.join('/') : '');
+}
+function parseHash() {
+  const raw = (location.hash || '').replace(/^#\/?/, '');
+  if (!raw) return null;
+  const parts = raw.split('/').filter(Boolean);
+  const s = SECTIONS.find(x => x.key === parts[0]);
+  if (!s) return null;
+  const stk = s.root ? [{ view: s.root, ctx: {} }] : [];
+  for (let i = 1; i < parts.length; i++) {
+    const t = parts[i].indexOf('~');
+    const view = t < 0 ? parts[i] : parts[i].slice(0, t);
+    let ctx = {};
+    if (t >= 0) { try { ctx = JSON.parse(decodeURIComponent(parts[i].slice(t + 1))); } catch (e) { } }
+    stk.push({ view, ctx });
+  }
+  return { key: s.key, root: !!s.root, stack: stk };
 }
 
 // ========== 卡片区（媒体库/标签/作品形式/收藏）==========
@@ -468,7 +596,7 @@ function selectSection(key) {
 function pushView(view, ctx) {
   if (stack.length) stack[stack.length - 1].scroll = window.scrollY;
   stack.push({ view, ctx: ctx || {} });
-  history.pushState({ nav: true, depth: stack.length }, '');
+  history.pushState({ nav: true, depth: stack.length }, '', encodeHash());
   render();
 }
 async function popView() {
@@ -489,6 +617,9 @@ async function render() {
   const st = stack[stack.length - 1];
   $('back').hidden = stack.length <= 1;
   $('sort').hidden = true;
+  $('libToggle').hidden = true;
+  $('detailActions').hidden = true; $('detailActions').innerHTML = '';   // 顶栏操作按钮仅作品详情页使用
+  $('topbar').classList.remove('detail-mode');   // 详情页专属排布，离开即复原
   $('search').hidden = (st.view === 'detail' || st.view === 'files');   // 作品详情/查看作品页不显示搜索框
   $('content').innerHTML = '';
   $('count').textContent = '';
@@ -499,6 +630,7 @@ async function render() {
     else if (st.view === 'types') await renderTypes();
     else if (st.view === 'favorites') await renderWorks('/api/favorites', '收藏', true);
     else if (st.view === 'makers') await renderMakers(st.ctx);
+    else if (st.view === 'genreworks') await renderWorks('/api/genreworks?genre=' + enc(st.ctx.genre), st.ctx.label || st.ctx.genre, true);
     else if (st.view === 'works') await renderWorks(worksUrl(st.ctx), st.ctx.maker || '未知社团', true, st.ctx);
     else if (st.view === 'filter') await renderWorks(`/api/filter?col=${enc(st.ctx.col)}&val=${enc(st.ctx.val)}`, st.ctx.label, true);
     else if (st.view === 'detail') await renderDetail(st.ctx.id);
@@ -539,12 +671,9 @@ async function renderLibView(ctx) {
   }
 }
 function prependLibToggle(label, toMode) {
-  const bar = el('div', 'toolbar');
-  const b = el('button', 'icon-btn', label);
+  const b = $('libToggle');   // 复用顶栏常驻按钮，与标题/排序同一行，不再另起一行
+  b.hidden = false; b.textContent = label;
   b.onclick = () => { stack[stack.length - 1].ctx.mode = toMode; render(); };  // 就地切换，不 push 新层级
-  bar.appendChild(b);
-  const host = $('content');
-  host.insertBefore(bar, host.firstChild);
 }
 async function renderGenres() {
   $('title').textContent = '标签';
@@ -669,10 +798,10 @@ async function scopedWorkSearch(st, kw, gen) {
 }
 
 async function renderDetail(id) {
-  $('title').textContent = id; $('sort').hidden = true;
+  $('title').textContent = ''; $('sort').hidden = true;
+  $('topbar').classList.add('detail-mode');   // 顶栏不显示作品名，仅留按钮
   const d = await api('/api/detail?id=' + enc(id));
   if (d.error) { $('content').appendChild(el('div', 'empty', '作品不存在')); return; }
-  $('title').textContent = d.name || d.id;
   const root = el('div', 'detail');
   root.appendChild(el('h1', null, d.name || d.id));
   const top = el('div', 'dtop');
@@ -703,12 +832,13 @@ async function renderDetail(id) {
   if (d.voiceActor) addF('声优', multi(d.voiceActor, 'voice_actor', '/'));
   if (d.age) addF('年龄分级', link(d.ageText || AGE[d.age] || d.age, 'age_category', d.age));
   if (d.workType) addF('作品形式', d.workType);
-  if (d.tags && d.tags.length) { const box = el('span'); d.tags.forEach(t => { const a = el('a', 'tag', t); a.onclick = () => { section = 'tag'; buildTabs(); $('search').hidden = false; stack = [{ view: 'genres', ctx: {} }]; pushView('makers', { genre: t }); }; box.appendChild(a); }); addF('类型', box); }
+  // 类型标签：就地下钻到该标签的作品列表（保留详情所在层级，返回即回到本详情页），直接列作品、不再经社团分组
+  if (d.tags && d.tags.length) { const box = el('span'); d.tags.forEach(t => { const a = el('a', 'tag', t); a.onclick = () => pushView('genreworks', { genre: t, label: t }); box.appendChild(a); }); addF('类型', box); }
   if (d.fileSize) addF('文件容量', d.fileSize);
   if (d.intro) addF('简介', d.intro);
   top.appendChild(fields); root.appendChild(top);
 
-  const actions = el('div', 'actions');
+  const actions = $('detailActions'); actions.hidden = false;
   const rb = el('button', 'toggle' + (d.read ? ' on' : ''), (d.read ? '★ ' : '☆ ') + '已读');
   rb.onclick = async () => { const r = await apiPost('/api/toggle', { id: d.id, field: 'read', value: !d.read }); d.read = r.value; rb.className = 'toggle' + (d.read ? ' on' : ''); rb.textContent = (d.read ? '★ ' : '☆ ') + '已读'; };
   const fb = el('button', 'toggle' + (d.favorite ? ' on' : ''), (d.favorite ? '♥ ' : '♡ ') + '收藏');
@@ -720,18 +850,17 @@ async function renderDetail(id) {
     const mb = el('button', 'toggle', '📦 移动媒体库');
     mb.onclick = async () => {
       const t = await api('/api/downtargets');
-      if (!t.libs || !t.libs.length) { alert('尚未配置媒体库文件夹（请在桌面端添加）'); return; }
+      if (!t.libs || !t.libs.length) { await uiAlert('尚未配置媒体库文件夹（请在桌面端添加）'); return; }
       const target = await pickTarget(t.libs);
       if (!target) return;
-      if (!confirm(`确定将 ${d.id} 移动到媒体库“${target.lib}”吗？`)) return;
+      if (!await uiConfirm(`确定将 ${d.id} 移动到媒体库“${target.lib}”吗？`)) return;
       mb.disabled = true; mb.textContent = '移动中…';
       const r = await apiPost('/api/movework', { id: d.id, lib: target.lib, folder: target.folder });
-      alert(r.ok ? '已移动到新媒体库' : ('移动失败：' + (r.message || '')));
+      await uiAlert(r.ok ? '已移动到新媒体库' : ('移动失败：' + (r.message || '')));
       if (r.ok) render(); else { mb.disabled = false; mb.textContent = '📦 移动媒体库'; }
     };
     actions.appendChild(mb);
   }
-  root.appendChild(actions);
 
   if (d.body && d.body.length) {
     const body = el('div', 'body'); const bodyImgs = [];
@@ -748,17 +877,18 @@ async function renderDetail(id) {
 
 // ========== 搜索 ==========
 function renderSearch() {
-  $('title').textContent = '搜索';
+  $('title').textContent = '';
   // 重置社团状态：让可能残留的后台扫描循环（makerState !== s）自行停止
   if (makerState && makerState.io) makerState.io.disconnect();
   makerState = null;
   const host = $('content'); host.innerHTML = '';
   const bar = el('div', 'toolbar');
+  const back = el('button', 'icon-btn', '← 下载'); back.onclick = () => { sdView = 'download'; renderSearchDownload(); };
   const inp = el('input'); inp.placeholder = '作品号(RJ/BJ/VJ)、社团号(RG) 或 DLsite 链接'; inp.className = 'grow'; inp.id = 'sId';
   const btn = el('button', 'icon-btn primary', '查询');
   inp.addEventListener('keydown', e => { if (e.key === 'Enter') runSearch(); });
   btn.onclick = runSearch;
-  bar.appendChild(inp); bar.appendChild(btn);
+  bar.append(back, inp, btn);
   host.appendChild(bar);
   // 社团网格与帖子列表分两个 pane：进入帖子列表时仅隐藏社团 pane（保留 DOM 与后台扫描），返回即缓存恢复
   const wrap = el('div'); wrap.id = 'searchResult';
@@ -768,7 +898,14 @@ function renderSearch() {
 }
 function showMakerPane() { $('makerPane').style.display = ''; $('workPane').style.display = 'none'; }
 function showWorkPane() { $('makerPane').style.display = 'none'; $('workPane').style.display = ''; }
-function goBackToMaker() { showMakerPane(); if (makerState) $('count').textContent = makerState.countText || ''; }
+function goBackToMaker() {
+  showMakerPane();
+  if (makerState) {
+    $('count').textContent = makerState.countText || '';
+    // 恢复到点击进入作品前的浏览位置（社团网格 DOM 一直保留，仅切换过 display）
+    requestAnimationFrame(() => window.scrollTo(0, makerState.scrollY || 0));
+  }
+}
 // 识别输入：作品号 / 社团号 / DLsite 链接
 function parseInput(raw) {
   raw = (raw || '').trim();
@@ -796,7 +933,7 @@ async function runWorkSearch(id) {
   try { d = await api('/api/search?id=' + enc(id)); } catch (e) { return; }
   if (gen !== workGen) return;
   if (d.error) { box.innerHTML = ''; box.appendChild(el('div', 'empty', d.error)); return; }
-  if (d.existed && !confirm(`${d.id} ${d.existedName || ''}\n该作品已于 ${d.existedTime || ''} 加入过下载，是否继续？`)) {
+  if (d.existed && !await uiConfirm(`${d.id} ${d.existedName || ''}\n该作品已于 ${d.existedTime || ''} 加入过下载，是否继续？`)) {
     if (makerReturnId) goBackToMaker(); else box.innerHTML = '';
     return;
   }
@@ -913,7 +1050,8 @@ async function loadMakerPage() {
     c.appendChild(cov);
     c.appendChild(el('div', 'wt', w.title || w.id));
     // 点击进入帖子列表：不断开 io、不清空扫描队列，社团 AS 扫描在后台继续
-    c.onclick = () => { makerReturnId = s.id; $('sId').value = w.id; runWorkSearch(w.id); };
+    // 记录当前滚动位置，返回社团作品时恢复到刚点击的位置（而非顶部）
+    c.onclick = () => { makerReturnId = s.id; s.scrollY = window.scrollY; $('sId').value = w.id; runWorkSearch(w.id); };
     s.grid.appendChild(c);
   });
   s.countText = `${s.grid.children.length} 个作品`;
@@ -929,7 +1067,7 @@ async function startMakerDownPoll() {
   if (!s || s.dlPolling) return;
   s.dlPolling = true;
   while (true) {
-    if (makerState !== s || section !== 'search') break;
+    if (makerState !== s || section !== 'searchdownload' || sdView !== 'search') break;
     let d;
     try { d = await api('/api/downloads'); } catch (e) { break; }
     if (makerState !== s) break;
@@ -954,14 +1092,14 @@ async function runMakerScans() {
   if (!s || s.scanning) return;
   s.scanning = true;
   while (s.scanQueue.length) {
-    if (makerState !== s || section !== 'search') break;   // 已开始新搜索或离开搜索页则停止
+    if (makerState !== s || section !== 'searchdownload' || sdView !== 'search') break;   // 已开始新搜索或离开搜索页则停止
     const id = s.scanQueue.shift();
     const st = s.cards[id];
     if (!st) continue;
     st.innerHTML = '<span class="spin"></span>';
     let d;
     try { d = await api('/api/asscan?id=' + enc(id)); } catch (e) { break; }
-    if (makerState !== s || section !== 'search') break;
+    if (makerState !== s || section !== 'searchdownload' || sdView !== 'search') break;
     if (d.count > 0) { st.textContent = `AS · ${d.count} 帖`; st.style.background = 'rgba(34,160,80,.88)'; }
     else if (d.count === 0) { st.textContent = 'AS · 无'; st.style.background = 'rgba(0,0,0,.62)'; }
     else { st.textContent = 'AS · 失败'; st.style.background = 'rgba(180,60,60,.88)'; }
@@ -1013,32 +1151,41 @@ function pickTarget(libs) {
   });
 }
 
-// ========== 下载 / 已下载 ==========
+// ========== 下载搜索（合并「下载 / 搜索」两视图，对齐 WPF「搜索/下载」导航）==========
 let dlExpanded = new Set();
-let dlMode = 'downloading';   // downloading | downloaded
+// 下载目录树里被手动折叠的文件夹（键 = 番号 + '\n' + 文件夹相对路径）；默认展开，对齐 WPF
+let dlFolderCollapsed = new Set();
+let sdView = 'download';   // download | search | downloaded：三视图就地切换，不算一级导航
+// 视图调度：默认下载列表，可就地切到搜索/已下载。每次切换先清掉下载轮询定时器，避免重复叠加。
+function renderSearchDownload() {
+  stopTimers();
+  if (sdView === 'search') renderSearch();
+  else if (sdView === 'downloaded') renderDownloaded();
+  else renderDownloadSection();
+}
 function renderDownloadSection() {
-  $('title').textContent = '下载';
-  if (dlMode === 'downloaded') { renderDownloaded(); return; }
+  $('title').textContent = '';
   const host = $('content'); host.innerHTML = '';
   const bar = el('div', 'toolbar');
+  const sb = el('button', 'icon-btn', '搜索作品'); sb.onclick = () => { sdView = 'search'; renderSearchDownload(); };
   const startBtn = el('button', 'icon-btn primary', '开始下载'); startBtn.id = 'engineBtn';
   startBtn.onclick = async () => { const running = startBtn.dataset.running === '1'; await apiPost('/api/engine', { action: running ? 'stop' : 'start' }); loadDownloads(); };
   const refresh = el('button', 'icon-btn', '刷新'); refresh.onclick = loadDownloads;
   const cd = el('button', 'icon-btn', '清除已完成'); cd.onclick = async () => { await apiPost('/api/cleardone'); loadDownloads(); };
-  const ca = el('button', 'icon-btn', '清空列表'); ca.onclick = async () => { if (confirm('确定要清空整个下载列表吗？等待中的任务也会被删除。')) { await apiPost('/api/clearall'); loadDownloads(); } };
-  const dd = el('button', 'icon-btn', '已下载'); dd.onclick = () => { dlMode = 'downloaded'; renderDownloadSection(); };
-  bar.append(startBtn, refresh, cd, ca, dd);
-  host.appendChild(bar);
-  const usage = el('div', 'usage'); usage.id = 'usage';
+  const ca = el('button', 'icon-btn', '清空列表'); ca.onclick = async () => { if (await uiConfirm('确定要清空整个下载列表吗？等待中的任务也会被删除。', { danger: true })) { await apiPost('/api/clearall'); loadDownloads(); } };
+  const dled = el('button', 'icon-btn', '已下载'); dled.onclick = () => { sdView = 'downloaded'; renderSearchDownload(); };
+  // debrid-link 使用量卡片：与按钮同一行、靠右
+  const usage = el('div', 'usage-card'); usage.id = 'usage';
   usage.innerHTML = '<div class="ut" id="usageText">debrid-link 使用量 --</div><div class="bar"><i id="usageBar" style="width:0;background:#a78bfa"></i></div>';
-  host.appendChild(usage);
+  bar.append(sb, startBtn, refresh, cd, ca, dled, usage);
+  host.appendChild(bar);
   host.appendChild(el('div', null)).id = 'dlList';
   loadDownloads(); loadUsage();
   pollTimer = setInterval(loadDownloads, 1000);
   usageTimer = setInterval(loadUsage, 15000);
 }
 async function loadDownloads() {
-  if (section !== 'download' || dlMode !== 'downloading') return;
+  if (section !== 'searchdownload' || sdView !== 'download') return;
   let d; try { d = await api('/api/downloads'); } catch (e) { return; }
   const btn = $('engineBtn');
   if (btn) {
@@ -1046,46 +1193,85 @@ async function loadDownloads() {
     else { btn.dataset.running = '0'; btn.textContent = '开始下载'; btn.disabled = false; }
   }
   const list = $('dlList'); if (!list) return;
-  if (!d.groups.length) { list.innerHTML = '<div class="empty">下载列表为空</div>'; $('count').textContent = ''; return; }
-  $('count').textContent = `${d.groups.length} 个作品`;
+  if (!d.groups.length) { list.innerHTML = '<div class="empty">下载列表为空</div>'; return; }
   list.innerHTML = '';
   d.groups.forEach(g => {
     const c = el('div', 'dl');
-    const row = el('div', 'row');
-    const rj = el('div', 'rj', g.id || '(未知)'); rj.onclick = () => { if (dlExpanded.has(g.id)) dlExpanded.delete(g.id); else dlExpanded.add(g.id); loadDownloads(); };
-    const stt = el('div', 'st', g.statusText); stt.style.color = g.color;
-    row.append(rj, stt);
-    if (g.speed) { const sp = el('div', 'sp', g.speed); row.appendChild(sp); }
-    const pc = el('div', 'sp', g.pct + '%'); row.appendChild(pc);
-    c.appendChild(row);
-    const bar = el('div', 'bar'); const i = el('i'); i.style.width = g.pct + '%'; i.style.background = g.color; bar.appendChild(i); c.appendChild(bar);
-    const act = el('div', 'actions');
+    const row = el('div', 'drow');
+    const open = dlExpanded.has(g.id);
+    const tog = el('span', 'dtoggle', open ? '▾' : '▸');
+    const rj = el('div', 'rj', g.id || '(未知)');
+    const toggle = () => { if (dlExpanded.has(g.id)) dlExpanded.delete(g.id); else dlExpanded.add(g.id); loadDownloads(); };
+    tog.onclick = toggle; rj.onclick = toggle;
+    // 进度条恒为蓝色（对齐 WPF）；状态用文字颜色区分，不给进度条上色
+    const prog = el('div', 'dprog'); const pi = el('i'); pi.style.width = g.pct + '%';
+    prog.appendChild(pi); prog.appendChild(el('span', 'dpct', g.pct + '%'));
+    const sp = el('div', 'dsp', g.speed || '');
+    const stt = el('div', 'dst', g.statusText); stt.style.color = g.color;
+    row.append(tog, rj, prog, sp, stt);
+    const act = el('div', 'dacts');
     if (g.canResume) { const b = el('button', 'mini', '下载'); b.onclick = async () => { await apiPost('/api/resumework', { id: g.id }); loadDownloads(); }; act.appendChild(b); }
     if (g.canPause) { const b = el('button', 'mini', '停止'); b.onclick = async () => { await apiPost('/api/pausework', { id: g.id }); loadDownloads(); }; act.appendChild(b); }
     if (g.canReparse) {
       const rp = el('button', 'mini', '重新解析'); rp.onclick = async () => { await apiPost('/api/reparse', { id: g.id }); loadDownloads(); };
-      const rs = el('button', 'mini', '重新搜索'); rs.onclick = async () => { if (confirm(`将删除 ${g.id} 已下载的分卷与文件夹，并重新搜索。是否继续？`)) { await apiPost('/api/research', { id: g.id }); selectSection('search'); setTimeout(() => { $('sId').value = g.id; runSearch(); }, 50); } };
+      const rs = el('button', 'mini', '重新搜索'); rs.onclick = async () => { if (await uiConfirm(`将删除 ${g.id} 已下载的分卷与文件夹，并重新搜索。是否继续？`, { danger: true })) { await apiPost('/api/research', { id: g.id }); sdView = 'search'; renderSearchDownload(); setTimeout(() => { $('sId').value = g.id; runSearch(); }, 50); } };
       act.append(rp, rs);
     }
-    if (g.canDelete) { const b = el('button', 'mini danger', '删除'); b.onclick = async () => { if (confirm(`将从下载列表删除 ${g.id}，并删除其作品记录与下载缓存。是否继续？`)) { await apiPost('/api/deletework', { id: g.id }); loadDownloads(); } }; act.appendChild(b); }
-    if (act.children.length) c.appendChild(act);
-    const ch = el('div', 'children' + (dlExpanded.has(g.id) ? ' open' : ''));
-    g.children.forEach(f => {
-      const fr = el('div', 'frow');
-      fr.appendChild(el('div', 'fn', f.fileName));
-      const fs = el('div', null, f.statusText); fs.style.color = f.color; fr.appendChild(fs);
-      if (f.speed) fr.appendChild(el('div', null, f.speed));
-      fr.appendChild(el('div', null, f.pct + '%'));
-      if (f.url) { const cp = el('button', 'mini', '复制链接'); cp.onclick = () => copyText(f.url); fr.appendChild(cp); }
-      ch.appendChild(fr);
-      if (f.errorReason) ch.appendChild(el('div', 'ferr', f.errorReason));
-    });
+    if (g.canDelete) { const b = el('button', 'mini danger', '删除'); b.onclick = async () => { if (await uiConfirm(`将从下载列表删除 ${g.id}，并删除其作品记录与下载缓存。是否继续？`, { danger: true })) { await apiPost('/api/deletework', { id: g.id }); loadDownloads(); } }; act.appendChild(b); }
+    if (act.children.length) row.appendChild(act);
+    c.appendChild(row);
+    const ch = el('div', 'children' + (open ? ' open' : ''));
+    if (g.children && g.children.length) { const tree = el('div', 'dtree'); renderDlTree(g.id, buildDlTree(g.children), tree); ch.appendChild(tree); }
     c.appendChild(ch);
     list.appendChild(c);
   });
 }
+// 把扁平分卷列表按各文件的 relPath（含子目录）重建为文件夹/文件目录树（镜像 WPF RebuildTree）
+function buildDlTree(children) {
+  const root = { entries: [], _dirs: {} };
+  children.forEach(f => {
+    const parts = (f.relPath || f.fileName || '').split('/').filter(Boolean);
+    let node = root, path = '';
+    for (let i = 0; i < parts.length - 1; i++) {   // 末段为文件名，前面均为目录
+      path = path ? path + '/' + parts[i] : parts[i];
+      let dir = node._dirs[parts[i]];
+      if (!dir) { dir = { entries: [], _dirs: {}, name: parts[i], path }; node._dirs[parts[i]] = dir; node.entries.push({ dir }); }
+      node = dir;
+    }
+    node.entries.push({ file: f });
+  });
+  return root;
+}
+function renderDlTree(id, node, host) {
+  node.entries.forEach(e => {
+    if (e.dir) {
+      const d = e.dir, key = id + '\n' + d.path, collapsed = dlFolderCollapsed.has(key);
+      const head = el('div', 'dfhead');
+      const arrow = el('span', 'arrow', collapsed ? '▸' : '▾');
+      head.append(arrow, el('span', 'fname', d.name), el('span', 'fcnt', `${d.entries.length} 项`));
+      const body = el('div', 'dfbody'); body.style.display = collapsed ? 'none' : '';
+      head.onclick = () => {
+        const c = dlFolderCollapsed.has(key);
+        if (c) dlFolderCollapsed.delete(key); else dlFolderCollapsed.add(key);
+        arrow.textContent = c ? '▾' : '▸'; body.style.display = c ? '' : 'none';
+      };
+      renderDlTree(id, d, body);
+      host.append(head, body);
+    } else {
+      const f = e.file;
+      const fr = el('div', 'dfile');
+      fr.appendChild(el('div', 'fn', f.fileName));
+      const bar = el('div', 'fbar'); const i = el('i'); i.style.width = f.pct + '%'; bar.appendChild(i); fr.appendChild(bar);
+      fr.appendChild(el('div', 'fsp', f.speed || ''));
+      const st = el('div', 'fst', f.statusText); st.style.color = f.color; fr.appendChild(st);
+      if (f.url) { const cp = el('button', 'mini', '复制链接'); cp.onclick = () => copyText(f.url); fr.appendChild(cp); }
+      host.appendChild(fr);
+      if (f.errorReason) host.appendChild(el('div', 'ferr', f.errorReason));
+    }
+  });
+}
 async function loadUsage() {
-  if (section !== 'download') return;
+  if (section !== 'searchdownload' || sdView !== 'download') return;
   let d; try { d = await api('/api/usage'); } catch (e) { return; }
   const t = $('usageText'), b = $('usageBar'); if (!t || !b) return;
   if (d.percent == null) { t.textContent = 'debrid-link 使用量 --'; b.style.width = '0'; return; }
@@ -1093,52 +1279,78 @@ async function loadUsage() {
   t.textContent = 'debrid-link 使用量' + (d.resetText ? ` · ${d.resetText} 后重置` : '');
 }
 
-// 已下载
-let dledAll = [], dledSort = { prop: 'downTime', asc: false }, dledKw = '', dledState = '';
-const STATE_FILTER = [['', '全部'], ['下载中', '下载中'], ['已下载', '已下载'], ['已品悦', '已品悦']];
-const STATE_COLOR = { '已品悦': '#4ade80', '已下载': '#60a5fa', '下载中': '#facc15' };
-async function renderDownloaded() {
-  $('title').textContent = '已下载';
+// ========== 已下载（镜像 WPF DownloadedPage：可搜索/状态筛选/列排序/标记已品悦）==========
+const DLED_STATES = [['', '全部'], ['下载中', '下载中'], ['已下载', '已下载'], ['已品悦', '已品悦']];
+const DLED_COLS = [['id', 'RJ号'], ['name', '作品名称'], ['maker', '社团'], ['type', '类型'], ['state', '状态'], ['downTime', '下载时间']];
+const DLED_STATE_COLOR = { '已品悦': '#4ade80', '已下载': '#60a5fa', '下载中': '#facc15' };
+let dledAll = [], dledKw = '', dledState = '', dledSort = null;   // 默认按服务端顺序（下载时间倒序）
+function renderDownloaded() {
+  $('title').textContent = '';
   const host = $('content'); host.innerHTML = '';
   const bar = el('div', 'toolbar');
-  const back = el('button', 'icon-btn', '← 下载'); back.onclick = () => { dlMode = 'downloading'; renderDownloadSection(); };
+  const back = el('button', 'icon-btn', '← 下载'); back.onclick = () => { sdView = 'download'; renderSearchDownload(); };
   const refresh = el('button', 'icon-btn', '刷新'); refresh.onclick = loadDownloaded;
-  const kw = el('input'); kw.placeholder = '搜索 RJ号 / 作品名 / 社团'; kw.value = dledKw; kw.oninput = () => { dledKw = kw.value.trim(); drawDownloaded(); };
-  const sf = el('select'); STATE_FILTER.forEach(([v, t]) => { const o = el('option', null, t); o.value = v; sf.appendChild(o); }); sf.value = dledState; sf.onchange = () => { dledState = sf.value; drawDownloaded(); };
-  bar.append(back, refresh, kw, sf);
+  const search = el('input'); search.className = 'grow'; search.placeholder = '搜索 RJ号 / 作品名 / 社团'; search.value = dledKw;
+  const filter = el('select');
+  DLED_STATES.forEach(([v, t]) => { const o = el('option', null, t); o.value = v; filter.appendChild(o); });
+  filter.value = dledState;
+  let deb = null;
+  search.oninput = () => { clearTimeout(deb); deb = setTimeout(() => { dledKw = search.value.trim(); drawDownloaded(); }, 250); };
+  filter.onchange = () => { dledState = filter.value; drawDownloaded(); };
+  bar.append(back, refresh, search, filter);
   host.appendChild(bar);
-  host.appendChild(el('div', null)).id = 'dledWrap';
+  const wrap = el('div'); wrap.id = 'dledWrap'; host.appendChild(wrap);
   loadDownloaded();
 }
 async function loadDownloaded() {
+  if (section !== 'searchdownload' || sdView !== 'downloaded') return;
   let d; try { d = await api('/api/downloaded'); } catch (e) { return; }
-  dledAll = d.works; drawDownloaded();
+  dledAll = d.works || [];
+  drawDownloaded();
 }
 function drawDownloaded() {
   const wrap = $('dledWrap'); if (!wrap) return;
-  let rows = dledAll.filter(r => (!dledState || r.state === dledState) && (!dledKw || (r.id + r.name + r.maker).toLowerCase().includes(dledKw.toLowerCase())));
-  const p = dledSort.prop;
-  rows = rows.slice().sort((a, b) => { const av = (a[p] || '').toLowerCase(), bv = (b[p] || '').toLowerCase(); return (av < bv ? -1 : av > bv ? 1 : 0) * (dledSort.asc ? 1 : -1); });
-  $('count').textContent = rows.length === dledAll.length ? `共 ${dledAll.length} 个作品` : `共 ${dledAll.length} 个作品，匹配 ${rows.length} 个`;
-  const cols = [['id', 'RJ号', ''], ['name', '作品名称', ''], ['maker', '社团', 'hide-sm'], ['type', '类型', 'hide-sm'], ['state', '状态', ''], ['downTime', '下载时间', 'hide-sm']];
-  const tbl = el('table', 'dt');
+  const kw = dledKw.toLowerCase();
+  let rows = dledAll.filter(w => (!dledState || w.state === dledState) &&
+    (!kw || `${w.id} ${w.name} ${w.maker}`.toLowerCase().includes(kw)));
+  if (dledSort) {
+    const { prop, dir } = dledSort, mul = dir === 'asc' ? 1 : -1;
+    rows = rows.slice().sort((a, b) => (a[prop] || '').localeCompare(b[prop] || '', undefined, { sensitivity: 'base' }) * mul);
+  }
+  $('count').textContent = rows.length === dledAll.length
+    ? `共 ${dledAll.length} 个作品` : `共 ${dledAll.length} 个作品，匹配 ${rows.length} 个`;
+  wrap.innerHTML = '';
+  if (!rows.length) { wrap.appendChild(el('div', 'empty', '没有内容')); return; }
+  const table = el('table', 'dt');
   const thead = el('tr');
-  cols.forEach(([prop, label, cls]) => { const th = el('th', cls, label + (dledSort.prop === prop ? (dledSort.asc ? ' ▲' : ' ▼') : '')); th.onclick = () => { if (dledSort.prop === prop) dledSort.asc = !dledSort.asc; else { dledSort.prop = prop; dledSort.asc = true; } drawDownloaded(); }; thead.appendChild(th); });
-  thead.appendChild(el('th', '', '')); tbl.appendChild(thead);
-  rows.forEach(r => {
-    const tr = el('tr');
-    tr.appendChild(el('td', '', r.id));
-    tr.appendChild(el('td', '', r.name));
-    tr.appendChild(el('td', 'hide-sm', r.maker));
-    tr.appendChild(el('td', 'hide-sm', r.type));
-    const stTd = el('td'); const pill = el('span', 'pill', r.state); pill.style.cssText = `color:${STATE_COLOR[r.state] || '#ccc'};border:1px solid ${STATE_COLOR[r.state] || '#555'}`; stTd.appendChild(pill); tr.appendChild(stTd);
-    tr.appendChild(el('td', 'hide-sm', r.downTime));
-    const actTd = el('td');
-    if (r.state === '已下载') { const mk = el('button', 'mini', '标记已品悦'); mk.onclick = async () => { await apiPost('/api/mark', { id: r.id }); loadDownloaded(); }; actTd.appendChild(mk); }
-    tr.appendChild(actTd);
-    tbl.appendChild(tr);
+  DLED_COLS.forEach(([prop, label]) => {
+    const arrow = dledSort && dledSort.prop === prop ? (dledSort.dir === 'asc' ? ' ▲' : ' ▼') : '';
+    const th = el('th', (prop === 'maker' || prop === 'type' || prop === 'downTime') ? 'hide-sm' : null, label + arrow);
+    th.onclick = () => { dledSort = { prop, dir: dledSort && dledSort.prop === prop && dledSort.dir === 'asc' ? 'desc' : 'asc' }; drawDownloaded(); };
+    thead.appendChild(th);
   });
-  wrap.innerHTML = ''; wrap.appendChild(rows.length ? tbl : el('div', 'empty', '没有内容'));
+  thead.appendChild(el('th', null, ''));
+  table.appendChild(thead);
+  rows.forEach(w => {
+    const tr = el('tr');
+    tr.appendChild(el('td', null, w.id));
+    tr.appendChild(el('td', null, w.name));
+    tr.appendChild(el('td', 'hide-sm', w.maker));
+    tr.appendChild(el('td', 'hide-sm', w.type));
+    const stTd = el('td'); const pill = el('span', 'pill', w.state);
+    pill.style.color = DLED_STATE_COLOR[w.state] || 'var(--muted)'; stTd.appendChild(pill); tr.appendChild(stTd);
+    tr.appendChild(el('td', 'hide-sm', w.downTime));
+    const actTd = el('td');
+    // 仅"已下载"状态可标记为已品悦（对齐 WPF 右键菜单）
+    if (w.state === '已下载') {
+      const mk = el('button', 'mini', '标记为已品悦');
+      mk.onclick = async () => { await apiPost('/api/mark', { id: w.id }); loadDownloaded(); };
+      actTd.appendChild(mk);
+    }
+    tr.appendChild(actTd);
+    table.appendChild(tr);
+  });
+  wrap.appendChild(table);
 }
 
 // ========== 设置 ==========
@@ -1188,12 +1400,8 @@ async function renderSettings() {
   f.append(el('label', null, '解压编码'), mkInput(d.encoding, v => write('encoding', 'encoding', v)));
   s.appendChild(f); host.appendChild(s);
 
-  // 媒体库（只读）
-  s = el('div', 'sec'); s.appendChild(el('h3', null, '媒体库'));
-  if (d.mediaLibs.length) d.mediaLibs.forEach(l => { const row = el('div', 'frm'); row.append(el('label', null, l.name), el('div', 'ro', l.folders.join('\n') || '（无文件夹）')); s.appendChild(row); });
-  else s.appendChild(el('div', 'ro', '尚未配置媒体库'));
-  s.appendChild(el('div', 'note', '媒体库文件夹的增删需在桌面端操作（需要本地文件夹选择器）。'));
-  host.appendChild(s);
+  // 媒体库（可管理：新建/删除、加/移除文件夹、扫描导入）
+  await renderMediaLibSection(host);
 
   // 外部访问（只读）
   s = el('div', 'sec'); s.appendChild(el('h3', null, '外部访问')); f = el('div', 'frm');
@@ -1203,6 +1411,75 @@ async function renderSettings() {
   s.appendChild(f);
   s.appendChild(el('div', 'note', '外部访问的开关 / 端口 / 密码请在桌面端修改（避免从外部改动后断开连接）。'));
   host.appendChild(s);
+}
+
+// ---------- 媒体库管理（设置页内）----------
+let _libScanPoll = null;
+async function renderMediaLibSection(host) {
+  const sec = el('div', 'sec'); sec.appendChild(el('h3', null, '媒体库'));
+  const bar = el('div', 'toolbar');
+  const addLibBtn = el('button', 'icon-btn', '＋ 新建媒体库');
+  const scanAllBtn = el('button', 'icon-btn', '↻ 扫描全部');
+  bar.append(addLibBtn, scanAllBtn); sec.appendChild(bar);
+  const status = el('div', 'note'); status.id = 'libScanStatus'; status.style.display = 'none'; sec.appendChild(status);
+  const list = el('div'); sec.appendChild(list);
+  sec.appendChild(el('div', 'note', '文件夹路径为运行本程序的电脑上的本地路径（如 D:\\ASMR）；添加后点"扫描"导入作品与元数据。删除媒体库不会删除本地文件、已导入记录保留。'));
+  host.appendChild(sec);
+
+  const refresh = async () => {
+    let d; try { d = await api('/api/medialibs'); } catch (e) { return; }
+    list.innerHTML = '';
+    if (!d.libs.length) { list.appendChild(el('div', 'ro', '尚未配置媒体库，点击"新建媒体库"创建。')); return; }
+    d.libs.forEach(l => list.appendChild(libCard(l, refresh)));
+  };
+  addLibBtn.onclick = async () => {
+    const name = ((await uiPrompt('媒体库名称：', '', '新建媒体库')) || '').trim();
+    if (!name) return;
+    const r = await apiPost('/api/lib/create', { name });
+    if (r.error) await uiAlert(r.error); else refresh();
+  };
+  scanAllBtn.onclick = async () => { await apiPost('/api/lib/scanall', {}); pollScan(); };
+  await refresh();
+  pollScan();   // 进入设置页即拉一次扫描状态（可能有后台扫描在进行）
+}
+function libCard(l, refresh) {
+  const card = el('div', 'libcard');
+  const head = el('div', 'lh');
+  head.append(el('span', 'nm', l.name), el('span', 'ct', `${l.folders.length} 个文件夹`));
+  const addF = el('button', 'mini', '添加文件夹');
+  const scan = el('button', 'mini', '扫描');
+  const rescan = el('button', 'mini', '重新扫描');
+  const del = el('button', 'mini danger', '删除');
+  head.append(addF, scan, rescan, del); card.appendChild(head);
+  (l.folders || []).forEach(f => {
+    const row = el('div', 'librow');
+    const rm = el('button', 'mini danger', '移除');
+    row.append(el('span', 'fp', f), rm); card.appendChild(row);
+    rm.onclick = async () => { await apiPost('/api/lib/removefolder', { name: l.name, folder: f }); refresh(); };
+  });
+  addF.onclick = async () => {
+    const folder = ((await uiPrompt('文件夹路径（本机绝对路径，如 D:\\ASMR）：', '', '添加文件夹')) || '').trim();
+    if (!folder) return;
+    const r = await apiPost('/api/lib/addfolder', { name: l.name, folder });
+    if (r.error) await uiAlert(r.error); else refresh();
+  };
+  scan.onclick = async () => { await apiPost('/api/lib/scan', { name: l.name, force: false }); pollScan(); };
+  rescan.onclick = async () => { if (await uiConfirm(`重新扫描"${l.name}"会强制重新抓取全部元数据，较慢。继续？`)) { await apiPost('/api/lib/scan', { name: l.name, force: true }); pollScan(); } };
+  del.onclick = async () => { if (await uiConfirm(`确定删除媒体库"${l.name}"吗？\n不会删除本地文件，已导入的作品记录保留。`, { danger: true })) { await apiPost('/api/lib/delete', { name: l.name }); refresh(); } };
+  return card;
+}
+// 扫描状态轮询：进行中时每 1.5s 刷新状态文本，结束或离开设置页即停
+function pollScan() {
+  const tick = async () => {
+    const box = $('libScanStatus');
+    if (!box || !document.body.contains(box)) { if (_libScanPoll) { clearInterval(_libScanPoll); _libScanPoll = null; } return; }
+    let s; try { s = await api('/api/lib/scanstatus'); } catch (e) { return; }
+    if (s.status) { box.style.display = ''; box.textContent = (s.scanning ? '⏳ ' : '✓ ') + s.status; }
+    if (!s.scanning && _libScanPoll) { clearInterval(_libScanPoll); _libScanPoll = null; }
+  };
+  if (_libScanPoll) clearInterval(_libScanPoll);
+  tick();
+  _libScanPoll = setInterval(tick, 1500);
 }
 
 // ========== 查看作品（文件树）==========
@@ -1499,7 +1776,7 @@ $('search').addEventListener('input', () => {
       else { searchGen++; render(); }
       return;
     }
-    if (['works', 'favorites', 'filter'].includes(v)) drawWorks(curItems);
+    if (['works', 'favorites', 'filter', 'genreworks'].includes(v)) drawWorks(curItems);
     else if (lastMap) drawGroups(curItems, lastMap, lastUnit);
   }, 200);
 });
@@ -1509,7 +1786,20 @@ async function boot() {
   applyLayout();
   buildTabs();
   try { const s = await fetch('/api/state').then(r => r.json()); if (s.needLogin) { showLogin(true); return; } } catch (e) {}
-  selectSection('medialib');
+  restoreFromHash();
+}
+// 按地址栏哈希恢复：叶子分区直接进入；卡片分区可深链接到具体层级（刷新/分享）
+function restoreFromHash() {
+  const p = parseHash();
+  if (!p) { selectSection('medialib'); return; }
+  if (!p.root) { selectSection(p.key); return; }
+  section = p.key; stopTimers(); closeVideo(); closeAudio(); closeDrawer();
+  buildTabs();
+  makerSort = 0; workSort = 0;
+  stack = p.stack.length ? p.stack : [{ view: SECTIONS.find(x => x.key === p.key).root, ctx: {} }];
+  $('search').hidden = false; $('search').value = '';
+  history.replaceState({ nav: true, depth: stack.length }, '', encodeHash());
+  render();
 }
 boot();
 </script>

@@ -23,7 +23,7 @@ function renderDownloadSection() {
   // debrid-link 使用量卡片：与按钮同一行、靠右
   const usage = el('div', 'usage-card'); usage.id = 'usage';
   usage.innerHTML = '<div class="ut" id="usageText">debrid-link 使用量 --</div><div class="bar"><i id="usageBar" style="width:0;background:#a78bfa"></i></div>';
-  bar.append(sb, startBtn, cd, ca, usage);
+  bar.append(sb, cd, ca, startBtn, usage);
   host.appendChild(bar);
   host.appendChild(el('div', null)).id = 'dlList';
   loadDownloads(); loadUsage();

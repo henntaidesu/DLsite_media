@@ -147,8 +147,18 @@ public class MakerWorkItem : INotifyPropertyChanged
     /// <summary>在库状态文本（下载中/已下载/已品悦），仅 InLib 时显示。</summary>
     public string StateText { get; init; } = "";
 
-    /// <summary>卡片不透明度：已在库 / 下载中 / 不喜欢（均无需 AS 搜索）的作品降到 0.45 以示区别。</summary>
-    public double CardOpacity => InLib || DownActive || Disliked ? 0.45 : 1.0;
+    /// <summary>卡片不透明度：已在库 / 下载中 / 不喜欢 / AS·无（均无需再 AS 搜索）的作品降到 0.45 以示区别。</summary>
+    public double CardOpacity => InLib || DownActive || Disliked || AsEmpty ? 0.45 : 1.0;
+
+    // AS·无：命中 7 天缓存或本次扫出无结果 → 卡片置灰，角标显示可再扫倒计时
+    private bool _asEmpty;
+    public bool AsEmpty
+    {
+        get => _asEmpty;
+        set { _asEmpty = value; OnPropertyChanged(); OnPropertyChanged(nameof(CardOpacity)); }
+    }
+    /// <summary>AS·无 缓存到期（可再次扫描）的时刻，用于倒计时显示。</summary>
+    public DateTime AsExpiry { get; set; }
 
     // 不喜欢：命中的作品跳过 AS 扫描、直接置灰，可随时取消
     private bool _disliked;
@@ -267,6 +277,8 @@ public partial class SearchPage : UserControl
 
     // 社团卡片与下载页状态同步：每秒把下载列表的聚合状态写回对应卡片角标
     private readonly DispatcherTimer _downSyncTimer = new() { Interval = TimeSpan.FromSeconds(1) };
+    // AS·无 倒计时：每秒刷新命中 7 天缓存作品卡片上的可再扫剩余时间
+    private readonly DispatcherTimer _asCdTimer = new() { Interval = TimeSpan.FromSeconds(1) };
 
     /// <summary>点击"← 下载列表"按钮时触发，由主窗口切回下载视图。</summary>
     public event Action? BackToDownloadRequested;
@@ -277,6 +289,7 @@ public partial class SearchPage : UserControl
         ResultList.ItemsSource = _results;
         MakerList.ItemsSource = _makerWorks;
         _downSyncTimer.Tick += (_, _) => SyncMakerDownloadStates();
+        _asCdTimer.Tick += (_, _) => TickAsCountdown();
         RetranslateUi();
         I18n.LanguageChanged += RetranslateUi;
     }
@@ -821,6 +834,12 @@ public partial class SearchPage : UserControl
                 if (generation != _makerGeneration)
                     return;
                 var item = _scanQueue.Dequeue();
+                // 7 天内已扫出"无结果"的作品直接判为 AS·无（置灰 + 倒计时），不再请求 AS
+                if (AsScanCache.HasFreshEmpty(item.WorkId))
+                {
+                    MarkAsEmpty(item);
+                    continue;
+                }
                 item.AsStatusText = I18n.Tr("扫描中…");
                 item.AsStatusBrush = (Brush)FindResource("CaptionBrush");
                 int count;
@@ -832,6 +851,7 @@ public partial class SearchPage : UserControl
                 {
                     count = -1;
                 }
+                AsScanCache.Store(item.WorkId, count);   // 结果与 UI 代际无关，完成即缓存
                 if (generation != _makerGeneration)
                     return;
                 if (count > 0)
@@ -841,8 +861,7 @@ public partial class SearchPage : UserControl
                 }
                 else if (count == 0)
                 {
-                    item.AsStatusText = I18n.Tr("AS · 无");
-                    item.AsStatusBrush = (Brush)FindResource("CaptionBrush");
+                    MarkAsEmpty(item);   // 扫出无结果 → 置灰 + 7 天倒计时
                 }
                 else
                 {
@@ -857,6 +876,47 @@ public partial class SearchPage : UserControl
         {
             _makerScanning = false;
         }
+    }
+
+    /// <summary>把作品标记为 AS·无：置灰、记录到期时刻，并显示/启动可再扫倒计时。</summary>
+    private void MarkAsEmpty(MakerWorkItem item)
+    {
+        item.AsExpiry = DateTime.Now.AddSeconds(AsScanCache.RemainSeconds(item.WorkId));
+        item.AsEmpty = true;
+        item.AsStatusBrush = (Brush)FindResource("CaptionBrush");
+        UpdateAsCountdown(item);
+        if (!_asCdTimer.IsEnabled)
+            _asCdTimer.Start();
+    }
+
+    /// <summary>每秒刷新所有 AS·无 卡片的倒计时；全部到期或已无此类卡片时停表。</summary>
+    private void TickAsCountdown()
+    {
+        var any = false;
+        foreach (var it in _makerWorks)
+            if (it.AsEmpty)
+            {
+                UpdateAsCountdown(it);
+                any = true;
+            }
+        if (!any)
+            _asCdTimer.Stop();
+    }
+
+    private static void UpdateAsCountdown(MakerWorkItem item)
+    {
+        var remain = item.AsExpiry - DateTime.Now;
+        item.AsStatusText = I18n.Tr("AS · 无") + " " + FormatRemain(remain);
+    }
+
+    /// <summary>倒计时格式：≥1 天显示"N天H时"，不足 1 天显示"HH:MM:SS"，到期显示"可重扫"。</summary>
+    private static string FormatRemain(TimeSpan t)
+    {
+        if (t.TotalSeconds <= 0)
+            return I18n.Tr("可重扫");
+        return t.TotalDays >= 1
+            ? $"{(int)t.TotalDays}天{t.Hours}时"
+            : $"{t.Hours:D2}:{t.Minutes:D2}:{t.Seconds:D2}";
     }
 
     private void MakerList_ScrollChanged(object sender, ScrollChangedEventArgs e)

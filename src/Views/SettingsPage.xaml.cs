@@ -37,6 +37,10 @@ public partial class SettingsPage : UserControl
         AutoUnzipCombo.Items.Add(I18n.Tr("关闭"));
         WebEnableCombo.Items.Add(I18n.Tr("开启"));
         WebEnableCombo.Items.Add(I18n.Tr("关闭"));
+        // 关闭按钮行为：索引 0=每次询问 / 1=最小化到托盘 / 2=退出程序
+        CloseActionCombo.Items.Add(I18n.Tr("每次询问"));
+        CloseActionCombo.Items.Add(I18n.Tr("最小化到托盘"));
+        CloseActionCombo.Items.Add(I18n.Tr("退出程序"));
         foreach (var level in new[] { "info", "error", "debug" })
             LogLevelCombo.Items.Add(level);
         foreach (var (_, name) in I18n.Languages)
@@ -145,6 +149,7 @@ public partial class SettingsPage : UserControl
         LanguageLabel.Text = I18n.Tr("语言");
         LogLevelLabel.Text = I18n.Tr("日志级别");
         EncodingLabel.Text = I18n.Tr("解压编码");
+        CloseActionLabel.Text = I18n.Tr("关闭按钮");
         WebGroup.Header = I18n.Tr("外部访问");
         WebEnableLabel.Text = I18n.Tr("外部访问");
         WebPortLabel.Text = I18n.Tr("端口");
@@ -159,6 +164,9 @@ public partial class SettingsPage : UserControl
         AutoUnzipCombo.Items[1] = I18n.Tr("关闭");
         WebEnableCombo.Items[0] = I18n.Tr("开启");
         WebEnableCombo.Items[1] = I18n.Tr("关闭");
+        CloseActionCombo.Items[0] = I18n.Tr("每次询问");
+        CloseActionCombo.Items[1] = I18n.Tr("最小化到托盘");
+        CloseActionCombo.Items[2] = I18n.Tr("退出程序");
         _loading = false;
         UpdateWebStatus();
     }
@@ -237,6 +245,12 @@ public partial class SettingsPage : UserControl
             _ => 0,
         };
         EncodingBox.Text = AppConfig.SysEncoding;
+        CloseActionCombo.SelectedIndex = AppConfig.CloseAction switch
+        {
+            "tray" => 1,
+            "exit" => 2,
+            _ => 0,
+        };
         var codes = I18n.Languages.Select(l => l.Code).ToList();
         var langIndex = codes.IndexOf(I18n.CurrentLanguage);
         LanguageCombo.SelectedIndex = langIndex >= 0 ? langIndex : 0;
@@ -438,6 +452,14 @@ public partial class SettingsPage : UserControl
         if (_loading)
             return;
         AppConfig.Write("encoding", "encoding", EncodingBox.Text.Trim());
+    }
+
+    private void CloseActionCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_loading || CloseActionCombo.SelectedIndex < 0)
+            return;
+        // 索引 0=每次询问("") / 1=最小化到托盘("tray") / 2=退出程序("exit")
+        AppConfig.CloseAction = new[] { "", "tray", "exit" }[CloseActionCombo.SelectedIndex];
     }
 
     // ---------- 外部访问 ----------

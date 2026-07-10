@@ -151,6 +151,12 @@ public static class Db
                         "time" text,
                         PRIMARY KEY ("work_id")
                     );
+                    CREATE TABLE IF NOT EXISTS "as_scan_cache" (
+                        "work_id" text NOT NULL,
+                        "count" integer,
+                        "time" text,
+                        PRIMARY KEY ("work_id")
+                    );
                     """;
                 cmd.ExecuteNonQuery();
             }

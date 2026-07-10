@@ -58,6 +58,8 @@ public static class WebServer
     private static readonly ConcurrentDictionary<string, DlWork?> SearchCache = new();
     // 已尝试补齐元数据（作品名等）的番号，避免下载页每秒轮询重复拉取 DL API
     private static readonly ConcurrentDictionary<string, byte> MetaBackfilled = new();
+    // 自动下载"搜索可用下载连接"串行闸：同一时间只解析一个作品，其余排队等待（占位行已入库，故排队中的作品仍显示在下载列表）
+    private static readonly SemaphoreSlim ResolveGate = new(1, 1);
 
     private static readonly Regex WorkIdRe = new(@"^(?:RJ|BJ|VJ)\d+$", RegexOptions.Compiled);
 
@@ -1224,6 +1226,13 @@ public static class WebServer
             WriteJson(stream, 400, new { error = "番号格式错误（RJ/BJ/VJ + 数字）" });
             return;
         }
+        // 7 天内已扫出"无结果"的作品直接返回 0，不再重复请求 AS（cached 标记供前端跳过限速间隔，remainSec 供倒计时）
+        var remain = AsScanCache.RemainSeconds(id);
+        if (remain > 0)
+        {
+            WriteJson(stream, 200, new { id, count = 0, cached = true, remainSec = remain });
+            return;
+        }
         int count;
         try
         {
@@ -1234,7 +1243,9 @@ public static class WebServer
             WriteJson(stream, 200, new { id, count = -1 });
             return;
         }
-        WriteJson(stream, 200, new { id, count });
+        AsScanCache.Store(id, count);
+        // 本次扫出无结果 → 返回新的倒计时（≈7 天）
+        WriteJson(stream, 200, new { id, count, remainSec = count == 0 ? AsScanCache.RemainSeconds(id) : 0 });
     }
 
     private static string TrimSnippet(string snippet) =>
@@ -1387,17 +1398,33 @@ public static class WebServer
             WriteJson(stream, 400, new { error = "番号格式错误（RJ/BJ/VJ + 数字）" });
             return;
         }
-        // 占位分卷：状态 '5'，url 留空；DownloadEngine 只领取 '0' 行，故不会被误下载
+        // 占位分卷：状态 '5'，url 用每行唯一的占位哨兵（download_list 以 url 为主键，若留空则同时
+        // 只能存在一条占位行——用户在某作品仍在搜索连接时再加别的作品会因主键冲突而被静默丢弃）。
+        // DownloadEngine 只领取 '0' 行，故占位哨兵不会被误当作直链下载；FileNameOf 会把哨兵显示为空名。
         var placeholder = Guid.NewGuid().ToString();
         Db.Execute(
             "INSERT INTO \"download_list\" (\"UUID\", \"work_id\", \"url\", \"status\", \"long\", \"delete\") " +
-            "VALUES (@uuid, @w, '', '5', '0', '1')",
-            ("@uuid", placeholder), ("@w", id));
+            "VALUES (@uuid, @w, @url, '5', '0', '1')",
+            ("@uuid", placeholder), ("@w", id), ("@url", PlaceholderUrl(placeholder)));
         RecordWork(id, SearchCache.GetValueOrDefault(id));
         if (folder.Length > 0)
             DownloadEngine.SetWorkTargetPath(id, folder, lib.Length > 0 ? lib : null);
         _ = EnsureWorkMetaAsync(id);   // 后台补齐作品名（自动下载未经搜索，works.work_name 可能为空）
-        _ = Task.Run(() => AutoResolveLinksAsync(id, placeholder));
+        // 串行排队解析：同一时间只搜索一个作品的下载连接；排队期间占位行('5')已在库，故仍显示在下载列表
+        _ = Task.Run(async () =>
+        {
+            await ResolveGate.WaitAsync();
+            try
+            {
+                if (!PlaceholderAlive(placeholder))
+                    return;   // 排队等待期间用户已删除该作品 → 不再解析
+                await AutoResolveLinksAsync(id, placeholder);
+            }
+            finally
+            {
+                ResolveGate.Release();
+            }
+        });
         WriteJson(stream, 200, new { ok = true });
     }
 
@@ -1407,9 +1434,16 @@ public static class WebServer
     {
         try
         {
+            // 7 天内已扫出"无结果"的作品：直接判为无可用连接，跳过 AS 搜索
+            if (AsScanCache.HasFreshEmpty(id))
+            {
+                Db.Execute("UPDATE \"download_list\" SET \"status\" = '6' WHERE \"UUID\" = @u AND \"status\" = '5'", ("@u", placeholder));
+                return;
+            }
             List<string>? best = null;
             var bestRatio = 0.0;
             var posts = await AnimeSharing.SearchWorkAsync(id);
+            AsScanCache.Store(id, posts.Count);
             foreach (var post in posts)
             {
                 if (!PlaceholderAlive(placeholder))
@@ -1646,8 +1680,14 @@ public static class WebServer
         _ => $"{speed:F0} B/s",
     };
 
+    // 自动下载占位行的哨兵 url（每行唯一，避免 url 主键冲突）；不是真实直链，展示时按空名处理。
+    private const string PlaceholderUrlPrefix = "placeholder://";
+    private static string PlaceholderUrl(string uuid) => PlaceholderUrlPrefix + uuid;
+
     private static string FileNameOf(string url)
     {
+        if (url.StartsWith(PlaceholderUrlPrefix, StringComparison.Ordinal))
+            return "";   // 占位哨兵：无真实文件名，展示为空（分组状态已说明"搜索/无可用下载连接"）
         var raw = url.TrimEnd('/').Split('/')[^1].Split('?')[0];
         // 直链文件名常为 URL 百分号编码（asmr.one 的日文名尤其如此），解码为明文显示（对齐 WPF）
         try { return Uri.UnescapeDataString(raw); }

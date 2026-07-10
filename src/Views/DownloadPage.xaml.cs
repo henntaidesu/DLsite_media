@@ -157,6 +157,8 @@ public partial class DownloadPage : UserControl
         ["1"] = ("已完成", "#4ade80"),
         ["2"] = ("解析失败", "#f87171"),
         ["4"] = ("已暂停", "#9aa4b2"),
+        ["5"] = ("搜索可用下载连接", "#facc15"),
+        ["6"] = ("无可用下载连接", "#f87171"),
     };
 
     private readonly ObservableCollection<DownloadGroupItem> _groups = [];
@@ -353,6 +355,8 @@ public partial class DownloadPage : UserControl
         if (statuses.Contains("3"))
             return (I18n.Format(I18n.Tr("下载中 {done}/{total}"),
                 ("done", done), ("total", statuses.Count)), "#60a5fa");
+        if (statuses.Contains("5"))
+            return (I18n.Tr("搜索可用下载连接"), "#facc15");
         if (statuses.Contains("0"))
             return (I18n.Format(I18n.Tr("等待下载 {done}/{total}"),
                 ("done", done), ("total", statuses.Count)), "#facc15");
@@ -362,6 +366,8 @@ public partial class DownloadPage : UserControl
         if (statuses.Contains("2"))
             return (I18n.Format(I18n.Tr("{n} 个解析失败"),
                 ("n", statuses.Count(s => s == "2"))), "#f87171");
+        if (statuses.Contains("6"))
+            return (I18n.Tr("无可用下载连接"), "#f87171");
         // 全部分卷已下载完成：解压前/解压中/移动中显示对应状态
         if (DownloadEngine.UnzipProgress.TryGetValue(workId, out var unzip))
         {

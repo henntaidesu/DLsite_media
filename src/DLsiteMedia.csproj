@@ -11,8 +11,10 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- 外部访问网页：作为嵌入资源打包，由 WebAssets 读取 -->
+    <!-- 外部访问网页：外壳 + 拆分后的静态资源（CSS / 各页面 JS 模块），均作为嵌入资源打包，由 WebAssets 读取 -->
     <EmbeddedResource Include="Web\index.html" />
+    <EmbeddedResource Include="Web\app.css" />
+    <EmbeddedResource Include="Web\js\*.js" />
   </ItemGroup>
 
   <ItemGroup>

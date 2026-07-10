@@ -56,6 +56,8 @@ public static class WebServer
 
     // 搜索页：番号 → DL API 作品数据缓存，供加入下载时写 works 表（避免重复请求）。
     private static readonly ConcurrentDictionary<string, DlWork?> SearchCache = new();
+    // 已尝试补齐元数据（作品名等）的番号，避免下载页每秒轮询重复拉取 DL API
+    private static readonly ConcurrentDictionary<string, byte> MetaBackfilled = new();
 
     private static readonly Regex WorkIdRe = new(@"^(?:RJ|BJ|VJ)\d+$", RegexOptions.Compiled);
 
@@ -67,6 +69,8 @@ public static class WebServer
         ["1"] = ("已完成", "#4ade80"),
         ["2"] = ("解析失败", "#f87171"),
         ["4"] = ("已暂停", "#9aa4b2"),
+        ["5"] = ("搜索可用下载连接", "#facc15"),
+        ["6"] = ("无可用下载连接", "#f87171"),
     };
 
     // 设置页可写入的 section/key 白名单（web_server 段不允许从网页改，避免自我锁死）。
@@ -270,10 +274,21 @@ public static class WebServer
 
     private static async Task RouteAsync(NetworkStream stream, Request req)
     {
-        var path = req.Path;
-        if (path is "/" or "/index.html")
+        // 防 DNS 重绑定：仅允许通过 IP 直连或 localhost 访问（本程序对外只用 IP 地址宣告）。
+        // 用域名访问一律拒绝——恶意网站借 DNS 重绑定把自身域名指到本机 LAN IP 时会被挡在此处。
+        if (!HostAllowed(req))
         {
-            WriteBytes(stream, 200, "OK", "text/html; charset=utf-8", WebAssets.IndexHtml());
+            WriteJson(stream, 403, new { error = "forbidden host" });
+            return;
+        }
+
+        var path = req.Path;
+        if (path == "/")
+            path = "/index.html";
+        // 静态资源（外壳 / 样式 / 各页面 JS 模块）在鉴权前放行：登录页本身要靠这些 CSS/JS 才能渲染
+        if (WebAssets.TryGet(path, out var assetBytes, out var assetType))
+        {
+            WriteBytes(stream, 200, "OK", assetType, assetBytes);
             return;
         }
         if (path == "/api/state")
@@ -324,6 +339,7 @@ public static class WebServer
                 case "/api/checkhost": await ApiCheckHostAsync(stream, req); break;
                 case "/api/downtargets": ApiDownTargets(stream); break;
                 case "/api/enqueue": ApiEnqueue(stream, req); break;
+                case "/api/autodownload": ApiAutoDownload(stream, req); break;
                 // 下载 / 已下载
                 case "/api/downloads": ApiDownloads(stream); break;
                 case "/api/usage": await ApiUsageAsync(stream); break;
@@ -369,13 +385,27 @@ public static class WebServer
         {
             var kv = part.Trim();
             if (kv.StartsWith("dasd_auth=", StringComparison.Ordinal))
-                return string.Equals(kv[10..], _expectedToken, StringComparison.Ordinal);
+                return TokensEqual(kv[10..], _expectedToken);
         }
         return false;
     }
 
+    // 登录暴力破解限流：全局共享一个密码，故失败次数按整体计。达到阈值即锁定一个窗口。
+    private const int MaxLoginFails = 10;
+    private static readonly TimeSpan LockoutWindow = TimeSpan.FromMinutes(1);
+    private static int _loginFails;
+    private static DateTime _lockoutUntil = DateTime.MinValue;
+
     private static void HandleLogin(NetworkStream stream, Request req)
     {
+        lock (Sync)
+        {
+            if (DateTime.UtcNow < _lockoutUntil)
+            {
+                WriteJson(stream, 429, new { ok = false, error = "尝试过于频繁，请稍后再试" });
+                return;
+            }
+        }
         var password = "";
         try
         {
@@ -387,16 +417,103 @@ public static class WebServer
         {
             password = "";
         }
-        if (!_authRequired || Sha256Hex(password) == _expectedToken)
+        if (!_authRequired || TokensEqual(Sha256Hex(password), _expectedToken))
         {
+            lock (Sync) { _loginFails = 0; }
             // 令牌写入 Cookie（HttpOnly，1 天）
             WriteJson(stream, 200, new { ok = true },
                 ("Set-Cookie", $"dasd_auth={_expectedToken}; Path=/; Max-Age=86400; HttpOnly; SameSite=Lax"));
         }
         else
         {
+            lock (Sync)
+            {
+                if (++_loginFails >= MaxLoginFails)
+                {
+                    _lockoutUntil = DateTime.UtcNow + LockoutWindow;
+                    _loginFails = 0;
+                }
+            }
             WriteJson(stream, 401, new { ok = false });
         }
+    }
+
+    /// <summary>恒定时间比较两个令牌/哈希字符串，避免通过响应时间侧信道逐字符猜测。</summary>
+    private static bool TokensEqual(string a, string b) =>
+        CryptographicOperations.FixedTimeEquals(Encoding.ASCII.GetBytes(a), Encoding.ASCII.GetBytes(b));
+
+    // ---------- 安全：Host 校验与 SSRF 目标过滤 ----------
+
+    /// <summary>仅允许 IP 直连或 localhost 访问，用域名访问一律拒绝（防 DNS 重绑定）。</summary>
+    private static bool HostAllowed(Request req)
+    {
+        if (!req.Headers.TryGetValue("Host", out var host) || host.Length == 0)
+            return false;
+        var hostname = host;
+        if (hostname.StartsWith('['))   // IPv6 字面量形如 [::1]:8080
+        {
+            var end = hostname.IndexOf(']');
+            if (end > 0) hostname = hostname[1..end];
+        }
+        else
+        {
+            var colon = hostname.LastIndexOf(':');
+            if (colon >= 0) hostname = hostname[..colon];
+        }
+        if (hostname.Equals("localhost", StringComparison.OrdinalIgnoreCase))
+            return true;
+        return IPAddress.TryParse(hostname, out _);
+    }
+
+    /// <summary>SSRF 防护：目标必须是 http(s) 且解析后的 IP 不落在环回/私有/链路本地网段，
+    /// 否则拒绝——避免把本服务当作探测内网或读取云元数据端点的跳板。</summary>
+    private static bool IsSafeFetchUrl(string url)
+    {
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) ||
+            (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
+            return false;
+        try
+        {
+            IPAddress[] addrs = IPAddress.TryParse(uri.Host, out var direct)
+                ? [direct]
+                : Dns.GetHostAddresses(uri.DnsSafeHost);
+            if (addrs.Length == 0)
+                return false;
+            foreach (var ip in addrs)
+                if (IsPrivateOrLocal(ip))
+                    return false;
+            return true;
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
+    private static bool IsPrivateOrLocal(IPAddress ip)
+    {
+        if (IPAddress.IsLoopback(ip) || ip.Equals(IPAddress.Any) || ip.Equals(IPAddress.IPv6Any))
+            return true;
+        if (ip.AddressFamily == AddressFamily.InterNetwork)
+        {
+            var b = ip.GetAddressBytes();
+            return b[0] switch
+            {
+                0 or 10 or 127 => true,                     // 0/8、10/8、127/8
+                169 => b[1] == 254,                         // 169.254/16 链路本地
+                172 => b[1] is >= 16 and <= 31,             // 172.16/12
+                192 => b[1] == 168,                         // 192.168/16
+                100 => b[1] is >= 64 and <= 127,            // 100.64/10 运营商级 NAT
+                _ => false,
+            };
+        }
+        if (ip.AddressFamily == AddressFamily.InterNetworkV6)
+        {
+            if (ip.IsIPv4MappedToIPv6)
+                return IsPrivateOrLocal(ip.MapToIPv4());
+            return ip.IsIPv6LinkLocal || ip.IsIPv6SiteLocal || ip.IsIPv6UniqueLocal;
+        }
+        return true;   // 未知地址族一律视为不安全
     }
 
     // ---------- API：卡片层级 ----------
@@ -438,12 +555,18 @@ public static class WebServer
                 "WHERE \"state\" = '已品悦' AND \"work_type\" = @t " +
                 "GROUP BY \"maker_name\" " + order.Replace("{p}", ""),
                 ("@t", type));
-        else
+        else if (!string.IsNullOrEmpty(lib))
             rows = Db.Select(
                 "SELECT \"maker_name\", COUNT(*) FROM \"works\" " +
                 "WHERE \"state\" = '已品悦' AND \"library\" = @lib " +
                 "GROUP BY \"maker_name\" " + order.Replace("{p}", ""),
-                ("@lib", lib ?? ""));
+                ("@lib", lib));
+        else
+            // 顶级"作品社团"分区：不限媒体库，聚合全部社团
+            rows = Db.Select(
+                "SELECT \"maker_name\", COUNT(*) FROM \"works\" " +
+                "WHERE \"state\" = '已品悦' " +
+                "GROUP BY \"maker_name\" " + order.Replace("{p}", ""));
         var makers = (rows ?? []).Select(r => new
         {
             maker = r[0] as string ?? "",
@@ -478,12 +601,19 @@ public static class WebServer
                 "FROM \"works\" WHERE \"state\" = '已品悦' AND \"work_type\" = @t AND " + makerCond.Replace("{p}", "") + " " +
                 order.Replace("{p}", ""),
                 ("@t", type), ("@maker", maker));
-        else
+        else if (!string.IsNullOrEmpty(lib))
             rows = Db.Select(
                 "SELECT \"work_id\", \"work_name\", \"maker_name\", \"work_type\", \"age_category\", \"cover\" " +
                 "FROM \"works\" WHERE \"state\" = '已品悦' AND \"library\" = @lib AND " + makerCond.Replace("{p}", "") + " " +
                 order.Replace("{p}", ""),
-                ("@lib", lib ?? ""), ("@maker", maker));
+                ("@lib", lib), ("@maker", maker));
+        else
+            // 顶级"作品社团"分区：不限媒体库，仅按社团过滤
+            rows = Db.Select(
+                "SELECT \"work_id\", \"work_name\", \"maker_name\", \"work_type\", \"age_category\", \"cover\" " +
+                "FROM \"works\" WHERE \"state\" = '已品悦' AND " + makerCond.Replace("{p}", "") + " " +
+                order.Replace("{p}", ""),
+                ("@maker", maker));
         WriteJson(stream, 200, new { works = WorksJson(rows) });
     }
 
@@ -1054,8 +1184,7 @@ public static class WebServer
     private static async Task ApiThumbAsync(NetworkStream stream, Request req)
     {
         var url = req.Query.GetValueOrDefault("url") ?? "";
-        if (!url.StartsWith("http://", StringComparison.OrdinalIgnoreCase) &&
-            !url.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+        if (!IsSafeFetchUrl(url))
         {
             WriteBytes(stream, 400, "Bad Request", "text/plain", []);
             return;
@@ -1175,6 +1304,140 @@ public static class WebServer
         WriteJson(stream, 200, new { ok = true });
     }
 
+    /// <summary>自动下载：立即以「搜索可用下载连接」('5') 占位入队，后台异步挑选最优源。
+    /// 命中则占位行转正常下载分卷；全无可用则占位行转「无可用下载连接」('6')。</summary>
+    private static void ApiAutoDownload(NetworkStream stream, Request req)
+    {
+        string id = "", lib = "", folder = "";
+        try
+        {
+            using var doc = JsonDocument.Parse(Encoding.UTF8.GetString(req.Body));
+            var root = doc.RootElement;
+            id = (root.TryGetProperty("id", out var i) ? i.GetString() ?? "" : "").ToUpperInvariant();
+            lib = root.TryGetProperty("lib", out var l) ? l.GetString() ?? "" : "";
+            folder = root.TryGetProperty("folder", out var f) ? f.GetString() ?? "" : "";
+        }
+        catch (Exception)
+        {
+            // 解析失败按非法请求处理
+        }
+        if (!WorkIdRe.IsMatch(id))
+        {
+            WriteJson(stream, 400, new { error = "番号格式错误（RJ/BJ/VJ + 数字）" });
+            return;
+        }
+        // 占位分卷：状态 '5'，url 留空；DownloadEngine 只领取 '0' 行，故不会被误下载
+        var placeholder = Guid.NewGuid().ToString();
+        Db.Execute(
+            "INSERT INTO \"download_list\" (\"UUID\", \"work_id\", \"url\", \"status\", \"long\", \"delete\") " +
+            "VALUES (@uuid, @w, '', '5', '0', '1')",
+            ("@uuid", placeholder), ("@w", id));
+        RecordWork(id, SearchCache.GetValueOrDefault(id));
+        if (folder.Length > 0)
+            DownloadEngine.SetWorkTargetPath(id, folder, lib.Length > 0 ? lib : null);
+        _ = EnsureWorkMetaAsync(id);   // 后台补齐作品名（自动下载未经搜索，works.work_name 可能为空）
+        _ = Task.Run(() => AutoResolveLinksAsync(id, placeholder));
+        WriteJson(stream, 200, new { ok = true });
+    }
+
+    /// <summary>后台逐帖抓取网盘链接并检测有效性，选出「最优」源（首个完整有效；否则有效比例最高者）。
+    /// 选中即把占位行替换为真实下载分卷并启动引擎；全程未命中则把占位行标记为「无可用下载连接」。</summary>
+    private static async Task AutoResolveLinksAsync(string id, string placeholder)
+    {
+        try
+        {
+            List<string>? best = null;
+            var bestRatio = 0.0;
+            var posts = await AnimeSharing.SearchWorkAsync(id);
+            foreach (var post in posts)
+            {
+                if (!PlaceholderAlive(placeholder))
+                    return;   // 占位行已被用户删除 → 中止
+                List<string> urls;
+                try { (urls, _) = await AnimeSharing.GetWorkDownUrlsAsync(post.Url); }
+                catch (Exception) { continue; }
+                if (urls.Count == 0)
+                    continue;
+                // 按网盘域名分组（同一贴内可能多个网盘）
+                var groups = new Dictionary<string, List<string>>();
+                foreach (var u in urls)
+                {
+                    var host = HostOf(u);
+                    if (!groups.TryGetValue(host, out var list))
+                        groups[host] = list = [];
+                    list.Add(u);
+                }
+                using var client = LinkChecker.MakeClient();
+                foreach (var g in groups.Values)
+                {
+                    var valid = 0;
+                    foreach (var u in g)
+                        if (await LinkChecker.CheckUrlAsync(u, client))
+                            valid++;
+                    if (valid == g.Count) { best = g; bestRatio = 1; break; }   // 完整有效即选定
+                    if (valid > 0)
+                    {
+                        var ratio = (double)valid / g.Count;
+                        if (ratio > bestRatio) { best = g; bestRatio = ratio; }
+                    }
+                }
+                if (best != null && bestRatio >= 1)
+                    break;   // 已找到完整有效源，不再扫描后续帖子
+            }
+            if (!PlaceholderAlive(placeholder))
+                return;
+            if (best == null || best.Count == 0)
+            {
+                Db.Execute("UPDATE \"download_list\" SET \"status\" = '6' WHERE \"UUID\" = @u", ("@u", placeholder));
+                return;
+            }
+            // 命中：占位行换成真实分卷（状态 '0'），启动引擎开始下载
+            Db.Execute("DELETE FROM \"download_list\" WHERE \"UUID\" = @u", ("@u", placeholder));
+            foreach (var downUrl in best)
+                Db.Execute(
+                    "INSERT OR REPLACE INTO \"download_list\" (\"UUID\", \"work_id\", \"url\", \"status\", \"long\", \"delete\") " +
+                    "VALUES (@uuid, @w, @url, '0', '0', '1')",
+                    ("@uuid", Guid.NewGuid().ToString()), ("@w", id), ("@url", downUrl));
+            DownloadEngine.Start();
+        }
+        catch (Exception e)
+        {
+            Logger.Error($"{id} 自动下载解析失败: {e.Message}");
+            Db.Execute("UPDATE \"download_list\" SET \"status\" = '6' WHERE \"UUID\" = @u AND \"status\" = '5'", ("@u", placeholder));
+        }
+    }
+
+    /// <summary>占位分卷是否仍存在且处于「搜索中」('5')——用户删除后后台解析即应停止。</summary>
+    private static bool PlaceholderAlive(string placeholder)
+    {
+        var r = Db.Select("SELECT 1 FROM \"download_list\" WHERE \"UUID\" = @u AND \"status\" = '5'", ("@u", placeholder));
+        return r is { Count: > 0 };
+    }
+
+    /// <summary>补齐 works 行的作品名等元数据（仅在为空时写入，避免覆盖已刮削的数据、不触碰目标库/状态）。
+    /// 自动下载入队时未经作品搜索，works.work_name 常为空 → 下载页会退显番号，此处按番号拉取 DL API 补上。</summary>
+    private static async Task EnsureWorkMetaAsync(string id)
+    {
+        if (!MetaBackfilled.TryAdd(id, 0))
+            return;   // 已尝试过则跳过（去重，防轮询重复拉取）
+        try
+        {
+            var work = SearchCache.GetValueOrDefault(id) ?? await DlsiteApi.GetWorkDataAsync(id);
+            if (work == null || string.IsNullOrEmpty(work.WorkName))
+                return;   // 确实查不到该作品数据 → 保留去重标记，不再重试（避免每秒轮询空拉）
+            SearchCache[id] = work;
+            Db.Execute(
+                "UPDATE \"works\" SET \"work_name\" = @n, \"maker_id\" = @mi, \"maker_name\" = @mn, \"work_type\" = @t " +
+                "WHERE \"work_id\" = @w AND (\"work_name\" IS NULL OR \"work_name\" = '')",
+                ("@w", id), ("@n", work.WorkName), ("@mi", work.MakerId ?? ""),
+                ("@mn", work.MakerName ?? ""), ("@t", work.WorkType ?? ""));
+        }
+        catch (Exception)
+        {
+            MetaBackfilled.TryRemove(id, out _);
+        }
+    }
+
     /// <summary>把 DL API 作品数据写入 works 表（镜像 SearchPage.RecordWork）。</summary>
     private static void RecordWork(string id, DlWork? work)
     {
@@ -1214,6 +1477,22 @@ public static class WebServer
             list.Add((row[0] as string ?? "", row[2] as string ?? "",
                 row[3] as string ?? "", row[4]?.ToString() ?? "", row[5] as string, row[6] as string));
         }
+        // 下载列表内番号对应的作品名（下载页以作品名代替番号显示；仅查列表内的番号，避免全表扫描）
+        var nameMap = new Dictionary<string, string>();
+        var ids = order.Where(w => w.Length > 0).ToList();
+        if (ids.Count > 0)
+        {
+            var pars = ids.Select((v, idx) => ($"@w{idx}", (object?)v)).ToArray();
+            var inClause = string.Join(",", ids.Select((_, idx) => $"@w{idx}"));
+            var nameRows = Db.Select(
+                $"SELECT \"work_id\", \"work_name\" FROM \"works\" WHERE \"work_id\" IN ({inClause})", pars);
+            foreach (var nr in nameRows ?? [])
+                nameMap[nr[0] as string ?? ""] = nr[1] as string ?? "";
+            // 仍缺作品名的番号（多为自动下载入队、尚未刮削元数据）后台补齐，下一次轮询即显示作品名
+            foreach (var wid in ids)
+                if (string.IsNullOrEmpty(nameMap.GetValueOrDefault(wid)))
+                    _ = EnsureWorkMetaAsync(wid);
+        }
         var groups = order.Select(workId =>
         {
             var items = grouped[workId];
@@ -1246,7 +1525,8 @@ public static class WebServer
                 ? unzip.Pct : (double)totalPct / Math.Max(1, items.Count);
             return new
             {
-                id = workId, pct = (int)groupPct, statusText = aggText, color = aggColor,
+                id = workId, name = nameMap.GetValueOrDefault(workId, ""),
+                pct = (int)groupPct, statusText = aggText, color = aggColor,
                 speed = totalSpeed > 0 ? FormatSpeed(totalSpeed) : "",
                 canReparse = statuses.Contains("2") && workId.Length > 0,
                 // 有下载中/等待分卷可"停止"；有已暂停分卷可"下载"（继续）；非空番号始终可"删除"
@@ -1268,12 +1548,16 @@ public static class WebServer
         var done = statuses.Count(s => s == "1");
         if (statuses.Contains("3"))
             return ($"下载中 {done}/{statuses.Count}", "#60a5fa");
+        if (statuses.Contains("5"))
+            return ("搜索可用下载连接", "#facc15");
         if (statuses.Contains("0"))
             return ($"等待下载 {done}/{statuses.Count}", "#facc15");
         if (statuses.Contains("4"))
             return ($"已暂停 {done}/{statuses.Count}", "#9aa4b2");
         if (statuses.Contains("2"))
             return ($"{statuses.Count(s => s == "2")} 个解析失败", "#f87171");
+        if (statuses.Contains("6"))
+            return ("无可用下载连接", "#f87171");
         if (DownloadEngine.UnzipProgress.TryGetValue(workId, out var unzip))
         {
             if (unzip.State == "pending") return ("待解压", "#facc15");
@@ -1564,7 +1848,8 @@ public static class WebServer
             autoDownload = AppConfig.AutoDownload,
             autoUnzip = AppConfig.AutoUnzip,
             proxy = new { open = proxyOpen == "True", host = proxyHost, port = proxyPort, type = proxyType },
-            debridKey = AppConfig.DebridApiKey,
+            // 敏感值不回传明文，仅告知是否已设置（编辑时留空表示不修改）
+            debridKeySet = AppConfig.DebridApiKey.Length > 0,
             downProc = AppConfig.DownloadProcesses,
             minSpeed = AppConfig.MinSpeedKb,
             speedLimit = AppConfig.SpeedLimitKb,
@@ -1573,7 +1858,7 @@ public static class WebServer
             logLevel = AppConfig.Read("loglevel", "level", "info"),
             encoding = AppConfig.SysEncoding,
             mediaLibs = libs,                       // 只读：文件夹管理需桌面端原生选择器
-            web = new { enabled = AppConfig.WebEnabled, port = AppConfig.WebPort, password = AppConfig.WebPassword },
+            web = new { enabled = AppConfig.WebEnabled, port = AppConfig.WebPort, password = AppConfig.WebPassword.Length > 0 },
         });
     }
 
@@ -1840,8 +2125,8 @@ public static class WebServer
 
     private static string StatusText(int status) => status switch
     {
-        200 => "OK", 400 => "Bad Request", 401 => "Unauthorized",
-        404 => "Not Found", 500 => "Internal Server Error", _ => "OK",
+        200 => "OK", 400 => "Bad Request", 401 => "Unauthorized", 403 => "Forbidden",
+        404 => "Not Found", 429 => "Too Many Requests", 500 => "Internal Server Error", _ => "OK",
     };
 
     // ---------- 工具 ----------

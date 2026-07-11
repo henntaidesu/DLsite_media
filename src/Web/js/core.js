@@ -141,6 +141,7 @@ function stopTimers() { if (pollTimer) clearInterval(pollTimer); if (usageTimer)
 
 function selectSection(key) {
   section = key; stopTimers(); closeVideo(); closeAudio(); closeDrawer();
+  if (key === 'searchdownload') sdView = 'download';   // 进入分区先归位到下载视图，再写基线历史（encodeHash 依赖 sdView）
   const s = SECTIONS.find(x => x.key === key);
   buildTabs();
   $('search').hidden = !s.root;
@@ -155,7 +156,7 @@ function selectSection(key) {
   // 反映到地址栏；切换分区重置历史基线（不累积层级），但 URL 可见当前分区
   history.replaceState({ nav: true, depth: s.root ? 1 : 0 }, '', encodeHash());
   if (s.root) render();
-  else if (key === 'searchdownload') { sdView = 'download'; renderSearchDownload(); }
+  else if (key === 'searchdownload') renderSearchDownload();
   else if (key === 'settings') renderSettings();
 }
 
@@ -164,7 +165,8 @@ function selectSection(key) {
 // 内存 stack 仍是渲染与滚动恢复的主数据源；哈希仅作 URL 呈现与新开页面时的恢复。
 function encodeHash() {
   const s = SECTIONS.find(x => x.key === section);
-  if (!s || !s.root) return '#/' + section;             // 叶子分区（下载/搜索/设置）
+  if (section === 'searchdownload') return encodeSdHash();   // 下载搜索有三视图，走独立编码
+  if (!s || !s.root) return '#/' + section;             // 其它叶子分区（设置）
   const segs = stack.slice(1).map(e => {
     const ctx = { ...e.ctx }; delete ctx.nodes;          // nodes 为运行时文件树缓存，过大不入 URL
     const c = Object.keys(ctx).length ? '~' + encodeURIComponent(JSON.stringify(ctx)) : '';
@@ -172,12 +174,53 @@ function encodeHash() {
   });
   return '#/' + s.key + (segs.length ? '/' + segs.join('/') : '');
 }
+// 下载搜索三视图（下载/搜索/已下载）纳入地址栏路由：搜索视图带上查询词，可刷新/分享/前进后退恢复。
+// 形如 #/searchdownload（下载）、#/searchdownload/search~RJ123456（搜索）、#/searchdownload/downloaded（已下载）。
+function encodeSdHash() {
+  if (sdView === 'search') {
+    const q = ($('sId') && $('sId').value.trim()) || '';
+    return '#/searchdownload/search' + (q ? '~' + encodeURIComponent(q) : '');
+  }
+  if (sdView === 'downloaded') return '#/searchdownload/downloaded';
+  return '#/searchdownload';
+}
+// 子视图切换：作为可回退的路由层级压入历史并反映到地址栏（对齐卡片区 pushView）
+function navSd(view) {
+  sdView = view;
+  history.pushState({ nav: true, sd: view }, '', encodeSdHash());
+  renderSearchDownload();
+}
+// 搜索视图内输入查询后刷新地址栏（只 replace，不为每次查询累积历史层级）
+function syncSdHash() {
+  if (section === 'searchdownload' && sdView === 'search')
+    history.replaceState({ nav: true, sd: 'search' }, '', encodeSdHash());
+}
+// 前进/后退（popstate）落在下载搜索分区时，按地址栏恢复子视图；搜索视图带查询词则复跑一次
+function syncSdFromHash() {
+  const p = parseHash();
+  const sd = (p && p.key === 'searchdownload') ? p.sd : 'download';
+  if (sd === sdView) return;
+  sdView = sd;
+  renderSearchDownload();
+  if (sd === 'search' && p && p.query) { const inp = $('sId'); if (inp) { inp.value = p.query; runSearch(); } }
+}
 function parseHash() {
   const raw = (location.hash || '').replace(/^#\/?/, '');
   if (!raw) return null;
   const parts = raw.split('/').filter(Boolean);
   const s = SECTIONS.find(x => x.key === parts[0]);
   if (!s) return null;
+  if (s.key === 'searchdownload') {
+    // parts[1]：search | downloaded（缺省 download）；search 可携 ~查询词
+    let sd = 'download', query = '';
+    if (parts[1]) {
+      const t = parts[1].indexOf('~');
+      sd = t < 0 ? parts[1] : parts[1].slice(0, t);
+      if (t >= 0) { try { query = decodeURIComponent(parts[1].slice(t + 1)); } catch (e) { } }
+    }
+    if (!['download', 'search', 'downloaded'].includes(sd)) sd = 'download';
+    return { key: s.key, root: false, sd, query };
+  }
   const stk = s.root ? [{ view: s.root, ctx: {} }] : [];
   for (let i = 1; i < parts.length; i++) {
     const t = parts[i].indexOf('~');
@@ -206,6 +249,7 @@ async function popView() {
   return true;
 }
 window.addEventListener('popstate', () => {
+  if (section === 'searchdownload') { syncSdFromHash(); return; }
   const s = SECTIONS.find(x => x.key === section);
   if (s && s.root && stack.length > 1) popView();
 });

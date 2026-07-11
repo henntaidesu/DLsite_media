@@ -275,6 +275,12 @@ public partial class SearchPage : UserControl
     private readonly Queue<MakerWorkItem> _scanQueue = new();
     private bool _makerScanning;
 
+    // 自动下载（社团/目录作品网格）：开启后 AS 扫描命中即自动检测网盘链接并加入下载，
+    // 无需逐个点开。开启时弹窗选定一次媒体库，本次开启期间所有自动下载都进该库。
+    private bool _autoDownload;
+    private string? _autoDownFolder;
+    private string? _autoDownLib;
+
     // 社团卡片与下载页状态同步：每秒把下载列表的聚合状态写回对应卡片角标
     private readonly DispatcherTimer _downSyncTimer = new() { Interval = TimeSpan.FromSeconds(1) };
     // AS·无 倒计时：每秒刷新命中 7 天缓存作品卡片上的可再扫剩余时间
@@ -301,6 +307,7 @@ public partial class SearchPage : UserControl
         SearchButton.Content = I18n.Tr("查询");
         BackButton.Content = I18n.Tr("← 返回社团作品");
         LoadingText.Text = I18n.Tr("正在查询…");
+        AutoDownloadButton.Content = _autoDownload ? I18n.Tr("自动下载：开") : I18n.Tr("自动下载：关");
     }
 
     /// <summary>由下载页"重新搜索"触发：填入番号并自动搜索。</summary>
@@ -336,6 +343,8 @@ public partial class SearchPage : UserControl
         BackButton.Content = _catalogUrl != null ? I18n.Tr("← 返回作品列表") : I18n.Tr("← 返回社团作品");
         // 仅当当前作品确认走 asmr.one 时，结果页顶部展示 asmr.one 直链下载横幅
         AsmrBanner.Visibility = _asmrForCurrent ? Visibility.Visible : Visibility.Collapsed;
+        // 自动下载按钮仅在社团/目录作品网格上有意义
+        AutoDownloadButton.Visibility = Visibility.Collapsed;
     }
 
     private void ShowMakerPage()
@@ -344,6 +353,7 @@ public partial class SearchPage : UserControl
         MakerList.Visibility = Visibility.Visible;
         BackButton.Visibility = Visibility.Collapsed;
         AsmrBanner.Visibility = Visibility.Collapsed;
+        AutoDownloadButton.Visibility = Visibility.Visible;
     }
 
     /// <summary>搜索入口：识别输入是作品号还是社团号，分流到对应流程。</summary>
@@ -716,14 +726,14 @@ public partial class SearchPage : UserControl
             _downSyncTimer.Stop();
             return;
         }
-        var rows = Db.Select("SELECT \"work_id\", \"status\" FROM \"download_list\"");
-        var groups = new Dictionary<string, List<string>>();
+        var rows = Db.Select("SELECT \"work_id\", \"status\", \"error\" FROM \"download_list\"");
+        var groups = new Dictionary<string, List<(string Status, string? Error)>>();
         foreach (var row in rows ?? [])
         {
             var wid = row[0] as string ?? "";
             if (!groups.TryGetValue(wid, out var list))
                 groups[wid] = list = [];
-            list.Add(row[1] as string ?? "");
+            list.Add((row[1] as string ?? "", row[2] as string));
         }
         // 已不在下载列表、但此前处于活动角标的作品需回查 works 最终状态：
         // 先收集全部再一次性批量 IN 查询，避免逐作品 Db.Scalar 的 N+1。
@@ -732,9 +742,9 @@ public partial class SearchPage : UserControl
                        .Select(it => it.WorkId));
         foreach (var item in _makerWorks)
         {
-            if (groups.TryGetValue(item.WorkId, out var statuses))
+            if (groups.TryGetValue(item.WorkId, out var items))
             {
-                var (text, color) = AggregateStatus(item.WorkId, statuses);
+                var (text, color) = AggregateStatus(item.WorkId, items);
                 item.DownText = text;
                 item.DownBrush = BrushOf(color);
                 item.DownActive = true;
@@ -759,8 +769,10 @@ public partial class SearchPage : UserControl
     }
 
     /// <summary>下载列表按番号聚合出一行显示状态（镜像下载页 DownloadPage.AggregateStatus）。</summary>
-    private static (string Text, string Color) AggregateStatus(string workId, List<string> statuses)
+    private static (string Text, string Color) AggregateStatus(
+        string workId, List<(string Status, string? Error)> items)
     {
+        var statuses = items.Select(i => i.Status).ToList();
         var done = statuses.Count(s => s == "1");
         if (statuses.Contains("3"))
             return (I18n.Format(I18n.Tr("下载中 {done}/{total}"), ("done", done), ("total", statuses.Count)), "#60a5fa");
@@ -769,7 +781,14 @@ public partial class SearchPage : UserControl
         if (statuses.Contains("4"))
             return (I18n.Format(I18n.Tr("已暂停 {done}/{total}"), ("done", done), ("total", statuses.Count)), "#9aa4b2");
         if (statuses.Contains("2"))
-            return (I18n.Format(I18n.Tr("{n} 个解析失败"), ("n", statuses.Count(s => s == "2"))), "#f87171");
+        {
+            var fails = items.Where(i => i.Status == "2").ToList();
+            // 失败原因一致 → 显示该原因（如"文件失效"/"流量用尽"，对齐下载页）；原因不一 → 显示失败数
+            var labels = fails.Select(f => DownloadPage.ParseErrorLabel(f.Error)).Distinct().ToList();
+            if (labels.Count == 1)
+                return (labels[0], "#f87171");
+            return (I18n.Format(I18n.Tr("{n} 个解析失败"), ("n", fails.Count)), "#f87171");
+        }
         if (DownloadEngine.UnzipProgress.TryGetValue(workId, out var unzip))
         {
             if (unzip.State == "pending")
@@ -834,6 +853,18 @@ public partial class SearchPage : UserControl
                 if (generation != _makerGeneration)
                     return;
                 var item = _scanQueue.Dequeue();
+                // 自动下载开启：命中即自动检测网盘并加入下载（内部自行决定 asmr / AS 路径）
+                if (_autoDownload)
+                {
+                    if (item.InLib || item.DownActive || item.Disliked)
+                        continue;   // 无需再处理，直接跳过（不占用 3 秒节流）
+                    await AttemptAutoDownloadAsync(item, generation);
+                    if (generation != _makerGeneration)
+                        return;
+                    if (_scanQueue.Count > 0)
+                        await Task.Delay(3000);
+                    continue;
+                }
                 // 7 天内已扫出"无结果"的作品直接判为 AS·无（置灰 + 倒计时），不再请求 AS
                 if (AsScanCache.HasFreshEmpty(item.WorkId))
                 {
@@ -937,6 +968,210 @@ public partial class SearchPage : UserControl
         InputBox.Text = item.WorkId;
         _fromMaker = true;
         await RunWorkSearchAsync(item.WorkId);
+    }
+
+    // ---------- 自动下载（社团/目录作品网格）----------
+
+    /// <summary>
+    /// 点击"自动下载"按钮：关闭→直接关；开启→先弹窗选一次媒体库（取消则保持关闭），
+    /// 选定后把网格中已扫描过的候选作品重新排入队列，使开启后立即对全部作品自动下载。
+    /// </summary>
+    private void AutoDownloadToggle_Click(object sender, RoutedEventArgs e)
+    {
+        if (_autoDownload)
+        {
+            SetAutoDownload(false);
+            return;
+        }
+        if (AppConfig.ReadMediaLibs().Count == 0)
+        {
+            InAppDialog.Warn(this, I18n.Tr("请先在设置中配置媒体库"), I18n.Tr("提示"));
+            return;
+        }
+        var dialog = new DownTargetDialog();
+        if (!dialog.Show(this))
+            return;   // 用户取消选择媒体库 → 保持关闭
+        _autoDownFolder = dialog.SelectedFolder;
+        _autoDownLib = dialog.SelectedLib;
+        SetAutoDownload(true);
+        RequeueAutoDownloadCandidates();
+        _ = RunMakerScansAsync(_makerGeneration);
+    }
+
+    /// <summary>切换自动下载开关的内部状态与按钮外观。</summary>
+    private void SetAutoDownload(bool on)
+    {
+        _autoDownload = on;
+        AutoDownloadButton.Content = on ? I18n.Tr("自动下载：开") : I18n.Tr("自动下载：关");
+        if (on)
+            AutoDownloadButton.Foreground = (Brush)FindResource("AccentLightBrush");
+        else
+            AutoDownloadButton.ClearValue(Control.ForegroundProperty);
+    }
+
+    /// <summary>把网格中未在库、未下载、未被标不喜欢且不在队列里的作品重新排入 AS 扫描队列。</summary>
+    private void RequeueAutoDownloadCandidates()
+    {
+        foreach (var item in _makerWorks)
+            if (!item.InLib && !item.DownActive && !item.Disliked && !_scanQueue.Contains(item))
+                _scanQueue.Enqueue(item);
+    }
+
+    /// <summary>
+    /// 对单个网格作品自动下载：SOU 且优先 asmr 且账号已配置 → 走 asmr.one 直链；
+    /// 否则搜 AS 论坛，逐帖抓网盘链接、检测某网盘组全部有效即加入下载。全程受 _makerGeneration 守卫。
+    /// </summary>
+    private async Task AttemptAutoDownloadAsync(MakerWorkItem item, int generation)
+    {
+        var workId = item.WorkId;
+        item.AsStatusText = I18n.Tr("自动检测…");
+        item.AsStatusBrush = (Brush)FindResource("CaptionBrush");
+
+        DlWork? workData;
+        try { workData = await DlsiteApi.GetWorkDataAsync(workId); }
+        catch (Exception) { workData = null; }
+        if (generation != _makerGeneration)
+            return;
+
+        // SOU 且优先 asmr 且账号已配置：优先走 asmr.one 直链下载
+        var isSou = string.Equals(workData?.WorkType, "SOU", StringComparison.OrdinalIgnoreCase);
+        if (isSou && AppConfig.SouUsesAsmr
+            && !string.IsNullOrEmpty(AppConfig.AsmrUsername) && !string.IsNullOrEmpty(AppConfig.AsmrPassword))
+        {
+            var hasAsmr = false;
+            try
+            {
+                var detail = await AsmrApi.GetWorkDetailAsync(AsmrApi.RjToId(workId));
+                hasAsmr = detail is { Files.Count: > 0 };
+            }
+            catch (Exception) { hasAsmr = false; }
+            if (generation != _makerGeneration)
+                return;
+            if (hasAsmr)
+            {
+                var res = await AsmrService.EnqueueByRjAsync(
+                    workId, workData?.WorkName ?? "", _autoDownFolder, _autoDownLib);
+                if (generation != _makerGeneration)
+                    return;
+                if (res.Ok)
+                    MarkMakerEnqueued(item);
+                else
+                {
+                    item.AsStatusText = I18n.Tr("自动下载失败");
+                    item.AsStatusBrush = (Brush)FindResource("RedBrush");
+                }
+                return;
+            }
+            // asmr.one 无此作品 → 回退 AS 论坛
+        }
+
+        // AS 论坛路径：7 天内已知无结果的作品直接判 AS·无，不再请求
+        if (AsScanCache.HasFreshEmpty(workId))
+        {
+            MarkAsEmpty(item);
+            return;
+        }
+        List<AsSearchResult> posts;
+        try { posts = await AnimeSharing.SearchWorkAsync(workId); }
+        catch (Exception)
+        {
+            AsScanCache.Store(workId, -1);
+            if (generation != _makerGeneration)
+                return;
+            item.AsStatusText = I18n.Tr("AS · 失败");
+            item.AsStatusBrush = (Brush)FindResource("RedBrush");
+            return;
+        }
+        AsScanCache.Store(workId, posts.Count);
+        if (generation != _makerGeneration)
+            return;
+        if (posts.Count == 0)
+        {
+            MarkAsEmpty(item);
+            return;
+        }
+
+        item.AsStatusText = I18n.Tr("自动下载检测…");
+        item.AsStatusBrush = (Brush)FindResource("CaptionBrush");
+        using var client = LinkChecker.MakeClient();
+        foreach (var post in posts)
+        {
+            if (generation != _makerGeneration)
+                return;
+            List<string> urls;
+            try { (urls, _) = await AnimeSharing.GetWorkDownUrlsAsync(post.Url); }
+            catch (Exception) { continue; }
+            if (generation != _makerGeneration)
+                return;
+            if (urls.Count == 0)
+                continue;
+
+            // 按域名分组（保持出现顺序），逐组检测：某组全部有效即加入下载
+            var groups = new Dictionary<string, List<string>>();
+            var order = new List<string>();
+            foreach (var url in urls)
+            {
+                var host = HostOf(url);
+                if (!groups.TryGetValue(host, out var list))
+                {
+                    groups[host] = list = [];
+                    order.Add(host);
+                }
+                list.Add(url);
+            }
+            foreach (var host in order)
+            {
+                if (generation != _makerGeneration)
+                    return;
+                var hostUrls = groups[host];
+                var allValid = true;
+                foreach (var u in hostUrls)
+                {
+                    bool ok;
+                    try { ok = await LinkChecker.CheckUrlAsync(u, client); }
+                    catch (Exception) { ok = false; }
+                    if (generation != _makerGeneration)
+                        return;
+                    if (!ok)
+                    {
+                        allValid = false;
+                        break;
+                    }
+                }
+                if (allValid)
+                {
+                    EnqueueAsWork(workId, workData, hostUrls, _autoDownFolder, _autoDownLib);
+                    MarkMakerEnqueued(item);
+                    return;
+                }
+            }
+        }
+        // 各帖各网盘组均无全部有效 → 无有效下载
+        item.AsStatusText = I18n.Tr("无有效下载");
+        item.AsStatusBrush = (Brush)FindResource("YellowBrush");
+    }
+
+    /// <summary>加入某作品一个网盘组的全部链接到下载队列，写 works 行与目标目录并启动下载引擎（对齐 HostDownload_Click）。</summary>
+    private static void EnqueueAsWork(string workId, DlWork? workData, List<string> urls, string? folder, string? lib)
+    {
+        foreach (var downUrl in urls)
+            Db.Execute(
+                "INSERT OR REPLACE INTO \"download_list\" (\"UUID\", \"work_id\", \"url\", \"status\", \"long\", \"delete\") " +
+                "VALUES (@uuid, @w, @url, '0', '0', '1')",
+                ("@uuid", Guid.NewGuid().ToString()), ("@w", workId), ("@url", downUrl));
+        RecordWorkRow(workId, workData);
+        if (!string.IsNullOrEmpty(folder))
+            DownloadEngine.SetWorkTargetPath(workId, folder, lib);
+        DownloadEngine.Start();
+    }
+
+    /// <summary>把作品卡片切到"待下载"下载状态角标并启动与下载页的每秒状态同步。</summary>
+    private void MarkMakerEnqueued(MakerWorkItem item)
+    {
+        item.DownText = I18n.Tr("待下载");
+        item.DownBrush = (Brush)FindResource("YellowBrush");
+        item.DownActive = true;
+        StartDownSync();
     }
 
     /// <summary>点击卡片右下角"不喜欢"按钮：切换标记。用 PreviewMouseLeftButtonDown 并吞掉事件，避免冒泡触发 ListBoxItem 选中导航。</summary>
@@ -1310,9 +1545,10 @@ public partial class SearchPage : UserControl
     /// UPSERT：重复入队时只刷新本次下载相关的列，保留已有元数据；
     /// folder/target/target_lib/cover/meta_scanned 重置，重新下载后重新获取。
     /// </summary>
-    private void RecordWork()
+    private void RecordWork() => RecordWorkRow(_selectId!, _workData);
+
+    private static void RecordWorkRow(string workId, DlWork? work)
     {
-        var work = _workData;
         Db.Execute(
             "INSERT INTO \"works\" (\"work_id\", \"work_name\", \"maker_id\", \"maker_name\", \"work_type\", " +
             "\"intro_s\", \"age_category\", \"is_ana\", \"state\", \"down_time\") VALUES " +
@@ -1324,7 +1560,7 @@ public partial class SearchPage : UserControl
             "\"is_ana\" = excluded.\"is_ana\", \"state\" = excluded.\"state\", \"down_time\" = excluded.\"down_time\", " +
             "\"folder\" = NULL, \"target\" = NULL, \"target_lib\" = NULL, " +
             "\"cover\" = NULL, \"meta_scanned\" = NULL",
-            ("@w", _selectId), ("@n", work?.WorkName ?? ""), ("@mi", work?.MakerId ?? ""),
+            ("@w", workId), ("@n", work?.WorkName ?? ""), ("@mi", work?.MakerId ?? ""),
             ("@mn", work?.MakerName ?? ""), ("@t", work?.WorkType ?? ""), ("@s", work?.IntroS ?? ""),
             ("@a", work?.AgeCategory ?? ""), ("@ana", work?.IsAna ?? ""),
             ("@time", DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.ffffff")));

@@ -16,6 +16,7 @@
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
             <Button x:Name="BackToDownloadButton" Margin="0,0,8,0"
                     Click="BackToDownloadButton_Click" Content="← 下载列表" />
@@ -24,6 +25,8 @@
                     Style="{StaticResource AccentButton}" Click="SearchButton_Click" Content="查询" />
             <Button x:Name="BackButton" Grid.Column="3" Margin="8,0,0,0" Visibility="Collapsed"
                     Click="BackButton_Click" Content="← 返回结果" />
+            <Button x:Name="AutoDownloadButton" Grid.Column="4" Margin="8,0,0,0" MinWidth="110"
+                    Visibility="Collapsed" Click="AutoDownloadToggle_Click" Content="自动下载：关" />
         </Grid>
 
         <!-- asmr.one 直链下载横幅（仅 SOU 音声作品显示） -->

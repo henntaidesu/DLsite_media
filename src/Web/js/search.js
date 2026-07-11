@@ -7,7 +7,7 @@ function renderSearch() {
   makerState = null;
   const host = $('content'); host.innerHTML = '';
   const bar = el('div', 'toolbar');
-  const back = el('button', 'icon-btn', '← 下载'); back.onclick = () => { sdView = 'download'; renderSearchDownload(); };
+  const back = el('button', 'icon-btn', '← 下载'); back.onclick = () => navSd('download');
   const inp = el('input'); inp.placeholder = '作品号(RJ/BJ/VJ)、社团号(RG) 或 DLsite 链接'; inp.className = 'grow'; inp.id = 'sId';
   const btn = el('button', 'icon-btn primary', '查询');
   inp.addEventListener('keydown', e => { if (e.key === 'Enter') runSearch(); });
@@ -47,6 +47,7 @@ function parseInput(raw) {
   return { kind: 'invalid', id: '' };
 }
 async function runSearch() {
+  syncSdHash();   // 把当前查询词写入地址栏（搜索视图内，只 replace 不累积历史）
   const p = parseInput($('sId').value);
   if (p.kind === 'catalog') { await runGridSearch({ catalogUrl: p.id }); return; }
   if (p.kind === 'maker') { await runGridSearch({ id: p.id }); return; }
@@ -63,14 +64,22 @@ async function runWorkSearch(id) {
   let d;
   try { d = await api('/api/search?id=' + enc(id)); } catch (e) { return; }
   if (gen !== workGen) return;
-  if (d.error) { box.innerHTML = ''; box.appendChild(el('div', 'empty', d.error)); return; }
+  // 从社团/目录列表点进来时（makerReturnId 有值）：无论结果如何（含出错、无匹配）都要保留"返回作品列表"按钮
+  const makerBackBtn = () => {
+    if (!makerReturnId) return null;
+    const bk = el('button', 'icon-btn', makerState && makerState.catalogUrl ? '← 返回作品列表' : '← 返回社团作品');
+    bk.style.marginBottom = '10px'; bk.onclick = goBackToMaker;
+    return bk;
+  };
+  const showEmpty = (msg) => { box.innerHTML = ''; const bk = makerBackBtn(); if (bk) box.appendChild(bk); box.appendChild(el('div', 'empty', msg)); };
+  if (d.error) { showEmpty(d.error); return; }
   if (d.existed && !await uiConfirm(`${d.id} ${d.existedName || ''}\n该作品已于 ${d.existedTime || ''} 加入过下载，是否继续？`)) {
     if (makerReturnId) goBackToMaker(); else box.innerHTML = '';
     return;
   }
-  if (!d.results.length) { box.innerHTML = ''; box.appendChild(el('div', 'empty', '无匹配数据')); return; }
+  if (!d.results.length) { showEmpty('无匹配数据'); return; }
   box.innerHTML = '';
-  if (makerReturnId) { const bk = el('button', 'icon-btn', makerState && makerState.catalogUrl ? '← 返回作品列表' : '← 返回社团作品'); bk.style.marginBottom = '10px'; bk.onclick = goBackToMaker; box.appendChild(bk); }
+  { const bk = makerBackBtn(); if (bk) box.appendChild(bk); }
   $('count').textContent = `${d.work.name || d.id} · ${d.results.length} 个帖子`;
   const posts = [];
   d.results.forEach(r => {
@@ -88,6 +97,11 @@ async function runWorkSearch(id) {
     const post = { url: r.url, statusEl, hostsEl, scanned: false, scanning: false };
     // 点击未扫描的帖子可手动补扫（自动扫描命中并停止后，仍可点击后续帖子）
     head.onclick = () => { if (!post.scanning && !post.scanned) scanPost(id, post, workGen); };
+    // 手动组合下载：优先 rapidgator，失效分卷用其它网盘同名分卷补齐后一并下载
+    const combineBtn = el('button', 'icon-btn combine-btn', '组合下载');
+    combineBtn.title = '优先 rapidgator，失效分卷用其它网盘同名分卷补齐后下载';
+    combineBtn.onclick = (ev) => { ev.stopPropagation(); combineDownload(id, post, combineBtn); };
+    head.appendChild(combineBtn);
     box.appendChild(c);
     posts.push(post);
   });
@@ -135,6 +149,36 @@ async function scanPost(id, post, gen) {
   post.statusEl.style.color = anyValid ? '#4ade80' : '#facc15';
   post.scanned = true; post.scanning = false;
   return anyValid;
+}
+// 手动组合下载：服务端对该帖按 rapidgator 优先、跨网盘同名分卷补齐失效者，组合出完整分卷集入队。
+// 组不齐完整档案（某分卷在所有网盘都失效）则不入队，弹窗提示缺口。
+async function combineDownload(id, post, btn) {
+  if (btn.disabled) return;
+  btn.disabled = true; const orig = btn.textContent;
+  let lib = '', folder = '';
+  const t = await api('/api/downtargets');
+  if (t.libs && t.libs.length) {
+    const target = await pickTarget(t.libs, id);
+    if (!target) { btn.disabled = false; return; }   // 取消选库
+    lib = target.lib; folder = target.folder;
+  }
+  btn.textContent = '组合中…';
+  let r;
+  try { r = await apiPost('/api/combine', { id, url: post.url, lib, folder }); }
+  catch (e) { btn.disabled = false; btn.textContent = orig; return; }
+  if (r.ok) {
+    btn.textContent = '已加入下载';   // 保持禁用，避免重复入队
+    // 若从社团网格进入：同步该作品卡片角标为"待下载"并启动与下载列表的状态同步
+    if (makerState && makerState.cards[id]) {
+      const b = makerState.cards[id];
+      b.dataset.dl = '1'; b.textContent = '待下载'; b.style.background = 'rgba(0,0,0,.72)'; b.style.color = '#facc15';
+      const mc = b.closest('.card'); if (mc) mc.classList.add('dim');
+      startMakerDownPoll();
+    }
+  } else {
+    btn.disabled = false; btn.textContent = orig;
+    await uiAlert(r.error || '组合下载失败');
+  }
 }
 
 // 社团（RG）/ 目录列表（DLsite 链接）搜索：作品缩略图网格 + 下拉到底自动加载下一页

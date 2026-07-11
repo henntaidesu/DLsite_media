@@ -94,7 +94,7 @@ function drawFileGrid(nodes, id, host) {
       thumb.appendChild(el('div', 'fcount', `${(n.children || []).length} 项`));
       card.onclick = () => pushView('files', { id, name: n.name, nodes: n.children || [] });
     } else if (IMG_EXTS.includes(ext)) {
-      const img = el('img'); img.loading = 'lazy'; img.src = fileUrl(id, n.rel); thumb.appendChild(img);
+      const img = el('img'); img.loading = 'lazy'; img.src = thumbUrl(id, n.rel); thumb.appendChild(img);
       const url = fileUrl(id, n.rel);
       card.onclick = () => LB.open(imgs, Math.max(0, imgs.indexOf(url)));
     } else if (VIDEO_EXTS.includes(ext)) {

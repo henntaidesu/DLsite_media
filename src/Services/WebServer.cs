@@ -356,6 +356,7 @@ public static class WebServer
                 case "/api/research": ApiResearch(stream, req); break;
                 case "/api/cleardone": ApiClearDone(stream); break;
                 case "/api/clearall": ApiClearAll(stream); break;
+                case "/api/clearnolink": ApiClearNoLink(stream); break;
                 case "/api/downloaded": ApiDownloaded(stream); break;
                 case "/api/mark": ApiMark(stream, req); break;
                 case "/api/dislike": ApiDislike(stream, req); break;
@@ -865,8 +866,11 @@ public static class WebServer
     {
         var id = req.Query.GetValueOrDefault("id") ?? "";
         var cover = Db.Scalar("SELECT \"cover\" FROM \"works\" WHERE \"work_id\" = @w", ("@w", id)) as string;
-        ServeImageFile(stream, cover);
+        ServeImageFile(stream, cover, ThumbParam(req));
     }
+
+    /// <summary>请求是否要缩略图（thumb=1）：压缩到 128KB 以内再发，避免传原图。</summary>
+    private static bool ThumbParam(Request req) => req.Query.GetValueOrDefault("thumb") == "1";
 
     private static void ApiAsset(NetworkStream stream, Request req)
     {
@@ -881,7 +885,7 @@ public static class WebServer
         }
         var folder = ResolveAssetFolder(id, Db.Scalar(
             "SELECT \"folder\" FROM \"works\" WHERE \"work_id\" = @w", ("@w", id)) as string);
-        ServeImageFile(stream, Path.Combine(folder, name));
+        ServeImageFile(stream, Path.Combine(folder, name), ThumbParam(req));
     }
 
     /// <summary>详情资源文件夹：作品文件夹/DataSource 优先，否则回退 images/&lt;RJ&gt;。</summary>
@@ -896,12 +900,18 @@ public static class WebServer
         return Path.Combine(DlsitePage.ImagesDir, id);
     }
 
-    private static void ServeImageFile(NetworkStream stream, string? path)
+    private static void ServeImageFile(NetworkStream stream, string? path, bool thumb = false)
     {
         if (path == null || !File.Exists(path) ||
             !ImageExts.Contains(Path.GetExtension(path).ToLowerInvariant()))
         {
             WriteBytes(stream, 404, "Not Found", "text/plain", Encoding.ASCII.GetBytes("not found"));
+            return;
+        }
+        // 缩略图：压到 128KB 以内的 JPEG 再发（压缩失败则回退原图）
+        if (thumb && ImageThumb.Compress(path) is { } jpg)
+        {
+            WriteBytes(stream, 200, "OK", "image/jpeg", jpg, ("Cache-Control", "max-age=86400"));
             return;
         }
         byte[] data;
@@ -994,6 +1004,12 @@ public static class WebServer
             !File.Exists(full))
         {
             WriteBytes(stream, 404, "Not Found", "text/plain", []);
+            return;
+        }
+        // 缩略图网格：图片按 thumb=1 请求，压到 128KB 以内再发，不传原图（非图片/非缩略图仍走 Range 流式）
+        if (ThumbParam(req) && ImageExts.Contains(Path.GetExtension(full).ToLowerInvariant()))
+        {
+            ServeImageFile(stream, full, thumb: true);
             return;
         }
         WriteFileRange(stream, req, full);
@@ -1450,7 +1466,7 @@ public static class WebServer
             var posts = await AnimeSharing.SearchWorkAsync(id);
             AsScanCache.Store(id, posts.Count);
 
-            PostAssembly? best = null;                         // 最优「完整」组合（rapidgator 覆盖最多者）
+            PostCombiner.PostAssembly? best = null;            // 最优「完整」组合（rapidgator 覆盖最多者）
             List<string>? bestPartial = null; var bestPartialCount = 0;   // 退路：凑不齐时用有效分卷最多的部分集
             var scanned = 0;
 
@@ -1465,7 +1481,7 @@ public static class WebServer
                 if (urls.Count == 0)
                     continue;
 
-                var asm = await AssemblePostAsync(urls, client, () => PlaceholderAlive(placeholder));
+                var asm = await PostCombiner.AssembleAsync(urls, client, () => PlaceholderAlive(placeholder));
                 if (!PlaceholderAlive(placeholder))
                     return;
                 if (asm == null)
@@ -1523,84 +1539,7 @@ public static class WebServer
 
     /// <summary>单帖内组合出一份下载分卷集：以分卷最多的网盘为完整分卷全集，逐个分卷按
     /// rapidgator → katfile → 其它 的优先级挑首个「有效」链接（跨网盘同名分卷可互相补齐失效者）。</summary>
-    private static async Task<PostAssembly?> AssemblePostAsync(
-        List<string> urls, HttpClient client, Func<bool>? alive = null)
-    {
-        // 分卷标识(PartKey) -> 候选链接（各网盘同名分卷聚在一起，供互相补齐）
-        var byPart = new Dictionary<string, List<(int Rank, string Host, string Url)>>();
-        // 每个网盘覆盖的分卷集合，用于确定"完整档案"的分卷全集
-        var hostParts = new Dictionary<string, HashSet<string>>();
-        foreach (var u in urls)
-        {
-            var host = HostOf(u);
-            var pk = PartKey(u);
-            if (!byPart.TryGetValue(pk, out var list))
-                byPart[pk] = list = [];
-            list.Add((HostRank(host), host, u));
-            if (!hostParts.TryGetValue(host, out var set))
-                hostParts[host] = set = [];
-            set.Add(pk);
-        }
-        // 完整分卷全集 = 拥有分卷最多的网盘（同帖同一上传者各网盘文件名一致，故分卷数最多者即完整档案）
-        var required = hostParts.Values.OrderByDescending(s => s.Count).FirstOrDefault();
-        if (required is not { Count: > 0 })
-            return null;
-
-        var chosen = new List<string>();
-        var rgParts = 0;
-        var cache = new Dictionary<string, bool>();   // 同一链接只检测一次
-        foreach (var pk in required)
-        {
-            if (!byPart.TryGetValue(pk, out var cands))
-                continue;
-            foreach (var c in cands.OrderBy(c => c.Rank))   // rapidgator 优先，其次 katfile，再其它
-            {
-                if (alive != null && !alive())
-                    return null;
-                if (!cache.TryGetValue(c.Url, out var ok))
-                {
-                    ok = await LinkChecker.CheckUrlAsync(c.Url, client);
-                    cache[c.Url] = ok;
-                }
-                if (ok)
-                {
-                    chosen.Add(c.Url);
-                    if (c.Rank == 0)
-                        rgParts++;
-                    break;
-                }
-            }
-        }
-        if (chosen.Count == 0)
-            return null;
-        return new PostAssembly(chosen, rgParts, required.Count, chosen.Count == required.Count);
-    }
-
-    /// <summary>单帖组合结果：Urls=选出的分卷链接，RapidgatorParts=其中来自 rapidgator 的分卷数，
-    /// TotalParts=完整档案的分卷数，Complete=是否凑齐全部分卷。</summary>
-    private sealed record PostAssembly(List<string> Urls, int RapidgatorParts, int TotalParts, bool Complete);
-
-    /// <summary>网盘优先级：rapidgator=0（最优），katfile=1，其它=2。</summary>
-    private static int HostRank(string host)
-    {
-        host = host.ToLowerInvariant();
-        if (host.Contains("rapidgator") || host == "rg.to")
-            return 0;
-        if (host.Contains("katfile"))
-            return 1;
-        return 2;
-    }
-
-    /// <summary>跨网盘匹配"同一分卷"的标识：优先取文件名中的档案名（含 partN / .001 / .z01 等），
-    /// 取不到再退回整段文件名。同帖各网盘同一分卷文件名一致，故据此可把失效分卷用其它网盘同名分卷补齐。</summary>
-    private static string PartKey(string url)
-    {
-        var name = FileNameOf(url).ToLowerInvariant();
-        if (name.EndsWith(".html"))
-            name = name[..^5];
-        var m = Regex.Match(name, @"[\w\-.]+\.(?:part\d+\.)?(?:rar|zip|7z|r\d+|z\d+|\d{3})");
-        return m.Success ? m.Value : name;
-    }
+    // 组合下载算法已抽到 PostCombiner（WebServer 与 SearchPage 共用），此处仅保留 PlaceholderAlive 等 WebServer 专属逻辑。
 
     /// <summary>占位分卷是否仍存在且处于「搜索中」('5')——用户删除后后台解析即应停止。</summary>
     private static bool PlaceholderAlive(string placeholder)
@@ -1939,9 +1878,9 @@ public static class WebServer
             WriteJson(stream, 200, new { ok = false, error = "该帖未找到可用网盘链接" });
             return;
         }
-        PostAssembly? asm;
+        PostCombiner.PostAssembly? asm;
         using (var client = LinkChecker.MakeClient())
-            asm = await AssemblePostAsync(urls, client);
+            asm = await PostCombiner.AssembleAsync(urls, client);
         if (asm == null || asm.Urls.Count == 0)
         {
             WriteJson(stream, 200, new { ok = false, error = "所有网盘分卷均失效，无可用下载" });
@@ -2164,6 +2103,24 @@ public static class WebServer
             Db.Execute("DELETE FROM \"works\" WHERE \"work_id\" = @w AND \"state\" = '下载中'",
                 ("@w", row[0] as string ?? ""));
         Db.Execute("DELETE FROM \"download_list\"");
+        WriteJson(stream, 200, new { ok = true });
+    }
+
+    /// <summary>清除"无可用下载连接"（占位状态 '6'）的作品：删占位行，并清掉因此残留的"下载中"作品记录。</summary>
+    private static void ApiClearNoLink(NetworkStream stream)
+    {
+        var rows = Db.Select("SELECT DISTINCT \"work_id\" FROM \"download_list\" WHERE \"status\" = '6'");
+        Db.Execute("DELETE FROM \"download_list\" WHERE \"status\" = '6'");
+        foreach (var row in rows ?? [])
+        {
+            var wid = row[0] as string ?? "";
+            if (wid.Length == 0)
+                continue;
+            // 该作品已无任何下载行时，清除仅为占位而建的"下载中"作品记录（有真实下载/已入库的则保留）
+            var remain = Db.Select("SELECT 1 FROM \"download_list\" WHERE \"work_id\" = @w", ("@w", wid));
+            if (remain is not { Count: > 0 })
+                Db.Execute("DELETE FROM \"works\" WHERE \"work_id\" = @w AND \"state\" = '下载中'", ("@w", wid));
+        }
         WriteJson(stream, 200, new { ok = true });
     }
 

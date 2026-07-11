@@ -75,13 +75,14 @@ public partial class MainWindow : Window
     {
         LogoLabel.Text = I18n.Tr("DLsite媒体库");
         Title = I18n.Tr("DLsite媒体库");
-        NavMediaLib.Content = I18n.Tr("媒体库");
-        NavSearchDownload.Content = I18n.Tr("搜索/下载");
-        NavTag.Content = I18n.Tr("标签");
-        NavType.Content = I18n.Tr("作品形式");
-        NavMaker.Content = I18n.Tr("社团");
-        NavFavorite.Content = I18n.Tr("收藏夹");
-        NavSetting.Content = I18n.Tr("设置");
+        // 文案对齐 Web 端 SECTIONS (src/Web/js/core.js)：下载搜索/作品标签/作品社团/我的收藏/系统设置
+        NavMediaLibLabel.Text = I18n.Tr("媒体库");
+        NavSearchDownloadLabel.Text = I18n.Tr("下载搜索");
+        NavTagLabel.Text = I18n.Tr("作品标签");
+        NavTypeLabel.Text = I18n.Tr("作品形式");
+        NavMakerLabel.Text = I18n.Tr("作品社团");
+        NavFavoriteLabel.Text = I18n.Tr("我的收藏");
+        NavSettingLabel.Text = I18n.Tr("系统设置");
         if (_trayIcon != null)
             _trayIcon.Text = I18n.Tr("DLsite媒体库");
         if (_trayShowItem != null)

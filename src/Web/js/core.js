@@ -79,6 +79,8 @@ const VIDEO_EXTS = ['.mp4', '.mkv', '.avi', '.wmv', '.mov', '.flv', '.webm', '.m
 const AUDIO_EXTS = ['.mp3', '.wav', '.flac', '.m4a', '.aac', '.ogg', '.wma', '.opus'];
 const IMG_EXTS = ['.jpg', '.jpeg', '.png', '.gif', '.webp'];
 const fileUrl = (id, rel) => `/api/file?id=${enc(id)}&path=${enc(rel)}`;
+// 缩略图 URL：服务端把图片压到 128KB 以内再发，用于缩略图网格（点开大图仍用 fileUrl 原图）
+const thumbUrl = (id, rel) => `${fileUrl(id, rel)}&thumb=1`;
 
 let section = 'medialib';
 let stack = [];            // 卡片区导航栈
@@ -302,7 +304,7 @@ function drawGroups(items, mapFn, unit) {
 function makeWorkCard(w) {
   const c = el('div', 'card');
   const cov = el('div', 'cover');
-  if (w.cover) { const img = el('img'); img.loading = 'lazy'; img.src = `/api/cover?id=${enc(w.id)}`; cov.appendChild(img); }
+  if (w.cover) { const img = el('img'); img.loading = 'lazy'; img.src = `/api/cover?id=${enc(w.id)}&thumb=1`; cov.appendChild(img); }
   cov.appendChild(el('div', 'badge rj', w.id));
   if (w.type) cov.appendChild(el('div', 'badge type', w.type));
   c.appendChild(cov); c.appendChild(el('div', 'wt', w.name || w.id));

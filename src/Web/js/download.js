@@ -19,6 +19,7 @@ function renderDownloadSection() {
   const startBtn = el('button', 'icon-btn primary', '开始下载'); startBtn.id = 'engineBtn';
   startBtn.onclick = async () => { const running = startBtn.dataset.running === '1'; await apiPost('/api/engine', { action: running ? 'stop' : 'start' }); loadDownloads(); };
   const cd = el('button', 'icon-btn', '清除已完成'); cd.onclick = async () => { await apiPost('/api/cleardone'); loadDownloads(); };
+  const cn = el('button', 'icon-btn', '清除无可用连接'); cn.onclick = async () => { await apiPost('/api/clearnolink'); loadDownloads(); };
   const ca = el('button', 'icon-btn', '清空列表'); ca.onclick = async () => { if (await uiConfirm('确定要清空整个下载列表吗？等待中的任务也会被删除。', { danger: true })) { await apiPost('/api/clearall'); loadDownloads(); } };
   // 全部重新解析：所有解析失败分卷重新排队，所有"无可用下载连接"占位重新自动解析
   const ra = el('button', 'icon-btn', '全部重新解析'); ra.onclick = async () => { ra.disabled = true; try { await apiPost('/api/reparseall'); } finally { ra.disabled = false; } loadDownloads(); };
@@ -27,7 +28,7 @@ function renderDownloadSection() {
   usage.innerHTML = '<div class="ut" id="usageText">debrid-link 使用量 --</div><div class="bar"><i id="usageBar" style="width:0;background:#a78bfa"></i></div>';
   usage.style.cursor = 'pointer'; usage.title = '点击查看各网盘流量详情';
   usage.onclick = showUsageDetail;
-  bar.append(sb, cd, ca, startBtn, ra, usage);
+  bar.append(sb, cd, cn, ca, startBtn, ra, usage);
   host.appendChild(bar);
   host.appendChild(el('div', null)).id = 'dlList';
   loadDownloads(); loadUsage();

@@ -14,8 +14,9 @@ using Microsoft.Win32;
 namespace DLsiteMedia.Views;
 
 /// <summary>
-/// 媒体库设置（程序内覆盖层）：新建/删除媒体库、管理文件夹、触发扫描。
-/// 不再弹出程序外窗口；扫描状态驻留在实例中，覆盖层多次开关之间保持，后台扫描随实例存活。
+/// 媒体库管理（内联到系统设置页的「媒体库」分区，对齐 Web 设置页 renderMediaLibSection）：
+/// 新建/删除媒体库、管理文件夹、触发扫描。扫描状态驻留在实例中，页面切换之间保持，后台扫描随实例存活。
+/// （旧版为程序内覆盖层弹窗，现改为设置页内联区块。）
 /// </summary>
 public class MediaLibSettingDialog
 {
@@ -30,108 +31,68 @@ public class MediaLibSettingDialog
     private bool _scanning;
     private string _statusText = "";
 
-    // 覆盖层打开期间有效的实时 UI 引用（关闭后置空，扫描转为只更新 _statusText）
+    // 内联区块的实时 UI 引用（区块随设置页存活；扫描跨线程时切回 UI 线程更新）
     private TextBlock? _statusBlock;
     private StackPanel? _cardsPanel;
     private DependencyObject? _owner;
-    private Action<bool>? _close;
 
     public MediaLibSettingDialog()
     {
         _libs = AppConfig.ReadMediaLibs();
     }
 
-    /// <summary>以程序内覆盖层模态显示媒体库设置（阻塞到用户关闭；扫描状态在多次打开间保持）。</summary>
-    public void Show(DependencyObject? owner)
+    /// <summary>构建可内联到设置页的媒体库管理区块（工具栏 + 扫描状态 + 媒体库卡片 + 说明，对齐 Web）。</summary>
+    public FrameworkElement BuildSection(DependencyObject? owner)
     {
         _owner = owner;
-        _libs = AppConfig.ReadMediaLibs();  // 每次打开刷新外部改动
-        OverlayHost.ShowModal(owner, close =>
-        {
-            _close = close;
-            return BuildShell();
-        });
-        // 关闭：解除实时 UI 引用，后续扫描只更新字符串状态
-        _close = null;
-        _statusBlock = null;
-        _cardsPanel = null;
-    }
+        _libs = AppConfig.ReadMediaLibs();
 
-    private FrameworkElement BuildShell()
-    {
-        var dim = new Grid
-        {
-            Background = new SolidColorBrush(Color.FromArgb(0x9A, 0, 0, 0)),
-            Focusable = true,
-        };
-        var card = new Border
-        {
-            Background = Res("WindowBrush", Brushes.Black),
-            BorderBrush = Res("BorderBrush", Brushes.Gray),
-            BorderThickness = new Thickness(1),
-            CornerRadius = new CornerRadius(10),
-            Padding = new Thickness(20, 16, 20, 16),
-            MinWidth = 680,
-            MaxWidth = 880,
-            MinHeight = 420,
-            MaxHeight = 660,
-            HorizontalAlignment = HorizontalAlignment.Center,
-            VerticalAlignment = VerticalAlignment.Center,
-        };
+        var panel = new StackPanel();
 
-        var layout = new DockPanel();
+        // 工具栏：新建媒体库 / 扫描全部（顺序对齐 Web renderMediaLibSection）
+        var bar = new StackPanel { Orientation = Orientation.Horizontal };
+        var createButton = new Button { Content = I18n.Tr("新建媒体库"), MinWidth = 108 };
+        createButton.Click += (_, _) => CreateLib();
+        bar.Children.Add(createButton);
+        var scanAllButton = new Button { Content = I18n.Tr("扫描全部数据源"), MinWidth = 120, Margin = new Thickness(8, 0, 0, 0) };
+        scanAllButton.Click += (_, _) => ScanAll();
+        bar.Children.Add(scanAllButton);
+        panel.Children.Add(bar);
 
-        var header = new Grid { Margin = new Thickness(0, 0, 0, 10) };
-        header.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        // 扫描状态（无扫描时隐藏）
         _statusBlock = new TextBlock
         {
             Text = _statusText,
-            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(0, 8, 0, 0),
             Foreground = Res("CaptionBrush", Brushes.Gray),
-            TextTrimming = TextTrimming.CharacterEllipsis,
+            TextWrapping = TextWrapping.Wrap,
+            Visibility = string.IsNullOrEmpty(_statusText) ? Visibility.Collapsed : Visibility.Visible,
         };
-        header.Children.Add(_statusBlock);
+        panel.Children.Add(_statusBlock);
 
-        var headerButtons = new StackPanel { Orientation = Orientation.Horizontal };
-        var scanAllButton = new Button { Content = I18n.Tr("扫描全部数据源"), MinWidth = 120 };
-        scanAllButton.Click += (_, _) => ScanAll();
-        headerButtons.Children.Add(scanAllButton);
-        var createButton = new Button { Content = I18n.Tr("新建媒体库"), MinWidth = 108, Margin = new Thickness(8, 0, 0, 0) };
-        createButton.Click += (_, _) => CreateLib();
-        headerButtons.Children.Add(createButton);
-        var closeButton = new Button
-        {
-            Content = "✕", MinWidth = 36, Margin = new Thickness(8, 0, 0, 0),
-            ToolTip = I18n.Tr("关闭"),
-        };
-        closeButton.Click += (_, _) => _close?.Invoke(false);
-        headerButtons.Children.Add(closeButton);
-        Grid.SetColumn(headerButtons, 1);
-        header.Children.Add(headerButtons);
-        DockPanel.SetDock(header, Dock.Top);
-        layout.Children.Add(header);
+        // 媒体库卡片列表
+        _cardsPanel = new StackPanel { Margin = new Thickness(0, 8, 0, 0) };
+        panel.Children.Add(_cardsPanel);
 
-        _cardsPanel = new StackPanel();
-        layout.Children.Add(new ScrollViewer
+        // 说明
+        panel.Children.Add(new TextBlock
         {
-            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-            Content = _cardsPanel,
+            Text = I18n.Tr("文件夹路径为本机本地路径（如 D:\\ASMR）；添加后点\"扫描元数据\"导入作品与元数据。删除媒体库不会删除本地文件、已导入记录保留。"),
+            Margin = new Thickness(0, 10, 0, 0),
+            Foreground = Res("CaptionBrush", Brushes.Gray),
+            TextWrapping = TextWrapping.Wrap,
+            FontSize = 12,
         });
 
-        card.Child = layout;
-        dim.Children.Add(card);
-        dim.KeyDown += (_, e) =>
-        {
-            if (e.Key == Key.Escape)
-            {
-                _close?.Invoke(false);
-                e.Handled = true;
-            }
-        };
-
         RebuildCards();
-        return dim;
+        return panel;
+    }
+
+    /// <summary>设置页每次显示时刷新媒体库列表（拾取外部改动）。</summary>
+    public void RefreshLibs()
+    {
+        _libs = AppConfig.ReadMediaLibs();
+        RebuildCards();
     }
 
     private void SaveLibs()
@@ -400,15 +361,22 @@ public class MediaLibSettingDialog
         _ = RunScanAsync(lib, force);
     }
 
-    /// <summary>更新状态：始终记入字符串，覆盖层打开时同步更新实时文本（跨线程时切回 UI 线程）。</summary>
+    /// <summary>更新状态：始终记入字符串，区块存在时同步更新实时文本并显示（跨线程时切回 UI 线程）。</summary>
     private void SetStatus(string text)
     {
         _statusText = text;
+        void Apply()
+        {
+            if (_statusBlock == null)
+                return;
+            _statusBlock.Text = text;
+            _statusBlock.Visibility = string.IsNullOrEmpty(text) ? Visibility.Collapsed : Visibility.Visible;
+        }
         var dispatcher = Application.Current?.Dispatcher;
         if (dispatcher != null && !dispatcher.CheckAccess())
-            dispatcher.Invoke(() => { if (_statusBlock != null) _statusBlock.Text = text; });
-        else if (_statusBlock != null)
-            _statusBlock.Text = text;
+            dispatcher.Invoke(Apply);
+        else
+            Apply();
     }
 
     private static Brush Res(string key, Brush fallback) =>

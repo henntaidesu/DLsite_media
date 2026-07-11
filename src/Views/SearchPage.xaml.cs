@@ -280,6 +280,8 @@ public partial class SearchPage : UserControl
     private bool _autoDownload;
     private string? _autoDownFolder;
     private string? _autoDownLib;
+    // 自动下载自主翻页单实例守卫：逐页推进（等当前页 AS 扫完再翻页），避免并发翻页循环
+    private bool _autoLoadingPages;
 
     // 社团卡片与下载页状态同步：每秒把下载列表的聚合状态写回对应卡片角标
     private readonly DispatcherTimer _downSyncTimer = new() { Interval = TimeSpan.FromSeconds(1) };
@@ -996,6 +998,42 @@ public partial class SearchPage : UserControl
         SetAutoDownload(true);
         RequeueAutoDownloadCandidates();
         _ = RunMakerScansAsync(_makerGeneration);
+        _ = AutoLoadPagesAsync(_makerGeneration);   // 自主翻页：等当前页 AS 扫完再加载下一页
+    }
+
+    /// <summary>
+    /// 自动下载开启期间自主翻页：逐页推进而非一次性全部加载。
+    /// 必须等当前页 AS 扫描队列清空（当前页作品全部扫描/自动下载完）再加载下一页，
+    /// 否则页加载（无节流）会远快于 AS 扫描（3s/作品），一开始就把所有页拉完（对齐 Web autoLoadPages）。
+    /// </summary>
+    private async Task AutoLoadPagesAsync(int generation)
+    {
+        if (_autoLoadingPages)
+            return;
+        _autoLoadingPages = true;
+        try
+        {
+            while (_autoDownload && _makerHasMore && generation == _makerGeneration)
+            {
+                if (_makerLoading)
+                {
+                    await Task.Delay(300);
+                    continue;
+                }
+                // 当前页仍有待扫描项或正在扫描 → 等其扫完再翻页
+                if (_scanQueue.Count > 0 || _makerScanning)
+                {
+                    await Task.Delay(500);
+                    continue;
+                }
+                await LoadMakerPageAsync();   // 追加下一页作品并重新排入 AS 扫描队列
+                await Task.Delay(500);        // 页间稍作停顿，避免连发请求
+            }
+        }
+        finally
+        {
+            _autoLoadingPages = false;
+        }
     }
 
     /// <summary>切换自动下载开关的内部状态与按钮外观。</summary>
@@ -1466,6 +1504,94 @@ public partial class SearchPage : UserControl
         card.CanDownload = false;
         card.StatusText = I18n.Tr("已加入下载");
         card.StatusBrush = (Brush)FindResource("AccentLightBrush");
+
+        // 同步社团卡片：该作品（若在社团网格中）立即转为"待下载"，并启动与下载页的状态同步
+        var makerItem = _makerWorks.FirstOrDefault(m => m.WorkId == _selectId);
+        if (makerItem != null)
+        {
+            makerItem.DownText = I18n.Tr("待下载");
+            makerItem.DownBrush = (Brush)FindResource("YellowBrush");
+            makerItem.DownActive = true;
+        }
+        StartDownSync();
+    }
+
+    /// <summary>帖子「组合下载」：对该帖按 rapidgator 优先、跨网盘同名分卷补齐失效者，组合出完整分卷集入队。
+    /// 组不齐完整档案（某分卷在所有网盘都失效）则不入队并提示缺口。对齐 Web 端 combineDownload / /api/combine。</summary>
+    private async void CombineDownload_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button btn || btn.DataContext is not SearchResultItem post || string.IsNullOrEmpty(_selectId))
+            return;
+        if (!btn.IsEnabled)
+            return;
+
+        // 用户已选定下载源：暂停其余网盘/帖子的链接校验，并立即中断所有正在进行中的检测请求
+        _checksPaused = true;
+        _checkCts.Cancel();
+
+        // 有媒体库配置时弹窗选择下载目标
+        string? targetFolder = null, targetLib = null;
+        if (AppConfig.ReadMediaLibs().Count > 0)
+        {
+            var dialog = new DownTargetDialog();
+            if (!dialog.Show(this))
+                return;
+            targetFolder = dialog.SelectedFolder;
+            targetLib = dialog.SelectedLib;
+        }
+
+        btn.IsEnabled = false;
+        var orig = btn.Content;
+        btn.Content = I18n.Tr("组合中…");
+
+        // 抓取该帖全部网盘链接
+        List<string> urls;
+        try { (urls, _) = await AnimeSharing.GetWorkDownUrlsAsync(post.Url); }
+        catch (Exception) { urls = []; }
+        if (urls.Count == 0)
+        {
+            InAppDialog.Warn(this, I18n.Tr("该帖未找到可用网盘链接"), I18n.Tr("提示"));
+            btn.Content = orig; btn.IsEnabled = true;
+            return;
+        }
+
+        // 组合：rapidgator 优先、跨网盘同名分卷补齐失效者（与 WebServer /api/combine 同一实现）
+        PostCombiner.PostAssembly? asm;
+        try
+        {
+            using var client = LinkChecker.MakeClient();
+            asm = await PostCombiner.AssembleAsync(urls, client);
+        }
+        catch (Exception) { asm = null; }
+        if (asm == null || asm.Urls.Count == 0)
+        {
+            InAppDialog.Warn(this, I18n.Tr("所有网盘分卷均失效，无可用下载"), I18n.Tr("提示"));
+            btn.Content = orig; btn.IsEnabled = true;
+            return;
+        }
+        if (!asm.Complete)
+        {
+            InAppDialog.Warn(this, I18n.Format(
+                I18n.Tr("仅凑齐 {have}/{total} 个分卷（部分分卷在所有网盘均失效），无法组合完整下载"),
+                ("have", asm.Urls.Count), ("total", asm.TotalParts)), I18n.Tr("提示"));
+            btn.Content = orig; btn.IsEnabled = true;
+            return;
+        }
+
+        // 完整：入队真实分卷（url 为主键，重复入队时覆盖并重置为待下载）
+        foreach (var downUrl in asm.Urls)
+            Db.Execute(
+                "INSERT OR REPLACE INTO \"download_list\" (\"UUID\", \"work_id\", \"url\", \"status\", \"long\", \"delete\") " +
+                "VALUES (@uuid, @w, @url, '0', '0', '1')",
+                ("@uuid", Guid.NewGuid().ToString()), ("@w", _selectId), ("@url", downUrl));
+        RecordWork();
+        if (!string.IsNullOrEmpty(targetFolder))
+            DownloadEngine.SetWorkTargetPath(_selectId!, targetFolder, targetLib);
+        if (asm.RapidgatorParts < asm.TotalParts)
+            Logger.Info($"{_selectId} 手动组合下载：rapidgator {asm.RapidgatorParts}/{asm.TotalParts} 分卷有效，其余分卷用其它网盘同名分卷补齐");
+        DownloadEngine.Start();
+
+        btn.Content = I18n.Tr("已加入下载");   // 保持禁用，避免重复入队
 
         // 同步社团卡片：该作品（若在社团网格中）立即转为"待下载"，并启动与下载页的状态同步
         var makerItem = _makerWorks.FirstOrDefault(m => m.WorkId == _selectId);

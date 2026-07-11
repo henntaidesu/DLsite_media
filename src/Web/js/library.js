@@ -109,7 +109,7 @@ async function renderDetail(id) {
     const main = el('img', 'main'); main.src = imgs[0]; main.onclick = () => LB.open(imgs, 0); gallery.appendChild(main);
     if (imgs.length > 1) {
       const thumbs = el('div', 'thumbs');
-      imgs.forEach((src, i) => { const t = el('img'); t.src = src; t.loading = 'lazy'; if (i === 0) t.className = 'sel';
+      imgs.forEach((src, i) => { const t = el('img'); t.src = src + '&thumb=1'; t.loading = 'lazy'; if (i === 0) t.className = 'sel';
         t.onclick = () => { main.src = src; main.onclick = () => LB.open(imgs, i); thumbs.querySelectorAll('img').forEach(x => x.classList.remove('sel')); t.classList.add('sel'); }; thumbs.appendChild(t); });
       gallery.appendChild(thumbs);
     }

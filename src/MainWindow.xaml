@@ -15,20 +15,63 @@
             <StackPanel>
                 <TextBlock x:Name="LogoLabel" Text="DLsite媒体库" FontSize="17" FontWeight="Bold"
                            Margin="20,22,12,18" />
+                <!-- 顺序 / 文案 / 图标对齐 Web 端 SECTIONS (src/Web/js/core.js) -->
                 <RadioButton x:Name="NavMediaLib" Style="{StaticResource NavButton}" GroupName="nav"
-                             IsChecked="True" Checked="Nav_Checked" Tag="medialib" Content="媒体库" />
-                <RadioButton x:Name="NavTag" Style="{StaticResource NavButton}" GroupName="nav"
-                             Checked="Nav_Checked" Tag="tag" Content="标签" />
-                <RadioButton x:Name="NavType" Style="{StaticResource NavButton}" GroupName="nav"
-                             Checked="Nav_Checked" Tag="type" Content="作品形式" />
-                <RadioButton x:Name="NavMaker" Style="{StaticResource NavButton}" GroupName="nav"
-                             Checked="Nav_Checked" Tag="maker" Content="社团" />
-                <RadioButton x:Name="NavFavorite" Style="{StaticResource NavButton}" GroupName="nav"
-                             Checked="Nav_Checked" Tag="favorite" Content="收藏夹" />
+                             IsChecked="True" Checked="Nav_Checked" Tag="medialib">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="📚" FontFamily="Segoe UI Emoji" FontSize="15" Width="26"
+                                   TextAlignment="Center" VerticalAlignment="Center" />
+                        <TextBlock x:Name="NavMediaLibLabel" Text="媒体库" VerticalAlignment="Center" />
+                    </StackPanel>
+                </RadioButton>
                 <RadioButton x:Name="NavSearchDownload" Style="{StaticResource NavButton}" GroupName="nav"
-                             Checked="Nav_Checked" Tag="searchdownload" Content="搜索/下载" />
+                             Checked="Nav_Checked" Tag="searchdownload">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="⬇" FontFamily="Segoe UI Emoji" FontSize="15" Width="26"
+                                   TextAlignment="Center" VerticalAlignment="Center" />
+                        <TextBlock x:Name="NavSearchDownloadLabel" Text="下载搜索" VerticalAlignment="Center" />
+                    </StackPanel>
+                </RadioButton>
+                <RadioButton x:Name="NavTag" Style="{StaticResource NavButton}" GroupName="nav"
+                             Checked="Nav_Checked" Tag="tag">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="🏷" FontFamily="Segoe UI Emoji" FontSize="15" Width="26"
+                                   TextAlignment="Center" VerticalAlignment="Center" />
+                        <TextBlock x:Name="NavTagLabel" Text="作品标签" VerticalAlignment="Center" />
+                    </StackPanel>
+                </RadioButton>
+                <RadioButton x:Name="NavMaker" Style="{StaticResource NavButton}" GroupName="nav"
+                             Checked="Nav_Checked" Tag="maker">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="🏢" FontFamily="Segoe UI Emoji" FontSize="15" Width="26"
+                                   TextAlignment="Center" VerticalAlignment="Center" />
+                        <TextBlock x:Name="NavMakerLabel" Text="作品社团" VerticalAlignment="Center" />
+                    </StackPanel>
+                </RadioButton>
+                <RadioButton x:Name="NavType" Style="{StaticResource NavButton}" GroupName="nav"
+                             Checked="Nav_Checked" Tag="type">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="🎬" FontFamily="Segoe UI Emoji" FontSize="15" Width="26"
+                                   TextAlignment="Center" VerticalAlignment="Center" />
+                        <TextBlock x:Name="NavTypeLabel" Text="作品形式" VerticalAlignment="Center" />
+                    </StackPanel>
+                </RadioButton>
+                <RadioButton x:Name="NavFavorite" Style="{StaticResource NavButton}" GroupName="nav"
+                             Checked="Nav_Checked" Tag="favorite">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="♥" FontFamily="Segoe UI Emoji" FontSize="15" Width="26"
+                                   TextAlignment="Center" VerticalAlignment="Center" />
+                        <TextBlock x:Name="NavFavoriteLabel" Text="我的收藏" VerticalAlignment="Center" />
+                    </StackPanel>
+                </RadioButton>
                 <RadioButton x:Name="NavSetting" Style="{StaticResource NavButton}" GroupName="nav"
-                             Checked="Nav_Checked" Tag="setting" Content="设置" />
+                             Checked="Nav_Checked" Tag="setting">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="⚙" FontFamily="Segoe UI Emoji" FontSize="15" Width="26"
+                                   TextAlignment="Center" VerticalAlignment="Center" />
+                        <TextBlock x:Name="NavSettingLabel" Text="系统设置" VerticalAlignment="Center" />
+                    </StackPanel>
+                </RadioButton>
             </StackPanel>
         </Border>
 

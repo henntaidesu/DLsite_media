@@ -237,7 +237,7 @@ function parseHash() {
 // ========== 卡片区（媒体库/标签/作品形式/收藏）==========
 // 每深入一级 push 一个历史项：iOS/安卓的"返回"手势触发 popstate 即可逐级回退，并恢复浏览位置
 function pushView(view, ctx) {
-  if (stack.length) stack[stack.length - 1].scroll = window.scrollY;
+  if (stack.length) { const cur = stack[stack.length - 1]; cur.scroll = window.scrollY; cur.loaded = _cardLoaded; }
   stack.push({ view, ctx: ctx || {} });
   history.pushState({ nav: true, depth: stack.length }, '', encodeHash());
   render();
@@ -246,6 +246,7 @@ async function popView() {
   if (stack.length <= 1) return false;
   stack.pop();
   const top = stack[stack.length - 1];
+  _restoreLoaded = top.loaded || 0;   // 让懒加载网格先补足之前展开的卡片数，再恢复滚动位置
   await render();
   window.scrollTo(0, top.scroll || 0);   // 返回上一级后恢复之前的浏览位置
   return true;
@@ -315,6 +316,8 @@ function makeWorkCard(w) {
 // 媒体库上千个作品、或单个作品内上百张图片时，避免一次性构建 DOM + 发起大量图片请求。
 const CARD_BATCH = 30;
 let _cardIO = null;   // 全局仅一个 observer（同一时刻只有一个懒加载网格在展示）
+let _cardLoaded = 0;      // 当前懒加载网格已渲染的卡片数（供 pushView 记录、popView 恢复）
+let _restoreLoaded = 0;   // 从详情返回时需先补足的卡片数，使内容够高以恢复滚动位置（消费一次即清零）
 // 把 items 分批用 makeFn 渲染进「已在 DOM 中」的 grid；哨兵滚入视口（提前 600px）时补下一批。
 // unobserve→observe 触发一次新的相交回调，处理"补完后哨兵仍在视口"的连续加载。
 function lazyGridFill(grid, items, makeFn) {
@@ -325,8 +328,12 @@ function lazyGridFill(grid, items, makeFn) {
     const frag = document.createDocumentFragment();
     for (; idx < end; idx++) frag.appendChild(makeFn(items[idx]));
     grid.appendChild(frag);
+    _cardLoaded = idx;
   };
-  renderNext();
+  // 首批渲染：普通进入渲染一批；从详情返回时补足之前展开的批数（_restoreLoaded），保证内容够高、可恢复滚动位置
+  const target = Math.min(Math.max(CARD_BATCH, _restoreLoaded), items.length);
+  _restoreLoaded = 0;
+  do { renderNext(); } while (idx < target);
   if (idx >= items.length) return;
   const sentinel = el('div'); sentinel.style.height = '1px'; grid.after(sentinel);
   // rootMargin 为 0：哨兵（网格末尾）真正滚入视口——即滑块拉到底——时才加载下一批，

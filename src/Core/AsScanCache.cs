@@ -31,6 +31,14 @@ public static class AsScanCache
         return remain.TotalSeconds > 0 ? (long)remain.TotalSeconds : 0;
     }
 
+    /// <summary>清除某作品的"无结果"缓存，使其可立即重新扫描 AS（用户主动"全部重新解析"时调用）。</summary>
+    public static void Clear(string workId)
+    {
+        if (string.IsNullOrEmpty(workId))
+            return;
+        Db.Execute("DELETE FROM \"as_scan_cache\" WHERE \"work_id\" = @w", ("@w", workId));
+    }
+
     /// <summary>记录一次扫描结果：无结果（0）写入缓存并计时；有结果（&gt;0）清除旧缓存以便下次正常扫描。负数（失败）不记录。</summary>
     public static void Store(string workId, int count)
     {

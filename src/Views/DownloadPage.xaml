@@ -111,8 +111,10 @@
             <Button x:Name="ShowDownloadedButton" Grid.Column="5" Margin="8,0,0,0"
                     Click="ShowDownloadedButton_Click" Content="已下载" />
             <TextBlock x:Name="UsageLabel" Grid.Column="7" VerticalAlignment="Center"
-                       Style="{StaticResource CaptionText}" Margin="0,0,8,0" Text="debrid-link 使用量 --" />
-            <ProgressBar x:Name="UsageBar" Grid.Column="8" Height="10" VerticalAlignment="Center" />
+                       Style="{StaticResource CaptionText}" Margin="0,0,8,0" Text="debrid-link 使用量 --"
+                       Background="Transparent" Cursor="Hand" MouseLeftButtonUp="Usage_Click" />
+            <ProgressBar x:Name="UsageBar" Grid.Column="8" Height="10" VerticalAlignment="Center"
+                         Cursor="Hand" MouseLeftButtonUp="Usage_Click" />
         </Grid>
 
         <!-- 下载列表（两级树：番号 -> 分卷文件）；虚拟化：仅渲染视口内的番号卡，元素数量恒定 -->

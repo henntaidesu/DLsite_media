@@ -79,6 +79,8 @@ const VIDEO_EXTS = ['.mp4', '.mkv', '.avi', '.wmv', '.mov', '.flv', '.webm', '.m
 const AUDIO_EXTS = ['.mp3', '.wav', '.flac', '.m4a', '.aac', '.ogg', '.wma', '.opus'];
 const IMG_EXTS = ['.jpg', '.jpeg', '.png', '.gif', '.webp'];
 const fileUrl = (id, rel) => `/api/file?id=${enc(id)}&path=${enc(rel)}`;
+// 缩略图 URL：服务端把图片压到 128KB 以内再发，用于缩略图网格（点开大图仍用 fileUrl 原图）
+const thumbUrl = (id, rel) => `${fileUrl(id, rel)}&thumb=1`;
 
 let section = 'medialib';
 let stack = [];            // 卡片区导航栈
@@ -141,6 +143,7 @@ function stopTimers() { if (pollTimer) clearInterval(pollTimer); if (usageTimer)
 
 function selectSection(key) {
   section = key; stopTimers(); closeVideo(); closeAudio(); closeDrawer();
+  if (key === 'searchdownload') sdView = 'download';   // 进入分区先归位到下载视图，再写基线历史（encodeHash 依赖 sdView）
   const s = SECTIONS.find(x => x.key === key);
   buildTabs();
   $('search').hidden = !s.root;
@@ -155,7 +158,7 @@ function selectSection(key) {
   // 反映到地址栏；切换分区重置历史基线（不累积层级），但 URL 可见当前分区
   history.replaceState({ nav: true, depth: s.root ? 1 : 0 }, '', encodeHash());
   if (s.root) render();
-  else if (key === 'searchdownload') { sdView = 'download'; renderSearchDownload(); }
+  else if (key === 'searchdownload') renderSearchDownload();
   else if (key === 'settings') renderSettings();
 }
 
@@ -164,7 +167,8 @@ function selectSection(key) {
 // 内存 stack 仍是渲染与滚动恢复的主数据源；哈希仅作 URL 呈现与新开页面时的恢复。
 function encodeHash() {
   const s = SECTIONS.find(x => x.key === section);
-  if (!s || !s.root) return '#/' + section;             // 叶子分区（下载/搜索/设置）
+  if (section === 'searchdownload') return encodeSdHash();   // 下载搜索有三视图，走独立编码
+  if (!s || !s.root) return '#/' + section;             // 其它叶子分区（设置）
   const segs = stack.slice(1).map(e => {
     const ctx = { ...e.ctx }; delete ctx.nodes;          // nodes 为运行时文件树缓存，过大不入 URL
     const c = Object.keys(ctx).length ? '~' + encodeURIComponent(JSON.stringify(ctx)) : '';
@@ -172,12 +176,53 @@ function encodeHash() {
   });
   return '#/' + s.key + (segs.length ? '/' + segs.join('/') : '');
 }
+// 下载搜索三视图（下载/搜索/已下载）纳入地址栏路由：搜索视图带上查询词，可刷新/分享/前进后退恢复。
+// 形如 #/searchdownload（下载）、#/searchdownload/search~RJ123456（搜索）、#/searchdownload/downloaded（已下载）。
+function encodeSdHash() {
+  if (sdView === 'search') {
+    const q = ($('sId') && $('sId').value.trim()) || '';
+    return '#/searchdownload/search' + (q ? '~' + encodeURIComponent(q) : '');
+  }
+  if (sdView === 'downloaded') return '#/searchdownload/downloaded';
+  return '#/searchdownload';
+}
+// 子视图切换：作为可回退的路由层级压入历史并反映到地址栏（对齐卡片区 pushView）
+function navSd(view) {
+  sdView = view;
+  history.pushState({ nav: true, sd: view }, '', encodeSdHash());
+  renderSearchDownload();
+}
+// 搜索视图内输入查询后刷新地址栏（只 replace，不为每次查询累积历史层级）
+function syncSdHash() {
+  if (section === 'searchdownload' && sdView === 'search')
+    history.replaceState({ nav: true, sd: 'search' }, '', encodeSdHash());
+}
+// 前进/后退（popstate）落在下载搜索分区时，按地址栏恢复子视图；搜索视图带查询词则复跑一次
+function syncSdFromHash() {
+  const p = parseHash();
+  const sd = (p && p.key === 'searchdownload') ? p.sd : 'download';
+  if (sd === sdView) return;
+  sdView = sd;
+  renderSearchDownload();
+  if (sd === 'search' && p && p.query) { const inp = $('sId'); if (inp) { inp.value = p.query; runSearch(); } }
+}
 function parseHash() {
   const raw = (location.hash || '').replace(/^#\/?/, '');
   if (!raw) return null;
   const parts = raw.split('/').filter(Boolean);
   const s = SECTIONS.find(x => x.key === parts[0]);
   if (!s) return null;
+  if (s.key === 'searchdownload') {
+    // parts[1]：search | downloaded（缺省 download）；search 可携 ~查询词
+    let sd = 'download', query = '';
+    if (parts[1]) {
+      const t = parts[1].indexOf('~');
+      sd = t < 0 ? parts[1] : parts[1].slice(0, t);
+      if (t >= 0) { try { query = decodeURIComponent(parts[1].slice(t + 1)); } catch (e) { } }
+    }
+    if (!['download', 'search', 'downloaded'].includes(sd)) sd = 'download';
+    return { key: s.key, root: false, sd, query };
+  }
   const stk = s.root ? [{ view: s.root, ctx: {} }] : [];
   for (let i = 1; i < parts.length; i++) {
     const t = parts[i].indexOf('~');
@@ -192,7 +237,7 @@ function parseHash() {
 // ========== 卡片区（媒体库/标签/作品形式/收藏）==========
 // 每深入一级 push 一个历史项：iOS/安卓的"返回"手势触发 popstate 即可逐级回退，并恢复浏览位置
 function pushView(view, ctx) {
-  if (stack.length) stack[stack.length - 1].scroll = window.scrollY;
+  if (stack.length) { const cur = stack[stack.length - 1]; cur.scroll = window.scrollY; cur.loaded = _cardLoaded; }
   stack.push({ view, ctx: ctx || {} });
   history.pushState({ nav: true, depth: stack.length }, '', encodeHash());
   render();
@@ -201,11 +246,13 @@ async function popView() {
   if (stack.length <= 1) return false;
   stack.pop();
   const top = stack[stack.length - 1];
+  _restoreLoaded = top.loaded || 0;   // 让懒加载网格先补足之前展开的卡片数，再恢复滚动位置
   await render();
   window.scrollTo(0, top.scroll || 0);   // 返回上一级后恢复之前的浏览位置
   return true;
 }
 window.addEventListener('popstate', () => {
+  if (section === 'searchdownload') { syncSdFromHash(); return; }
   const s = SECTIONS.find(x => x.key === section);
   if (s && s.root && stack.length > 1) popView();
 });
@@ -258,7 +305,7 @@ function drawGroups(items, mapFn, unit) {
 function makeWorkCard(w) {
   const c = el('div', 'card');
   const cov = el('div', 'cover');
-  if (w.cover) { const img = el('img'); img.loading = 'lazy'; img.src = `/api/cover?id=${enc(w.id)}`; cov.appendChild(img); }
+  if (w.cover) { const img = el('img'); img.loading = 'lazy'; img.src = `/api/cover?id=${enc(w.id)}&thumb=1`; cov.appendChild(img); }
   cov.appendChild(el('div', 'badge rj', w.id));
   if (w.type) cov.appendChild(el('div', 'badge type', w.type));
   c.appendChild(cov); c.appendChild(el('div', 'wt', w.name || w.id));
@@ -269,6 +316,8 @@ function makeWorkCard(w) {
 // 媒体库上千个作品、或单个作品内上百张图片时，避免一次性构建 DOM + 发起大量图片请求。
 const CARD_BATCH = 30;
 let _cardIO = null;   // 全局仅一个 observer（同一时刻只有一个懒加载网格在展示）
+let _cardLoaded = 0;      // 当前懒加载网格已渲染的卡片数（供 pushView 记录、popView 恢复）
+let _restoreLoaded = 0;   // 从详情返回时需先补足的卡片数，使内容够高以恢复滚动位置（消费一次即清零）
 // 把 items 分批用 makeFn 渲染进「已在 DOM 中」的 grid；哨兵滚入视口（提前 600px）时补下一批。
 // unobserve→observe 触发一次新的相交回调，处理"补完后哨兵仍在视口"的连续加载。
 function lazyGridFill(grid, items, makeFn) {
@@ -279,8 +328,12 @@ function lazyGridFill(grid, items, makeFn) {
     const frag = document.createDocumentFragment();
     for (; idx < end; idx++) frag.appendChild(makeFn(items[idx]));
     grid.appendChild(frag);
+    _cardLoaded = idx;
   };
-  renderNext();
+  // 首批渲染：普通进入渲染一批；从详情返回时补足之前展开的批数（_restoreLoaded），保证内容够高、可恢复滚动位置
+  const target = Math.min(Math.max(CARD_BATCH, _restoreLoaded), items.length);
+  _restoreLoaded = 0;
+  do { renderNext(); } while (idx < target);
   if (idx >= items.length) return;
   const sentinel = el('div'); sentinel.style.height = '1px'; grid.after(sentinel);
   // rootMargin 为 0：哨兵（网格末尾）真正滚入视口——即滑块拉到底——时才加载下一批，

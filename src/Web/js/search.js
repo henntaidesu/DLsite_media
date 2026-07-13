@@ -7,12 +7,17 @@ function renderSearch() {
   makerState = null;
   const host = $('content'); host.innerHTML = '';
   const bar = el('div', 'toolbar');
-  const back = el('button', 'icon-btn', '← 下载'); back.onclick = () => { sdView = 'download'; renderSearchDownload(); };
   const inp = el('input'); inp.placeholder = '作品号(RJ/BJ/VJ)、社团号(RG) 或 DLsite 链接'; inp.className = 'grow'; inp.id = 'sId';
   const btn = el('button', 'icon-btn primary', '查询');
   inp.addEventListener('keydown', e => { if (e.key === 'Enter') runSearch(); });
   btn.onclick = runSearch;
-  bar.append(back, inp, btn);
+  // 自动下载总开关：原本在社团/目录网格里独立一行，移到工具栏紧随查询按钮；仅网格视图显示，默认关
+  const autoAll = el('button', 'icon-btn', '自动下载：关'); autoAll.id = 'autoAllBtn'; autoAll.style.display = 'none';
+  autoAll.title = '开启后自动检测网盘并加入下载，无需逐个点击';
+  autoAll.onclick = () => toggleAutoAll(autoAll);
+  // 返回作品列表：仅从社团/目录列表点进作品时显示（无箭头），放在工具栏内、替代原独立返回行
+  const backList = el('button', 'icon-btn', '返回作品列表'); backList.id = 'backListBtn'; backList.style.display = 'none'; backList.onclick = goBackToMaker;
+  bar.append(inp, btn, autoAll, backList);
   host.appendChild(bar);
   // 社团网格与帖子列表分两个 pane：进入帖子列表时仅隐藏社团 pane（保留 DOM 与后台扫描），返回即缓存恢复
   const wrap = el('div'); wrap.id = 'searchResult';
@@ -20,8 +25,14 @@ function renderSearch() {
   const wp = el('div'); wp.id = 'workPane';
   wrap.append(mp, wp); host.appendChild(wrap);
 }
-function showMakerPane() { $('makerPane').style.display = ''; $('workPane').style.display = 'none'; }
-function showWorkPane() { $('makerPane').style.display = 'none'; $('workPane').style.display = ''; }
+function showMakerPane() { $('makerPane').style.display = ''; $('workPane').style.display = 'none'; const b = $('backListBtn'); if (b) b.style.display = 'none'; const a = $('autoAllBtn'); if (a) a.style.display = makerState ? '' : 'none'; }
+function showWorkPane() { $('makerPane').style.display = 'none'; $('workPane').style.display = ''; const a = $('autoAllBtn'); if (a) a.style.display = 'none'; }
+// 工具栏"返回作品列表/社团作品"按钮：仅从社团/目录列表点进作品时显示（无箭头）
+function updateBackListBtn() {
+  const b = $('backListBtn'); if (!b) return;
+  if (makerReturnId) { b.textContent = (makerState && makerState.catalogUrl) ? '返回作品列表' : '返回社团作品'; b.style.display = ''; }
+  else b.style.display = 'none';
+}
 function goBackToMaker() {
   showMakerPane();
   if (makerState) {
@@ -47,6 +58,7 @@ function parseInput(raw) {
   return { kind: 'invalid', id: '' };
 }
 async function runSearch() {
+  syncSdHash();   // 把当前查询词写入地址栏（搜索视图内，只 replace 不累积历史）
   const p = parseInput($('sId').value);
   if (p.kind === 'catalog') { await runGridSearch({ catalogUrl: p.id }); return; }
   if (p.kind === 'maker') { await runGridSearch({ id: p.id }); return; }
@@ -59,18 +71,19 @@ let workGen = 0;
 async function runWorkSearch(id) {
   const gen = ++workGen;
   showWorkPane();
+  updateBackListBtn();   // 工具栏"返回作品列表"按钮据 makerReturnId 显示/隐藏
   const box = $('workPane'); box.innerHTML = '<div class="empty"><span class="spin"></span> 正在查询…</div>';
   let d;
   try { d = await api('/api/search?id=' + enc(id)); } catch (e) { return; }
   if (gen !== workGen) return;
-  if (d.error) { box.innerHTML = ''; box.appendChild(el('div', 'empty', d.error)); return; }
+  const showEmpty = (msg) => { box.innerHTML = ''; box.appendChild(el('div', 'empty', msg)); };
+  if (d.error) { showEmpty(d.error); return; }
   if (d.existed && !await uiConfirm(`${d.id} ${d.existedName || ''}\n该作品已于 ${d.existedTime || ''} 加入过下载，是否继续？`)) {
     if (makerReturnId) goBackToMaker(); else box.innerHTML = '';
     return;
   }
-  if (!d.results.length) { box.innerHTML = ''; box.appendChild(el('div', 'empty', '无匹配数据')); return; }
+  if (!d.results.length) { showEmpty('无匹配数据'); return; }
   box.innerHTML = '';
-  if (makerReturnId) { const bk = el('button', 'icon-btn', makerState && makerState.catalogUrl ? '← 返回作品列表' : '← 返回社团作品'); bk.style.marginBottom = '10px'; bk.onclick = goBackToMaker; box.appendChild(bk); }
   $('count').textContent = `${d.work.name || d.id} · ${d.results.length} 个帖子`;
   const posts = [];
   d.results.forEach(r => {
@@ -88,6 +101,11 @@ async function runWorkSearch(id) {
     const post = { url: r.url, statusEl, hostsEl, scanned: false, scanning: false };
     // 点击未扫描的帖子可手动补扫（自动扫描命中并停止后，仍可点击后续帖子）
     head.onclick = () => { if (!post.scanning && !post.scanned) scanPost(id, post, workGen); };
+    // 手动组合下载：优先 rapidgator，失效分卷用其它网盘同名分卷补齐后一并下载
+    const combineBtn = el('button', 'icon-btn combine-btn', '组合下载');
+    combineBtn.title = '优先 rapidgator，失效分卷用其它网盘同名分卷补齐后下载';
+    combineBtn.onclick = (ev) => { ev.stopPropagation(); combineDownload(id, post, combineBtn); };
+    head.appendChild(combineBtn);
     box.appendChild(c);
     posts.push(post);
   });
@@ -136,6 +154,36 @@ async function scanPost(id, post, gen) {
   post.scanned = true; post.scanning = false;
   return anyValid;
 }
+// 手动组合下载：服务端对该帖按 rapidgator 优先、跨网盘同名分卷补齐失效者，组合出完整分卷集入队。
+// 组不齐完整档案（某分卷在所有网盘都失效）则不入队，弹窗提示缺口。
+async function combineDownload(id, post, btn) {
+  if (btn.disabled) return;
+  btn.disabled = true; const orig = btn.textContent;
+  let lib = '', folder = '';
+  const t = await api('/api/downtargets');
+  if (t.libs && t.libs.length) {
+    const target = await pickTarget(t.libs, id);
+    if (!target) { btn.disabled = false; return; }   // 取消选库
+    lib = target.lib; folder = target.folder;
+  }
+  btn.textContent = '组合中…';
+  let r;
+  try { r = await apiPost('/api/combine', { id, url: post.url, lib, folder }); }
+  catch (e) { btn.disabled = false; btn.textContent = orig; return; }
+  if (r.ok) {
+    btn.textContent = '已加入下载';   // 保持禁用，避免重复入队
+    // 若从社团网格进入：同步该作品卡片角标为"待下载"并启动与下载列表的状态同步
+    if (makerState && makerState.cards[id]) {
+      const b = makerState.cards[id];
+      b.dataset.dl = '1'; b.textContent = '待下载'; b.style.background = 'rgba(0,0,0,.72)'; b.style.color = '#facc15';
+      const mc = b.closest('.card'); if (mc) mc.classList.add('dim');
+      startMakerDownPoll();
+    }
+  } else {
+    btn.disabled = false; btn.textContent = orig;
+    await uiAlert(r.error || '组合下载失败');
+  }
+}
 
 // 社团（RG）/ 目录列表（DLsite 链接）搜索：作品缩略图网格 + 下拉到底自动加载下一页
 let makerState = null, makerReturnId = null;
@@ -146,8 +194,11 @@ async function runGridSearch(src) {
   const box = $('makerPane');
   box.innerHTML = '<div class="empty"><span class="spin"></span> 正在获取作品…</div>';
   if (makerState && makerState.io) makerState.io.disconnect();
-  makerState = { id: src.id || src.catalogUrl, catalogUrl: src.catalogUrl || null, page: 0, hasMore: true, loading: false, scanQueue: [], scanning: false, cards: {}, countText: '' };
+  makerState = { id: src.id || src.catalogUrl, catalogUrl: src.catalogUrl || null, page: 0, hasMore: true, loading: false, scanQueue: [], scanning: false, cards: {}, countText: '', autoAll: false, autoLib: '', autoFolder: '' };
   box.innerHTML = '';
+  // 复位并显示工具栏内的"自动下载"总开关（本次网格默认关；开关本体在 renderSearch 的工具栏里）
+  const autoAllBtn = $('autoAllBtn');
+  if (autoAllBtn) { autoAllBtn.textContent = '自动下载：关'; autoAllBtn.classList.remove('on'); autoAllBtn.style.display = ''; makerState.autoAllBtn = autoAllBtn; }
   const grid = el('div', 'grid cards'); box.appendChild(grid); makerState.grid = grid;
   const sentinel = el('div'); sentinel.style.height = '1px'; box.appendChild(sentinel);
   await loadMakerPage();
@@ -164,7 +215,7 @@ async function loadMakerPage() {
       : await api(`/api/maker?id=${enc(s.id)}&page=${s.page + 1}`);
   } catch (e) { s.loading = false; return; }
   if (d.error || !d.works || !d.works.length) {
-    if (s.page === 0) { const mp = $('makerPane'); mp.innerHTML = ''; mp.appendChild(el('div', 'empty', d.error || (s.catalogUrl ? '未找到作品' : '未找到该社团的作品'))); }
+    if (s.page === 0) { const mp = $('makerPane'); mp.innerHTML = ''; mp.appendChild(el('div', 'empty', d.error || (s.catalogUrl ? '未找到作品' : '未找到该社团的作品'))); const a = $('autoAllBtn'); if (a) a.style.display = 'none'; }
     s.hasMore = false; s.loading = false; if (s.io) s.io.disconnect(); return;
   }
   s.page++; s.hasMore = d.hasMore;
@@ -301,7 +352,15 @@ async function runMakerScans() {
     if (makerState !== s || section !== 'searchdownload' || sdView !== 'search') break;
     if (d.count > 0) {
       st.textContent = `AS · ${d.count} 帖`; st.style.background = 'rgba(34,160,80,.88)';
-      const card = st.closest('.card'); if (card) card.querySelectorAll('.mcard-actions button').forEach(b => b.disabled = false);   // 有帖子 → 解除按钮屏蔽
+      const card = st.closest('.card');
+      if (card) {
+        card.querySelectorAll('.mcard-actions button').forEach(b => b.disabled = false);   // 有帖子 → 解除按钮屏蔽
+        // 全局自动下载已开启：命中即自动加入下载（用预选媒体库，不再逐个弹窗）
+        if (s.autoAll) {
+          const autoBtn = card.querySelector('.mcard-actions button.primary');
+          if (autoBtn && !autoBtn.disabled) autoDownload(id, st, autoBtn, { lib: s.autoLib, folder: s.autoFolder });
+        }
+      }
     }
     else if (d.count === 0) {
       st.style.background = 'rgba(0,0,0,.62)';
@@ -324,15 +383,66 @@ function pickTargetQueued(libs, label) {
 }
 // 自动下载：每个作品各自选择媒体库（连点多个时选库框逐个弹出），随即以「搜索可用下载连接」状态加入下载列表；
 // 服务端串行排队、逐帖检测并挑选最优源——命中则转正常下载，全无则置「无可用下载连接」。
-async function autoDownload(id, badge, btn) {
+// 全局自动下载开关：关→直接关；开→先选一次媒体库（取消则保持关闭），随后对网格内所有
+// 可下载作品自动加入下载（已命中 AS 的立刻处理，未扫描的由 runMakerScans 命中后自动触发）。
+async function toggleAutoAll(btn) {
+  const s = makerState; if (!s) return;
+  if (s.autoAll) {
+    s.autoAll = false;
+    btn.textContent = '自动下载：关'; btn.classList.remove('on');
+    return;
+  }
+  const t = await api('/api/downtargets');
+  if (t.libs && t.libs.length) {
+    const target = await pickTarget(t.libs);
+    if (!target) return;   // 用户取消选库 → 保持关闭
+    s.autoLib = target.lib; s.autoFolder = target.folder;
+  } else { s.autoLib = ''; s.autoFolder = ''; }
+  s.autoAll = true;
+  btn.textContent = '自动下载：开'; btn.classList.add('on');
+  autoDownloadAll();
+  runMakerScans();   // 确保 AS 扫描在跑：未扫描的作品命中后会自动下载
+  autoLoadPages();   // 自主下拉加载后续页，无需用户手动滚动
+}
+// 全局自动下载开启期间自主翻页：逐页推进而非一次性全部加载。
+// 必须等当前页 AS 扫描队列清空（当前页作品全部扫描/自动下载完）再加载下一页，
+// 否则页加载（无节流）会远快于 AS 扫描（3s/作品），一开始就把所有页拉完。
+async function autoLoadPages() {
+  const s = makerState; if (!s || s.autoLoading) return;
+  s.autoLoading = true;
+  while (makerState === s && s.autoAll && s.hasMore) {
+    if (s.loading) { await new Promise(r => setTimeout(r, 300)); continue; }
+    // 当前页仍有待扫描项或正在扫描 → 等其扫完再翻页
+    if (s.scanQueue.length || s.scanning) { await new Promise(r => setTimeout(r, 500)); continue; }
+    await loadMakerPage();
+    await new Promise(r => setTimeout(r, 500));   // 页间稍作停顿，避免连发请求
+  }
+  s.autoLoading = false;
+}
+// 对网格内所有"已命中 AS、按钮已启用且尚未入队"的作品，用预选媒体库自动加入下载
+function autoDownloadAll() {
+  const s = makerState; if (!s || !s.autoAll) return;
+  Object.keys(s.cards).forEach(id => {
+    const badge = s.cards[id];
+    const card = badge && badge.closest('.card'); if (!card) return;
+    const autoBtn = card.querySelector('.mcard-actions button.primary');
+    if (autoBtn && !autoBtn.disabled) autoDownload(id, badge, autoBtn, { lib: s.autoLib, folder: s.autoFolder });
+  });
+}
+// preTarget 有值时用预选的媒体库直接入队（全局自动下载用），不再弹出选库框
+async function autoDownload(id, badge, btn, preTarget) {
   if (btn.disabled) return;
   btn.disabled = true; const orig = btn.textContent;
   let lib = '', folder = '';
-  const t = await api('/api/downtargets');
-  if (t.libs && t.libs.length) {
-    const target = await pickTargetQueued(t.libs, id);
-    if (!target) { btn.disabled = false; return; }   // 用户取消选库
-    lib = target.lib; folder = target.folder;
+  if (preTarget) {
+    lib = preTarget.lib || ''; folder = preTarget.folder || '';
+  } else {
+    const t = await api('/api/downtargets');
+    if (t.libs && t.libs.length) {
+      const target = await pickTargetQueued(t.libs, id);
+      if (!target) { btn.disabled = false; return; }   // 用户取消选库
+      lib = target.lib; folder = target.folder;
+    }
   }
   btn.textContent = '入队中…';
   const r = await apiPost('/api/autodownload', { id, lib, folder });

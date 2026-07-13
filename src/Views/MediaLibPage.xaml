@@ -64,18 +64,18 @@
                 <Button x:Name="ThumbViewButton" Click="ThumbViewButton_Click" Content="缩略图" />
                 <Button x:Name="ListViewButton" Margin="8,0,0,0" Click="ListViewButton_Click" Content="文件列表" />
             </StackPanel>
-            <Button x:Name="OpenFolderButton" Grid.Column="4" Margin="8,0,0,0" Visibility="Collapsed"
-                    Click="OpenFolderButton_Click" Content="打开文件夹" />
-            <Button x:Name="ViewFilesButton" Grid.Column="5" Margin="8,0,0,0" Visibility="Collapsed"
-                    Click="ViewFilesButton_Click" Content="查看作品" />
-            <Button x:Name="MoveLibButton" Grid.Column="6" Margin="8,0,0,0" Visibility="Collapsed"
-                    Click="MoveLibButton_Click" Content="移动媒体库" />
-            <Button x:Name="ReadButton" Grid.Column="7" Margin="8,0,0,0" Visibility="Collapsed"
+            <!-- 详情操作条顺序对齐 Web：已读 → 收藏 → 查看作品 → 移动媒体库（library.js）；打开文件夹为桌面独有，置于其后 -->
+            <Button x:Name="ReadButton" Grid.Column="4" Margin="8,0,0,0" Visibility="Collapsed"
                     FontFamily="Segoe UI Emoji" Click="ReadButton_Click" Content="☆ 已读" />
-            <Button x:Name="FavButton" Grid.Column="8" Margin="8,0,0,0" Visibility="Collapsed"
-                    FontFamily="Segoe UI Emoji" Click="FavButton_Click" Content="🤍 收藏" />
-            <Button x:Name="LibSettingButton" Grid.Column="9" Margin="8,0,0,0" Visibility="Collapsed"
-                    Click="LibSettingButton_Click" Content="媒体库设置" />
+            <Button x:Name="FavButton" Grid.Column="5" Margin="8,0,0,0" Visibility="Collapsed"
+                    FontFamily="Segoe UI Emoji" Click="FavButton_Click" Content="♡ 收藏" />
+            <Button x:Name="ViewFilesButton" Grid.Column="6" Margin="8,0,0,0" Visibility="Collapsed"
+                    FontFamily="Segoe UI Emoji" Click="ViewFilesButton_Click" Content="📂 查看作品" />
+            <Button x:Name="MoveLibButton" Grid.Column="7" Margin="8,0,0,0" Visibility="Collapsed"
+                    FontFamily="Segoe UI Emoji" Click="MoveLibButton_Click" Content="📦 移动媒体库" />
+            <Button x:Name="OpenFolderButton" Grid.Column="8" Margin="8,0,0,0" Visibility="Collapsed"
+                    Click="OpenFolderButton_Click" Content="打开文件夹" />
+            <!-- 媒体库设置已移入「系统设置」页（对齐 Web），此处不再提供入口 -->
             <TextBlock x:Name="CountLabel" Grid.Column="10" VerticalAlignment="Center"
                        Style="{StaticResource CaptionText}" Margin="12,0,12,0" />
             <Button x:Name="BackButton" Grid.Column="11" Click="BackButton_Click" Content="← 返回"

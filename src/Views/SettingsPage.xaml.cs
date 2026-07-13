@@ -14,6 +14,7 @@ namespace DLsiteMedia.Views;
 public partial class SettingsPage : UserControl
 {
     private bool _loading;  // 回填控件时不触发保存
+    private readonly MediaLibSettingDialog _mediaLibSection = new();  // 内联的媒体库管理区块（常驻，扫描随其存活）
 
     public SettingsPage()
     {
@@ -21,6 +22,8 @@ public partial class SettingsPage : UserControl
         BuildCombos();
         RetranslateUi();
         ReadConf();
+        // 媒体库管理内联进设置页（对齐 Web 设置页），构建一次；扫描状态在页面切换间保持
+        MediaLibHost.Content = _mediaLibSection.BuildSection(this);
         I18n.LanguageChanged += RetranslateUi;
     }
 
@@ -131,8 +134,8 @@ public partial class SettingsPage : UserControl
         AsmrMirrorLabel.Text = I18n.Tr("镜像站");
         AsmrFileTypeLabel.Text = I18n.Tr("下载文件类型");
         AsmrTestButton.Content = I18n.Tr("登录测试");
-        OtherGroup.Header = I18n.Tr("下载选项");
         SystemGroup.Header = I18n.Tr("系统");
+        MediaLibGroup.Header = I18n.Tr("媒体库");
         PathLabel.Text = I18n.Tr("缓存路径");
         PathChooseButton.Content = I18n.Tr("保存");
         AutoDownloadLabel.Text = I18n.Tr("自动下载");
@@ -184,6 +187,7 @@ public partial class SettingsPage : UserControl
             _cfgVersionSeen = AppConfig.Version;
         }
         ReadConf();
+        _mediaLibSection.RefreshLibs();   // 拾取外部对媒体库的改动
     }
 
     /// <summary>用户的"下载"文件夹。</summary>

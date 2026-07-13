@@ -343,17 +343,20 @@ public static class WebServer
                 case "/api/downtargets": ApiDownTargets(stream); break;
                 case "/api/enqueue": ApiEnqueue(stream, req); break;
                 case "/api/autodownload": ApiAutoDownload(stream, req); break;
+                case "/api/combine": await ApiCombineAsync(stream, req); break;
                 // 下载 / 已下载
                 case "/api/downloads": ApiDownloads(stream); break;
                 case "/api/usage": await ApiUsageAsync(stream); break;
                 case "/api/engine": ApiEngine(stream, req); break;
                 case "/api/reparse": ApiReparse(stream, req); break;
+                case "/api/reparseall": ApiReparseAll(stream); break;
                 case "/api/pausework": ApiPauseWork(stream, req); break;
                 case "/api/resumework": ApiResumeWork(stream, req); break;
                 case "/api/deletework": ApiDeleteWork(stream, req); break;
                 case "/api/research": ApiResearch(stream, req); break;
                 case "/api/cleardone": ApiClearDone(stream); break;
                 case "/api/clearall": ApiClearAll(stream); break;
+                case "/api/clearnolink": ApiClearNoLink(stream); break;
                 case "/api/downloaded": ApiDownloaded(stream); break;
                 case "/api/mark": ApiMark(stream, req); break;
                 case "/api/dislike": ApiDislike(stream, req); break;
@@ -863,8 +866,11 @@ public static class WebServer
     {
         var id = req.Query.GetValueOrDefault("id") ?? "";
         var cover = Db.Scalar("SELECT \"cover\" FROM \"works\" WHERE \"work_id\" = @w", ("@w", id)) as string;
-        ServeImageFile(stream, cover);
+        ServeImageFile(stream, cover, ThumbParam(req));
     }
+
+    /// <summary>请求是否要缩略图（thumb=1）：压缩到 128KB 以内再发，避免传原图。</summary>
+    private static bool ThumbParam(Request req) => req.Query.GetValueOrDefault("thumb") == "1";
 
     private static void ApiAsset(NetworkStream stream, Request req)
     {
@@ -879,7 +885,7 @@ public static class WebServer
         }
         var folder = ResolveAssetFolder(id, Db.Scalar(
             "SELECT \"folder\" FROM \"works\" WHERE \"work_id\" = @w", ("@w", id)) as string);
-        ServeImageFile(stream, Path.Combine(folder, name));
+        ServeImageFile(stream, Path.Combine(folder, name), ThumbParam(req));
     }
 
     /// <summary>详情资源文件夹：作品文件夹/DataSource 优先，否则回退 images/&lt;RJ&gt;。</summary>
@@ -894,12 +900,18 @@ public static class WebServer
         return Path.Combine(DlsitePage.ImagesDir, id);
     }
 
-    private static void ServeImageFile(NetworkStream stream, string? path)
+    private static void ServeImageFile(NetworkStream stream, string? path, bool thumb = false)
     {
         if (path == null || !File.Exists(path) ||
             !ImageExts.Contains(Path.GetExtension(path).ToLowerInvariant()))
         {
             WriteBytes(stream, 404, "Not Found", "text/plain", Encoding.ASCII.GetBytes("not found"));
+            return;
+        }
+        // 缩略图：压到 128KB 以内的 JPEG 再发（压缩失败则回退原图）
+        if (thumb && ImageThumb.Compress(path) is { } jpg)
+        {
+            WriteBytes(stream, 200, "OK", "image/jpeg", jpg, ("Cache-Control", "max-age=86400"));
             return;
         }
         byte[] data;
@@ -992,6 +1004,12 @@ public static class WebServer
             !File.Exists(full))
         {
             WriteBytes(stream, 404, "Not Found", "text/plain", []);
+            return;
+        }
+        // 缩略图网格：图片按 thumb=1 请求，压到 128KB 以内再发，不传原图（非图片/非缩略图仍走 Range 流式）
+        if (ThumbParam(req) && ImageExts.Contains(Path.GetExtension(full).ToLowerInvariant()))
+        {
+            ServeImageFile(stream, full, thumb: true);
             return;
         }
         WriteFileRange(stream, req, full);
@@ -1428,8 +1446,13 @@ public static class WebServer
         WriteJson(stream, 200, new { ok = true });
     }
 
-    /// <summary>后台逐帖抓取网盘链接并检测有效性，选出「最优」源（首个完整有效；否则有效比例最高者）。
-    /// 选中即把占位行替换为真实下载分卷并启动引擎；全程未命中则把占位行标记为「无可用下载连接」。</summary>
+    // 自动下载优先在前 5 个帖子里深挖 rapidgator；超过仍无 rapidgator 有效源才退用 katfile 等其它网盘
+    private const int DeepSearchPosts = 5;
+
+    /// <summary>后台逐帖抓取网盘链接并检测有效性，选出下载源：
+    /// 每帖内优先用 rapidgator，失效的分卷用其它网盘同名分卷补齐（组合下载）；
+    /// 跨帖深度搜索优先 rapidgator，扫满 5 帖仍无 rapidgator 才退用 katfile 等。
+    /// 命中即把占位行替换为真实分卷并启动引擎；全程未命中则把占位行标记为「无可用下载连接」。</summary>
     private static async Task AutoResolveLinksAsync(string id, string placeholder)
     {
         try
@@ -1440,10 +1463,14 @@ public static class WebServer
                 Db.Execute("UPDATE \"download_list\" SET \"status\" = '6' WHERE \"UUID\" = @u AND \"status\" = '5'", ("@u", placeholder));
                 return;
             }
-            List<string>? best = null;
-            var bestRatio = 0.0;
             var posts = await AnimeSharing.SearchWorkAsync(id);
             AsScanCache.Store(id, posts.Count);
+
+            PostCombiner.PostAssembly? best = null;            // 最优「完整」组合（rapidgator 覆盖最多者）
+            List<string>? bestPartial = null; var bestPartialCount = 0;   // 退路：凑不齐时用有效分卷最多的部分集
+            var scanned = 0;
+
+            using var client = LinkChecker.MakeClient();
             foreach (var post in posts)
             {
                 if (!PlaceholderAlive(placeholder))
@@ -1453,42 +1480,50 @@ public static class WebServer
                 catch (Exception) { continue; }
                 if (urls.Count == 0)
                     continue;
-                // 按网盘域名分组（同一贴内可能多个网盘）
-                var groups = new Dictionary<string, List<string>>();
-                foreach (var u in urls)
+
+                var asm = await PostCombiner.AssembleAsync(urls, client, () => PlaceholderAlive(placeholder));
+                if (!PlaceholderAlive(placeholder))
+                    return;
+                if (asm == null)
+                    continue;
+                scanned++;
+
+                if (asm.Complete)
                 {
-                    var host = HostOf(u);
-                    if (!groups.TryGetValue(host, out var list))
-                        groups[host] = list = [];
-                    list.Add(u);
-                }
-                using var client = LinkChecker.MakeClient();
-                foreach (var g in groups.Values)
-                {
-                    var valid = 0;
-                    foreach (var u in g)
-                        if (await LinkChecker.CheckUrlAsync(u, client))
-                            valid++;
-                    if (valid == g.Count) { best = g; bestRatio = 1; break; }   // 完整有效即选定
-                    if (valid > 0)
+                    // 全部分卷都由 rapidgator 提供 → 最优，立即选定
+                    if (asm.RapidgatorParts == asm.TotalParts)
                     {
-                        var ratio = (double)valid / g.Count;
-                        if (ratio > bestRatio) { best = g; bestRatio = ratio; }
+                        best = asm;
+                        break;
                     }
+                    // 完整但混合（rapidgator + 其它网盘补齐失效分卷）：保留 rapidgator 覆盖最多者
+                    if (best == null || asm.RapidgatorParts > best.RapidgatorParts)
+                        best = asm;
                 }
-                if (best != null && bestRatio >= 1)
-                    break;   // 已找到完整有效源，不再扫描后续帖子
+                else if (asm.Urls.Count > bestPartialCount)
+                {
+                    bestPartial = asm.Urls; bestPartialCount = asm.Urls.Count;
+                }
+
+                // 深度搜索止损：已扫满 5 帖且已有完整组合即采用
+                // （若这 5 帖里都没 rapidgator，best 便是 katfile 等的完整集 → 自然实现"5 帖后退用 katfile"）
+                if (scanned >= DeepSearchPosts && best != null)
+                    break;
             }
             if (!PlaceholderAlive(placeholder))
                 return;
-            if (best == null || best.Count == 0)
+
+            var chosen = best?.Urls ?? bestPartial;
+            if (chosen == null || chosen.Count == 0)
             {
                 Db.Execute("UPDATE \"download_list\" SET \"status\" = '6' WHERE \"UUID\" = @u", ("@u", placeholder));
                 return;
             }
+            if (best is { Complete: true } && best.RapidgatorParts < best.TotalParts)
+                Logger.Info($"{id} 自动下载组合源：rapidgator {best.RapidgatorParts}/{best.TotalParts} 分卷有效，其余分卷用其它网盘同名分卷补齐");
             // 命中：占位行换成真实分卷（状态 '0'），启动引擎开始下载
             Db.Execute("DELETE FROM \"download_list\" WHERE \"UUID\" = @u", ("@u", placeholder));
-            foreach (var downUrl in best)
+            foreach (var downUrl in chosen)
                 Db.Execute(
                     "INSERT OR REPLACE INTO \"download_list\" (\"UUID\", \"work_id\", \"url\", \"status\", \"long\", \"delete\") " +
                     "VALUES (@uuid, @w, @url, '0', '0', '1')",
@@ -1501,6 +1536,10 @@ public static class WebServer
             Db.Execute("UPDATE \"download_list\" SET \"status\" = '6' WHERE \"UUID\" = @u AND \"status\" = '5'", ("@u", placeholder));
         }
     }
+
+    /// <summary>单帖内组合出一份下载分卷集：以分卷最多的网盘为完整分卷全集，逐个分卷按
+    /// rapidgator → katfile → 其它 的优先级挑首个「有效」链接（跨网盘同名分卷可互相补齐失效者）。</summary>
+    // 组合下载算法已抽到 PostCombiner（WebServer 与 SearchPage 共用），此处仅保留 PlaceholderAlive 等 WebServer 专属逻辑。
 
     /// <summary>占位分卷是否仍存在且处于「搜索中」('5')——用户删除后后台解析即应停止。</summary>
     private static bool PlaceholderAlive(string placeholder)
@@ -1592,7 +1631,8 @@ public static class WebServer
         {
             var items = grouped[workId];
             var statuses = items.Select(it => it.Status).ToList();
-            var (aggText, aggColor) = AggregateStatus(workId, statuses);
+            var (aggText, aggColor) = AggregateStatus(
+                workId, items.Select(it => (it.Status, it.Error)).ToList());
             var totalPct = 0;
             double totalSpeed = 0;
             var children = items.Select(it =>
@@ -1602,6 +1642,9 @@ public static class WebServer
                 if (speed is { } s) totalSpeed += s;
                 var (text, color) = StatusMap.TryGetValue(it.Status, out var m)
                     ? m : ($"未知({it.Status})", "#cdd3de");
+                // 解析失败：状态直接显示具体原因的简短标签（如"文件失效"/"流量用尽"），完整说明见 errorReason
+                if (it.Status == "2")
+                    text = ParseErrorLabel(it.Error);
                 // asmr 直链带作品内目录层级（sub_path 含子目录），用于前端构建目录树；
                 // 论坛源无 sub_path，回退到 URL 解码后的文件名（位于根层级），对齐 WPF 下载页
                 var rel = string.IsNullOrEmpty(it.SubPath) ? FileNameOf(it.Url) : it.SubPath!;
@@ -1638,8 +1681,10 @@ public static class WebServer
         });
     }
 
-    private static (string Text, string Color) AggregateStatus(string workId, List<string> statuses)
+    private static (string Text, string Color) AggregateStatus(
+        string workId, List<(string Status, string? Error)> items)
     {
+        var statuses = items.Select(i => i.Status).ToList();
         var done = statuses.Count(s => s == "1");
         if (statuses.Contains("3"))
             return ($"下载中 {done}/{statuses.Count}", "#60a5fa");
@@ -1650,7 +1695,14 @@ public static class WebServer
         if (statuses.Contains("4"))
             return ($"已暂停 {done}/{statuses.Count}", "#9aa4b2");
         if (statuses.Contains("2"))
-            return ($"{statuses.Count(s => s == "2")} 个解析失败", "#f87171");
+        {
+            var fails = items.Where(i => i.Status == "2").ToList();
+            // 失败原因一致 → 显示该原因（如"文件失效"/"流量用尽"）；原因不一 → 显示失败数
+            var labels = fails.Select(f => ParseErrorLabel(f.Error)).Distinct().ToList();
+            if (labels.Count == 1)
+                return (labels[0], "#f87171");
+            return ($"{fails.Count} 个解析失败", "#f87171");
+        }
         if (statuses.Contains("6"))
             return ("无可用下载连接", "#f87171");
         if (DownloadEngine.UnzipProgress.TryGetValue(workId, out var unzip))
@@ -1703,24 +1755,39 @@ public static class WebServer
                 value = await client.DownloadLimitsAsync();
             double? current = null;
             double resetSeconds = 0;
+            var hostUsage = new List<object>();
             if (value is { } v && v.ValueKind == JsonValueKind.Object)
             {
-                if (v.TryGetProperty("usagePercent", out var usage) && usage.ValueKind == JsonValueKind.Object &&
-                    usage.TryGetProperty("current", out var cur) && cur.ValueKind == JsonValueKind.Number)
-                    current = cur.GetDouble();
+                if (v.TryGetProperty("usagePercent", out var usage) && usage.ValueKind == JsonValueKind.Object)
+                {
+                    if (usage.TryGetProperty("current", out var cur) && cur.ValueKind == JsonValueKind.Number)
+                        current = cur.GetDouble();
+                    // 逐网盘用量：域名键（含'.'）即该网盘用量百分比（若 API 提供）
+                    foreach (var prop in usage.EnumerateObject())
+                        if (prop.Name.Contains('.') && prop.Value.ValueKind == JsonValueKind.Number)
+                            hostUsage.Add(new { host = prop.Name, percent = (int)Math.Round(prop.Value.GetDouble()) });
+                }
                 if (v.TryGetProperty("nextResetSeconds", out var reset) && reset.ValueKind == JsonValueKind.Object &&
                     reset.TryGetProperty("value", out var rv) && rv.ValueKind == JsonValueKind.Number)
                     resetSeconds = rv.GetDouble();
             }
+            var (accountFull, exhausted) = ExhaustedHosts();
             WriteJson(stream, 200, new
             {
                 percent = current is { } c ? (int)Math.Min(100, Math.Round(c)) : (int?)null,
                 resetText = FormatReset(resetSeconds),
+                hosts = hostUsage,               // 各网盘用量（API 提供时）
+                accountFull,                     // 账户总流量已用尽（maxData）
+                exhausted,                       // 流量已用尽的网盘域名（maxDataHost）
             });
         }
         catch (Exception)
         {
-            WriteJson(stream, 200, new { percent = (int?)null, resetText = "" });
+            WriteJson(stream, 200, new
+            {
+                percent = (int?)null, resetText = "",
+                hosts = Array.Empty<object>(), accountFull = false, exhausted = Array.Empty<string>(),
+            });
         }
     }
 
@@ -1752,6 +1819,96 @@ public static class WebServer
             DownloadEngine.Start();
         }
         WriteJson(stream, 200, new { ok = true });
+    }
+
+    /// <summary>全部重新解析：所有解析失败分卷('2')重新排队；所有"无可用下载连接"占位('6')清空空结果缓存后重新自动解析。</summary>
+    private static void ApiReparseAll(NetworkStream stream)
+    {
+        // 解析失败分卷 → 重新排队（经 debrid-link 再解析）
+        Db.Execute("UPDATE \"download_list\" SET \"status\" = '0', \"error\" = NULL WHERE \"status\" = '2'");
+        // "无可用下载连接"占位行 → 重新触发自动解析（清 7 天空结果缓存，让其真正重扫）
+        var rows = Db.Select("SELECT \"UUID\", \"work_id\" FROM \"download_list\" WHERE \"status\" = '6'");
+        foreach (var r in rows ?? [])
+        {
+            var uuid = r[0] as string ?? "";
+            var work = r[1] as string ?? "";
+            if (uuid.Length == 0 || work.Length == 0)
+                continue;
+            AsScanCache.Clear(work);
+            Db.Execute("UPDATE \"download_list\" SET \"status\" = '5' WHERE \"UUID\" = @u", ("@u", uuid));
+            _ = Task.Run(async () =>
+            {
+                await ResolveGate.WaitAsync();
+                try { if (PlaceholderAlive(uuid)) await AutoResolveLinksAsync(work, uuid); }
+                finally { ResolveGate.Release(); }
+            });
+        }
+        DownloadEngine.Start();
+        WriteJson(stream, 200, new { ok = true });
+    }
+
+    /// <summary>手动组合下载：对指定帖子按 rapidgator 优先、跨网盘同名分卷补齐失效者组合出完整分卷集并入队。
+    /// 组不齐完整档案（某分卷在所有网盘均失效）则不入队，回传缺口信息由前端提示。</summary>
+    private static async Task ApiCombineAsync(NetworkStream stream, Request req)
+    {
+        string id = "", postUrl = "", lib = "", folder = "";
+        try
+        {
+            using var doc = JsonDocument.Parse(Encoding.UTF8.GetString(req.Body));
+            var root = doc.RootElement;
+            id = (root.TryGetProperty("id", out var i) ? i.GetString() ?? "" : "").ToUpperInvariant();
+            postUrl = root.TryGetProperty("url", out var u) ? u.GetString() ?? "" : "";
+            lib = root.TryGetProperty("lib", out var l) ? l.GetString() ?? "" : "";
+            folder = root.TryGetProperty("folder", out var f) ? f.GetString() ?? "" : "";
+        }
+        catch (Exception)
+        {
+            // 解析失败按非法请求处理
+        }
+        if (!WorkIdRe.IsMatch(id) || postUrl.Length == 0)
+        {
+            WriteJson(stream, 400, new { ok = false, error = "请求参数错误" });
+            return;
+        }
+        List<string> urls;
+        try { (urls, _) = await AnimeSharing.GetWorkDownUrlsAsync(postUrl); }
+        catch (Exception) { urls = []; }
+        if (urls.Count == 0)
+        {
+            WriteJson(stream, 200, new { ok = false, error = "该帖未找到可用网盘链接" });
+            return;
+        }
+        PostCombiner.PostAssembly? asm;
+        using (var client = LinkChecker.MakeClient())
+            asm = await PostCombiner.AssembleAsync(urls, client);
+        if (asm == null || asm.Urls.Count == 0)
+        {
+            WriteJson(stream, 200, new { ok = false, error = "所有网盘分卷均失效，无可用下载" });
+            return;
+        }
+        if (!asm.Complete)
+        {
+            WriteJson(stream, 200, new
+            {
+                ok = false,
+                error = $"仅凑齐 {asm.Urls.Count}/{asm.TotalParts} 个分卷（部分分卷在所有网盘均失效），无法组合完整下载",
+            });
+            return;
+        }
+        // 完整：入队真实分卷（状态 '0'）
+        foreach (var downUrl in asm.Urls)
+            Db.Execute(
+                "INSERT OR REPLACE INTO \"download_list\" (\"UUID\", \"work_id\", \"url\", \"status\", \"long\", \"delete\") " +
+                "VALUES (@uuid, @w, @url, '0', '0', '1')",
+                ("@uuid", Guid.NewGuid().ToString()), ("@w", id), ("@url", downUrl));
+        RecordWork(id, SearchCache.GetValueOrDefault(id));
+        if (folder.Length > 0)
+            DownloadEngine.SetWorkTargetPath(id, folder, lib.Length > 0 ? lib : null);
+        _ = EnsureWorkMetaAsync(id);
+        if (asm.RapidgatorParts < asm.TotalParts)
+            Logger.Info($"{id} 手动组合下载：rapidgator {asm.RapidgatorParts}/{asm.TotalParts} 分卷有效，其余分卷用其它网盘同名分卷补齐");
+        DownloadEngine.Start();
+        WriteJson(stream, 200, new { ok = true, total = asm.TotalParts, rapidgatorParts = asm.RapidgatorParts });
     }
 
     /// <summary>单独停止某作品下载（停到断点，镜像下载页"停止"）。</summary>
@@ -1801,6 +1958,45 @@ public static class WebServer
             "badFileType" => "不支持的文件类型",
             _ => $"解析失败（{raw}）",
         };
+    }
+
+    /// <summary>该失败错误码是否为 debrid-link 流量额度用尽（maxData=账户级，maxDataHost=单网盘级）。</summary>
+    private static bool IsTrafficError(string? error) => error is "maxData" or "maxDataHost";
+
+    /// <summary>把 debrid-link 解析失败错误码翻译成简短状态标签（用于状态列；完整说明见 MapParseError，镜像 WPF）。</summary>
+    private static string ParseErrorLabel(string? raw) => raw switch
+    {
+        "maxData" or "maxDataHost" => "流量用尽",
+        "fileNotFound" or "fileUnavailable" or "notFound" or "fileError" => "文件失效",
+        "hostUnsupported" or "notDebrid" or "hostNotValid" or "noServer" => "网盘不支持",
+        "notFreeHost" or "hostNotFree" or "disabledHost" or "disabledServerHost" => "需会员",
+        "badToken" => "Key 无效",
+        "floodDetected" => "请求频繁",
+        "badFileType" => "类型不支持",
+        "maxLink" or "maxLinkHost" => "超链接数",
+        _ => "解析失败",
+    };
+
+    /// <summary>当前下载列表中因流量用尽而解析失败的网盘：AccountFull=账户总流量(maxData)，Hosts=各单网盘(maxDataHost)。</summary>
+    private static (bool AccountFull, List<string> Hosts) ExhaustedHosts()
+    {
+        var rows = Db.Select(
+            "SELECT DISTINCT \"url\", \"error\" FROM \"download_list\" WHERE \"status\" = '2' AND \"error\" IN ('maxData', 'maxDataHost')");
+        var accountFull = false;
+        var hosts = new List<string>();
+        foreach (var r in rows ?? [])
+        {
+            var err = r[1] as string ?? "";
+            if (err == "maxData")
+                accountFull = true;
+            else
+            {
+                var h = HostOf(r[0] as string ?? "");
+                if (h.Length > 0 && !hosts.Contains(h))
+                    hosts.Add(h);
+            }
+        }
+        return (accountFull, hosts);
     }
 
     /// <summary>把作品移动到另一个媒体库（镜像详情页"移动媒体库"）。</summary>
@@ -1907,6 +2103,24 @@ public static class WebServer
             Db.Execute("DELETE FROM \"works\" WHERE \"work_id\" = @w AND \"state\" = '下载中'",
                 ("@w", row[0] as string ?? ""));
         Db.Execute("DELETE FROM \"download_list\"");
+        WriteJson(stream, 200, new { ok = true });
+    }
+
+    /// <summary>清除"无可用下载连接"（占位状态 '6'）的作品：删占位行，并清掉因此残留的"下载中"作品记录。</summary>
+    private static void ApiClearNoLink(NetworkStream stream)
+    {
+        var rows = Db.Select("SELECT DISTINCT \"work_id\" FROM \"download_list\" WHERE \"status\" = '6'");
+        Db.Execute("DELETE FROM \"download_list\" WHERE \"status\" = '6'");
+        foreach (var row in rows ?? [])
+        {
+            var wid = row[0] as string ?? "";
+            if (wid.Length == 0)
+                continue;
+            // 该作品已无任何下载行时，清除仅为占位而建的"下载中"作品记录（有真实下载/已入库的则保留）
+            var remain = Db.Select("SELECT 1 FROM \"download_list\" WHERE \"work_id\" = @w", ("@w", wid));
+            if (remain is not { Count: > 0 })
+                Db.Execute("DELETE FROM \"works\" WHERE \"work_id\" = @w AND \"state\" = '下载中'", ("@w", wid));
+        }
         WriteJson(stream, 200, new { ok = true });
     }
 

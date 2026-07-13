@@ -78,6 +78,11 @@ public static class I18n
         ["搜索"] = new() { ["zh_TW"] = "搜尋", ["ja"] = "検索", ["en"] = "Search" },
         ["下载"] = new() { ["zh_TW"] = "下載", ["ja"] = "ダウンロード", ["en"] = "Download" },
         ["搜索/下载"] = new() { ["zh_TW"] = "搜尋/下載", ["ja"] = "検索/ダウンロード", ["en"] = "Search / Download" },
+        // 左导航文案对齐 Web 端 SECTIONS (src/Web/js/core.js)
+        ["下载搜索"] = new() { ["zh_TW"] = "下載搜尋", ["ja"] = "ダウンロード/検索", ["en"] = "Download / Search" },
+        ["作品社团"] = new() { ["zh_TW"] = "作品社團", ["ja"] = "サークル", ["en"] = "Makers" },
+        ["我的收藏"] = new() { ["zh_TW"] = "我的收藏", ["ja"] = "お気に入り", ["en"] = "Favorites" },
+        ["系统设置"] = new() { ["zh_TW"] = "系統設定", ["ja"] = "システム設定", ["en"] = "Settings" },
         ["已下载"] = new() { ["zh_TW"] = "已下載", ["ja"] = "ダウンロード済み", ["en"] = "Downloaded" },
         ["媒体库"] = new() { ["zh_TW"] = "媒體庫", ["ja"] = "ライブラリ", ["en"] = "Library" },
         ["标签"] = new() { ["zh_TW"] = "標籤", ["ja"] = "タグ", ["en"] = "Tags" },
@@ -183,6 +188,22 @@ public static class I18n
             ["zh_TW"] = "等待下載 {done}/{total}", ["ja"] = "待機中 {done}/{total}", ["en"] = "Waiting {done}/{total}"
         },
         ["{n} 个解析失败"] = new() { ["zh_TW"] = "{n} 個解析失敗", ["ja"] = "{n} 件解析失敗", ["en"] = "{n} parse failed" },
+        ["流量用尽"] = new() { ["zh_TW"] = "流量用盡", ["ja"] = "通信量超過", ["en"] = "Data limit reached" },
+        ["文件失效"] = new() { ["zh_TW"] = "檔案失效", ["ja"] = "ファイル失効", ["en"] = "File dead" },
+        ["网盘不支持"] = new() { ["zh_TW"] = "網盤不支援", ["ja"] = "非対応ホスト", ["en"] = "Host unsupported" },
+        ["需会员"] = new() { ["zh_TW"] = "需會員", ["ja"] = "会員限定", ["en"] = "Premium only" },
+        ["Key 无效"] = new() { ["zh_TW"] = "Key 無效", ["ja"] = "Key 無効", ["en"] = "Bad API key" },
+        ["请求频繁"] = new() { ["zh_TW"] = "請求頻繁", ["ja"] = "リクエスト過多", ["en"] = "Rate limited" },
+        ["类型不支持"] = new() { ["zh_TW"] = "類型不支援", ["ja"] = "非対応形式", ["en"] = "Bad file type" },
+        ["超链接数"] = new() { ["zh_TW"] = "超連結數", ["ja"] = "リンク数超過", ["en"] = "Too many links" },
+        ["点击查看各网盘流量详情"] = new() { ["zh_TW"] = "點擊查看各網盤流量詳情", ["ja"] = "各ホストの通信量詳細を表示", ["en"] = "Click for per-host data usage" },
+        ["debrid-link 流量详情"] = new() { ["zh_TW"] = "debrid-link 流量詳情", ["ja"] = "debrid-link 通信量詳細", ["en"] = "debrid-link data usage" },
+        ["总用量 {pct}%"] = new() { ["zh_TW"] = "總用量 {pct}%", ["ja"] = "合計 {pct}%", ["en"] = "Total {pct}%" },
+        ["（{reset} 后重置）"] = new() { ["zh_TW"] = "（{reset} 後重置）", ["ja"] = "（{reset} 後にリセット）", ["en"] = " (resets in {reset})" },
+        ["各网盘用量："] = new() { ["zh_TW"] = "各網盤用量：", ["ja"] = "ホスト別使用量：", ["en"] = "Per-host usage:" },
+        ["流量已用尽的网盘："] = new() { ["zh_TW"] = "流量已用盡的網盤：", ["ja"] = "通信量を使い切ったホスト：", ["en"] = "Hosts out of data:" },
+        ["账户总流量（所有网盘）"] = new() { ["zh_TW"] = "帳戶總流量（所有網盤）", ["ja"] = "アカウント全体（全ホスト）", ["en"] = "Account total (all hosts)" },
+        ["暂无网盘流量用尽"] = new() { ["zh_TW"] = "暫無網盤流量用盡", ["ja"] = "通信量を使い切ったホストはありません", ["en"] = "No hosts are out of data" },
         ["重新解析"] = new() { ["zh_TW"] = "重新解析", ["ja"] = "再解析", ["en"] = "Re-parse" },
         ["重新搜索"] = new() { ["zh_TW"] = "重新搜尋", ["ja"] = "再検索", ["en"] = "Re-search" },
         ["将删除 {id} 已下载的分卷与文件夹，并重新搜索。是否继续？"] = new()
@@ -213,6 +234,28 @@ public static class I18n
         ["全部"] = new() { ["zh_TW"] = "全部", ["ja"] = "すべて", ["en"] = "All" },
         ["已品悦"] = new() { ["zh_TW"] = "已品悦", ["ja"] = "鑑賞済み", ["en"] = "Enjoyed" },
         ["共 {n} 个作品"] = new() { ["zh_TW"] = "共 {n} 個作品", ["ja"] = "作品 {n} 件", ["en"] = "{n} works total" },
+
+        // ---------- 组合下载（对齐 Web 端 combineDownload / /api/combine）----------
+        ["组合下载"] = new() { ["zh_TW"] = "組合下載", ["ja"] = "分卷を組み合わせDL", ["en"] = "Combine download" },
+        ["组合中…"] = new() { ["zh_TW"] = "組合中…", ["ja"] = "組み合わせ中…", ["en"] = "Combining…" },
+        ["该帖未找到可用网盘链接"] = new()
+        {
+            ["zh_TW"] = "該帖未找到可用網盤連結",
+            ["ja"] = "この投稿に利用可能なアップローダーのリンクがありません",
+            ["en"] = "No usable host links found in this post"
+        },
+        ["所有网盘分卷均失效，无可用下载"] = new()
+        {
+            ["zh_TW"] = "所有網盤分卷均失效，無可用下載",
+            ["ja"] = "すべての分卷が無効で、ダウンロードできません",
+            ["en"] = "All volumes are dead on every host — nothing to download"
+        },
+        ["仅凑齐 {have}/{total} 个分卷（部分分卷在所有网盘均失效），无法组合完整下载"] = new()
+        {
+            ["zh_TW"] = "僅湊齊 {have}/{total} 個分卷（部分分卷在所有網盤均失效），無法組合完整下載",
+            ["ja"] = "分卷 {have}/{total} のみ確保（一部が全ホストで無効）— 完全な組み合わせができません",
+            ["en"] = "Only {have}/{total} volumes available (some dead on every host) — cannot assemble a complete download"
+        },
 
         // ---------- 媒体库页 ----------
         ["搜索 RJ号 / 作品名 / 社团"] = new()
@@ -312,8 +355,14 @@ public static class I18n
         ["共 {total} 个作品"] = new() { ["zh_TW"] = "共 {total} 個作品", ["ja"] = "作品 {total} 件", ["en"] = "{total} works" },
         ["（已加载 {loaded}）"] = new() { ["zh_TW"] = "（已載入 {loaded}）", ["ja"] = "（読み込み済み {loaded}）", ["en"] = " (loaded {loaded})" },
 
-        // ---------- 媒体库设置弹窗 ----------
+        // ---------- 媒体库管理（内联于系统设置页）----------
         ["新建媒体库"] = new() { ["zh_TW"] = "新增媒體庫", ["ja"] = "ライブラリを新規作成", ["en"] = "New library" },
+        ["文件夹路径为本机本地路径（如 D:\\ASMR）；添加后点\"扫描元数据\"导入作品与元数据。删除媒体库不会删除本地文件、已导入记录保留。"] = new()
+        {
+            ["zh_TW"] = "資料夾路徑為本機本地路徑（如 D:\\ASMR）；新增後點「掃描中繼資料」匯入作品與中繼資料。刪除媒體庫不會刪除本地檔案、已匯入記錄保留。",
+            ["ja"] = "フォルダパスは本機のローカルパス（例 D:\\ASMR）です。追加後「メタデータをスキャン」で作品とメタデータを取り込みます。ライブラリを削除してもローカルファイルは削除されず、取り込み済みの記録は保持されます。",
+            ["en"] = "Folder paths are local paths on this machine (e.g. D:\\ASMR). After adding, click \"Scan metadata\" to import works and metadata. Deleting a library does not delete local files; imported records are kept."
+        },
         ["还没有媒体库，点击\"新建媒体库\"创建。"] = new()
         {
             ["zh_TW"] = "還沒有媒體庫，點擊「新增媒體庫」建立。",

@@ -31,6 +31,17 @@
                         <ComboBox x:Name="AutoUnzipCombo" Width="120"
                                   SelectionChanged="AutoUnzipCombo_SelectionChanged" />
                     </StackPanel>
+                    <!-- 线程 / 速度：Web 端 下载 分区内含此三项（settings.js），故并入「下载」而非独立分区 -->
+                    <StackPanel Orientation="Horizontal" Margin="0,4">
+                        <TextBlock x:Name="DownProcLabel" Text="单文件线程数" Style="{StaticResource FieldLabel}" />
+                        <TextBox x:Name="DownProcBox" Width="80" LostFocus="DownProcBox_LostFocus" />
+                        <TextBlock x:Name="MinSpeedLabel" Text="最低速度 (KB/s)" Style="{StaticResource FieldLabel}"
+                                   MinWidth="0" Margin="24,0,12,0" />
+                        <TextBox x:Name="MinSpeedBox" Width="80" LostFocus="MinSpeedBox_LostFocus" />
+                        <TextBlock x:Name="SpeedLimitLabel" Text="速度限制 (KB/s)" Style="{StaticResource FieldLabel}"
+                                   MinWidth="0" Margin="24,0,12,0" />
+                        <TextBox x:Name="SpeedLimitBox" Width="80" LostFocus="SpeedLimitBox_LostFocus" />
+                    </StackPanel>
                 </StackPanel>
             </GroupBox>
 
@@ -99,40 +110,7 @@
                 </StackPanel>
             </GroupBox>
 
-            <!-- 下载选项 -->
-            <GroupBox x:Name="OtherGroup" Header="下载选项">
-                <StackPanel Orientation="Horizontal" Margin="0,4">
-                    <TextBlock x:Name="DownProcLabel" Text="单文件线程数" Style="{StaticResource FieldLabel}" />
-                    <TextBox x:Name="DownProcBox" Width="80" LostFocus="DownProcBox_LostFocus" />
-                    <TextBlock x:Name="MinSpeedLabel" Text="最低速度 (KB/s)" Style="{StaticResource FieldLabel}"
-                               MinWidth="0" Margin="24,0,12,0" />
-                    <TextBox x:Name="MinSpeedBox" Width="80" LostFocus="MinSpeedBox_LostFocus" />
-                    <TextBlock x:Name="SpeedLimitLabel" Text="速度限制 (KB/s)" Style="{StaticResource FieldLabel}"
-                               MinWidth="0" Margin="24,0,12,0" />
-                    <TextBox x:Name="SpeedLimitBox" Width="80" LostFocus="SpeedLimitBox_LostFocus" />
-                </StackPanel>
-            </GroupBox>
-
-            <!-- 外部访问 -->
-            <GroupBox x:Name="WebGroup" Header="外部访问">
-                <StackPanel>
-                    <StackPanel Orientation="Horizontal" Margin="0,4">
-                        <TextBlock x:Name="WebEnableLabel" Text="外部访问" Style="{StaticResource FieldLabel}" />
-                        <ComboBox x:Name="WebEnableCombo" Width="120"
-                                  SelectionChanged="WebEnableCombo_SelectionChanged" />
-                        <TextBlock x:Name="WebPortLabel" Text="端口" Style="{StaticResource FieldLabel}"
-                                   MinWidth="0" Margin="24,0,12,0" />
-                        <TextBox x:Name="WebPortBox" Width="90" LostFocus="WebPortBox_LostFocus" />
-                        <TextBlock x:Name="WebPasswordLabel" Text="访问密码" Style="{StaticResource FieldLabel}"
-                                   MinWidth="0" Margin="24,0,12,0" />
-                        <TextBox x:Name="WebPasswordBox" Width="160" LostFocus="WebPasswordBox_LostFocus" />
-                    </StackPanel>
-                    <TextBlock x:Name="WebStatusLabel" Margin="0,6,0,0"
-                               Foreground="{StaticResource CaptionBrush}" TextWrapping="Wrap" />
-                </StackPanel>
-            </GroupBox>
-
-            <!-- 系统 -->
+            <!-- 系统（顺序对齐 Web：系统在外部访问之前，settings.js）。关闭按钮为桌面独有项 -->
             <GroupBox x:Name="SystemGroup" Header="系统">
                 <StackPanel>
                     <StackPanel Orientation="Horizontal" Margin="0,4">
@@ -152,6 +130,31 @@
                         <ComboBox x:Name="CloseActionCombo" Width="180"
                                   SelectionChanged="CloseActionCombo_SelectionChanged" />
                     </StackPanel>
+                </StackPanel>
+            </GroupBox>
+
+            <!-- 媒体库（内联管理，对齐 Web 设置页：位于「系统」与「外部访问」之间）。
+                 桌面端以此取代原独立弹窗；区块由 MediaLibSettingDialog.BuildSection 在代码后台注入 -->
+            <GroupBox x:Name="MediaLibGroup" Header="媒体库">
+                <ContentControl x:Name="MediaLibHost" />
+            </GroupBox>
+
+            <!-- 外部访问 -->
+            <GroupBox x:Name="WebGroup" Header="外部访问">
+                <StackPanel>
+                    <StackPanel Orientation="Horizontal" Margin="0,4">
+                        <TextBlock x:Name="WebEnableLabel" Text="外部访问" Style="{StaticResource FieldLabel}" />
+                        <ComboBox x:Name="WebEnableCombo" Width="120"
+                                  SelectionChanged="WebEnableCombo_SelectionChanged" />
+                        <TextBlock x:Name="WebPortLabel" Text="端口" Style="{StaticResource FieldLabel}"
+                                   MinWidth="0" Margin="24,0,12,0" />
+                        <TextBox x:Name="WebPortBox" Width="90" LostFocus="WebPortBox_LostFocus" />
+                        <TextBlock x:Name="WebPasswordLabel" Text="访问密码" Style="{StaticResource FieldLabel}"
+                                   MinWidth="0" Margin="24,0,12,0" />
+                        <TextBox x:Name="WebPasswordBox" Width="160" LostFocus="WebPasswordBox_LostFocus" />
+                    </StackPanel>
+                    <TextBlock x:Name="WebStatusLabel" Margin="0,6,0,0"
+                               Foreground="{StaticResource CaptionBrush}" TextWrapping="Wrap" />
                 </StackPanel>
             </GroupBox>
         </StackPanel>

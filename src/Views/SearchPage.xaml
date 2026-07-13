@@ -16,6 +16,7 @@
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
             <Button x:Name="BackToDownloadButton" Margin="0,0,8,0"
                     Click="BackToDownloadButton_Click" Content="← 下载列表" />
@@ -24,6 +25,8 @@
                     Style="{StaticResource AccentButton}" Click="SearchButton_Click" Content="查询" />
             <Button x:Name="BackButton" Grid.Column="3" Margin="8,0,0,0" Visibility="Collapsed"
                     Click="BackButton_Click" Content="← 返回结果" />
+            <Button x:Name="AutoDownloadButton" Grid.Column="4" Margin="8,0,0,0" MinWidth="110"
+                    Visibility="Collapsed" Click="AutoDownloadToggle_Click" Content="自动下载：关" />
         </Grid>
 
         <!-- asmr.one 直链下载横幅（仅 SOU 音声作品显示） -->
@@ -82,8 +85,15 @@
                                         <TextBlock Text="{Binding Snippet}" Style="{StaticResource CaptionText}"
                                                    TextWrapping="Wrap" Margin="0,2,0,0" />
                                     </StackPanel>
-                                    <TextBlock Grid.Column="2" Text="{Binding ScanText}" Foreground="{Binding ScanBrush}"
-                                               FontWeight="SemiBold" VerticalAlignment="Top" Margin="10,0,0,0" />
+                                    <StackPanel Grid.Column="2" VerticalAlignment="Top" Margin="10,0,0,0"
+                                                HorizontalAlignment="Right">
+                                        <TextBlock Text="{Binding ScanText}" Foreground="{Binding ScanBrush}"
+                                                   FontWeight="SemiBold" HorizontalAlignment="Right" />
+                                        <!-- 手动组合下载：优先 rapidgator，失效分卷用其它网盘同名分卷补齐（对齐 Web 端 combineDownload） -->
+                                        <Button Content="组合下载" MinWidth="80" Margin="0,6,0,0"
+                                                ToolTip="优先 rapidgator，失效分卷用其它网盘同名分卷补齐后下载"
+                                                Click="CombineDownload_Click" />
+                                    </StackPanel>
                                 </Grid>
                                 <!-- 内联网盘卡片：抓取到的下载链接 + 自动检测 + 直接下载 -->
                                 <ItemsControl ItemsSource="{Binding Hosts}" Visibility="{Binding HostsVisibility}"

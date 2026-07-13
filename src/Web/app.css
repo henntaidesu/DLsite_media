@@ -176,6 +176,7 @@
   .post .phead img { width: 120px; height: 90px; object-fit: cover; border-radius: 6px; background: #15151a; flex: none; }
   .post .pinfo { flex: 1; min-width: 0; }
   .post .rstatus { font-size: 12.5px; font-weight: 600; white-space: nowrap; flex: none; }
+  .post .phead .combine-btn { flex: none; align-self: flex-start; font-size: 12.5px; padding: 5px 10px; white-space: nowrap; }
   .rhosts { margin-top: 8px; }
   .rhosts .host { margin: 6px 0 0; background: var(--surface2); }
 

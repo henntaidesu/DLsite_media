@@ -2,10 +2,12 @@ using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Linq;
+using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
 using DLsiteMedia.Core;
@@ -165,6 +167,10 @@ public partial class DownloadPage : UserControl
     private readonly DispatcherTimer _refreshTimer = new() { Interval = TimeSpan.FromSeconds(1) };
     private readonly DispatcherTimer _usageTimer = new() { Interval = TimeSpan.FromSeconds(15) };
     private bool _usageLoading;
+    // 最近一次拉取到的用量，供点击"使用量"弹出详情用
+    private double? _usagePercent;
+    private double _usageReset;
+    private readonly Dictionary<string, double> _hostUsage = new();   // 单网盘用量%（若 API 提供）
 
     public DownloadPage()
     {
@@ -183,6 +189,7 @@ public partial class DownloadPage : UserControl
         ClearDoneButton.Content = I18n.Tr("清除已完成");
         ClearAllButton.Content = I18n.Tr("清空列表");
         ShowDownloadedButton.Content = I18n.Tr("已下载");
+        UsageLabel.ToolTip = UsageBar.ToolTip = I18n.Tr("点击查看各网盘流量详情");
         UpdateStartButton();
         Refresh();
     }
@@ -275,19 +282,28 @@ public partial class DownloadPage : UserControl
     {
         double? current = null;
         double resetSeconds = 0;
+        _hostUsage.Clear();
         if (value is { } v && v.ValueKind == JsonValueKind.Object)
         {
             if (v.TryGetProperty("usagePercent", out var usage) &&
-                usage.ValueKind == JsonValueKind.Object &&
-                usage.TryGetProperty("current", out var cur) &&
-                cur.ValueKind == JsonValueKind.Number)
-                current = cur.GetDouble();
+                usage.ValueKind == JsonValueKind.Object)
+            {
+                if (usage.TryGetProperty("current", out var cur) &&
+                    cur.ValueKind == JsonValueKind.Number)
+                    current = cur.GetDouble();
+                // 逐网盘用量：debrid-link 免费账户按网盘计流量，域名键（含'.'）即该网盘用量百分比
+                foreach (var prop in usage.EnumerateObject())
+                    if (prop.Name.Contains('.') && prop.Value.ValueKind == JsonValueKind.Number)
+                        _hostUsage[prop.Name] = prop.Value.GetDouble();
+            }
             if (v.TryGetProperty("nextResetSeconds", out var reset) &&
                 reset.ValueKind == JsonValueKind.Object &&
                 reset.TryGetProperty("value", out var rv) &&
                 rv.ValueKind == JsonValueKind.Number)
                 resetSeconds = rv.GetDouble();
         }
+        _usagePercent = current;
+        _usageReset = resetSeconds;
         if (current is null)
         {
             UsageLabel.Text = I18n.Tr("debrid-link 使用量 --");
@@ -351,8 +367,10 @@ public partial class DownloadPage : UserControl
         return (Math.Min(pct, 100), null);
     }
 
-    private (string Text, string Color) AggregateStatus(string workId, List<string> statuses)
+    private (string Text, string Color) AggregateStatus(
+        string workId, List<(string Status, string? Error)> items)
     {
+        var statuses = items.Select(i => i.Status).ToList();
         var done = statuses.Count(s => s == "1");
         if (statuses.Contains("3"))
             return (I18n.Format(I18n.Tr("下载中 {done}/{total}"),
@@ -366,8 +384,14 @@ public partial class DownloadPage : UserControl
             return (I18n.Format(I18n.Tr("已暂停 {done}/{total}"),
                 ("done", done), ("total", statuses.Count)), "#9aa4b2");
         if (statuses.Contains("2"))
-            return (I18n.Format(I18n.Tr("{n} 个解析失败"),
-                ("n", statuses.Count(s => s == "2"))), "#f87171");
+        {
+            var fails = items.Where(i => i.Status == "2").ToList();
+            // 失败原因一致 → 直接显示该原因（如"文件失效"/"流量用尽"）；原因不一 → 显示失败数
+            var labels = fails.Select(f => ParseErrorLabel(f.Error)).Distinct().ToList();
+            if (labels.Count == 1)
+                return (labels[0], "#f87171");
+            return (I18n.Format(I18n.Tr("{n} 个解析失败"), ("n", fails.Count)), "#f87171");
+        }
         if (statuses.Contains("6"))
             return (I18n.Tr("无可用下载连接"), "#f87171");
         // 全部分卷已下载完成：解压前/解压中/移动中显示对应状态
@@ -453,7 +477,8 @@ public partial class DownloadPage : UserControl
             }
 
             var statuses = items.Select(it => it.Status).ToList();
-            var (aggText, aggColor) = AggregateStatus(workId, statuses);
+            var (aggText, aggColor) = AggregateStatus(
+                workId, items.Select(it => (it.Status, it.Error)).ToList());
             group.StatusText = aggText;
             group.StatusBrush = BrushOf(aggColor);
             // 该番号有分卷解析失败时显示"重新解析/重新搜索"按钮
@@ -487,6 +512,9 @@ public partial class DownloadPage : UserControl
                 var text = rawText != null
                     ? I18n.Tr(rawText)
                     : I18n.Format(I18n.Tr("未知({status})"), ("status", it.Status));
+                // 解析失败：状态列直接显示具体原因的简短标签（如"文件失效"/"流量用尽"），完整说明见下方 ErrorReason
+                if (it.Status == "2")
+                    text = ParseErrorLabel(it.Error);
 
                 if (!existingChildren.TryGetValue(it.Uuid, out var child))
                 {
@@ -614,6 +642,96 @@ public partial class DownloadPage : UserControl
             "badFileType" => I18n.Tr("不支持的文件类型"),
             _ => I18n.Format(I18n.Tr("解析失败（{code}）"), ("code", raw)),
         };
+    }
+
+    /// <summary>该失败错误码是否为 debrid-link 流量额度用尽（maxData=账户级，maxDataHost=单网盘级）。</summary>
+    internal static bool IsTrafficError(string? error) => error is "maxData" or "maxDataHost";
+
+    /// <summary>把 debrid-link 解析失败错误码翻译成简短状态标签（用于状态列；完整说明见 MapParseError）。</summary>
+    internal static string ParseErrorLabel(string? raw) => raw switch
+    {
+        "maxData" or "maxDataHost" => I18n.Tr("流量用尽"),
+        "fileNotFound" or "fileUnavailable" or "notFound" or "fileError" => I18n.Tr("文件失效"),
+        "hostUnsupported" or "notDebrid" or "hostNotValid" or "noServer" => I18n.Tr("网盘不支持"),
+        "notFreeHost" or "hostNotFree" or "disabledHost" or "disabledServerHost" => I18n.Tr("需会员"),
+        "badToken" => I18n.Tr("Key 无效"),
+        "floodDetected" => I18n.Tr("请求频繁"),
+        "badFileType" => I18n.Tr("类型不支持"),
+        "maxLink" or "maxLinkHost" => I18n.Tr("超链接数"),
+        _ => I18n.Tr("解析失败"),
+    };
+
+    /// <summary>从下载链接取主机名（去 www. 前缀），失败返回空串。</summary>
+    private static string HostOf(string url)
+    {
+        try
+        {
+            var h = new Uri(url).Host.ToLowerInvariant();
+            return h.StartsWith("www.") ? h[4..] : h;
+        }
+        catch (Exception)
+        {
+            return "";
+        }
+    }
+
+    /// <summary>当前下载列表中因流量用尽而解析失败的网盘：AccountFull=账户总流量用尽(maxData)，Hosts=各单网盘(maxDataHost)。</summary>
+    private static (bool AccountFull, List<string> Hosts) ExhaustedHosts()
+    {
+        var rows = Db.Select(
+            "SELECT DISTINCT \"url\", \"error\" FROM \"download_list\" WHERE \"status\" = '2' AND \"error\" IN ('maxData', 'maxDataHost')");
+        var accountFull = false;
+        var hosts = new List<string>();
+        foreach (var r in rows ?? [])
+        {
+            var err = r[1] as string ?? "";
+            if (err == "maxData")
+                accountFull = true;
+            else
+            {
+                var h = HostOf(r[0] as string ?? "");
+                if (h.Length > 0 && !hosts.Contains(h))
+                    hosts.Add(h);
+            }
+        }
+        return (accountFull, hosts);
+    }
+
+    /// <summary>点击顶部"使用量"：弹出各网盘流量详情，标出流量已用尽的网盘。</summary>
+    private void Usage_Click(object sender, MouseButtonEventArgs e)
+    {
+        var sb = new StringBuilder();
+        if (_usagePercent is { } p)
+        {
+            sb.Append(I18n.Format(I18n.Tr("总用量 {pct}%"), ("pct", (int)Math.Round(p))));
+            var reset = FormatReset(_usageReset);
+            if (reset.Length > 0)
+                sb.Append(I18n.Format(I18n.Tr("（{reset} 后重置）"), ("reset", reset)));
+            sb.Append("\n\n");
+        }
+        // debrid-link API 若返回逐网盘用量则完整列出（按用量降序）
+        if (_hostUsage.Count > 0)
+        {
+            sb.Append(I18n.Tr("各网盘用量：")).Append('\n');
+            foreach (var kv in _hostUsage.OrderByDescending(k => k.Value))
+                sb.Append($"    {kv.Key}  {(int)Math.Round(kv.Value)}%\n");
+            sb.Append('\n');
+        }
+        // 依据实际解析失败记录列出已用尽流量的网盘（无论 API 是否提供逐网盘数据都可靠）
+        var (accountFull, hosts) = ExhaustedHosts();
+        if (accountFull || hosts.Count > 0)
+        {
+            sb.Append(I18n.Tr("流量已用尽的网盘：")).Append('\n');
+            if (accountFull)
+                sb.Append("    ").Append(I18n.Tr("账户总流量（所有网盘）")).Append('\n');
+            foreach (var h in hosts)
+                sb.Append("    ").Append(h).Append('\n');
+        }
+        else if (_hostUsage.Count == 0)
+        {
+            sb.Append(I18n.Tr("暂无网盘流量用尽"));
+        }
+        InAppDialog.Info(this, sb.ToString().TrimEnd(), I18n.Tr("debrid-link 流量详情"));
     }
 
     /// <summary>重新搜索：先确认并删除已下载的分卷与文件夹，再切回搜索页重新搜索。</summary>

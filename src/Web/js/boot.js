@@ -30,6 +30,7 @@ async function boot() {
 function restoreFromHash() {
   const p = parseHash();
   if (!p) { selectSection('medialib'); return; }
+  if (p.key === 'searchdownload') { restoreSearchDownload(p); return; }
   if (!p.root) { selectSection(p.key); return; }
   section = p.key; stopTimers(); closeVideo(); closeAudio(); closeDrawer();
   buildTabs();
@@ -38,5 +39,15 @@ function restoreFromHash() {
   $('search').hidden = false; $('search').value = '';
   history.replaceState({ nav: true, depth: stack.length }, '', encodeHash());
   render();
+}
+// 恢复下载搜索分区：先按常规进入（基线为下载视图），再切到目标子视图；搜索带查询词则复跑一次
+function restoreSearchDownload(p) {
+  selectSection('searchdownload');
+  if (p.sd === 'download') return;
+  sdView = p.sd;
+  renderSearchDownload();   // search 视图会同步建好 #sId
+  if (p.sd === 'search' && p.query) { const inp = $('sId'); if (inp) inp.value = p.query; }
+  history.replaceState({ nav: true, sd: p.sd }, '', encodeSdHash());
+  if (p.sd === 'search' && p.query) runSearch();
 }
 boot();

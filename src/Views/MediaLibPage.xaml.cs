@@ -101,7 +101,6 @@ public partial class MediaLibPage : UserControl
     private string? _filterVal;
     private int _totalWorks;
     private double _worksScrollPos;
-    private MediaLibSettingDialog? _settingDialog;
 
     // 搜索作用域：分组层级（媒体库首页/社团页）输入关键字时改为在当前作用域内按 RJ号/作品名 搜索作品
     private bool _searchMode;        // 当前是否处于作品搜索结果视图
@@ -181,10 +180,10 @@ public partial class MediaLibPage : UserControl
     private void RetranslateUi()
     {
         BackButton.Content = I18n.Tr("← 返回");
-        LibSettingButton.Content = I18n.Tr("媒体库设置");
         OpenFolderButton.Content = I18n.Tr("打开文件夹");
-        ViewFilesButton.Content = I18n.Tr("查看作品");
-        MoveLibButton.Content = I18n.Tr("移动媒体库");
+        // 图标对齐 Web library.js（查看作品 📂 / 移动媒体库 📦）
+        ViewFilesButton.Content = "📂 " + I18n.Tr("查看作品");
+        MoveLibButton.Content = "📦 " + I18n.Tr("移动媒体库");
         SearchBox.ToolTip = I18n.Tr("搜索 RJ号 / 作品名");
         PreviewCloseButton.Content = I18n.Tr("← 返回");
         PreviewPrevButton.Content = "‹ " + I18n.Tr("上一张");
@@ -301,21 +300,19 @@ public partial class MediaLibPage : UserControl
 
     private void UpdateReadFavButtons()
     {
-        // 收藏/已读状态用 emoji 表示：已读 ⭐ / 未读 ☆（白色的星）；已收藏 ❤️ / 未收藏 🤍
-        ReadButton.Content = (_currentRead ? "⭐ " : "☆ ") + I18n.Tr("已读");
-        FavButton.Content = (_currentFav ? "❤️ " : "🤍 ") + I18n.Tr("收藏");
+        // 图标与激活态对齐 Web 端 .toggle/.toggle.on（library.js）：已读 ★/☆、收藏 ♥/♡；
+        // 激活时按钮填充强调色、文字转白（等价 Web 的 .toggle.on）
+        ReadButton.Content = (_currentRead ? "★ " : "☆ ") + I18n.Tr("已读");
+        FavButton.Content = (_currentFav ? "♥ " : "♡ ") + I18n.Tr("收藏");
+        ApplyToggleState(ReadButton, _currentRead);
+        ApplyToggleState(FavButton, _currentFav);
     }
 
-    private void LibSettingButton_Click(object sender, RoutedEventArgs e)
+    /// <summary>切换按钮的激活态外观：on=强调色底+白字，off=默认按钮外观（对齐 Web .toggle.on）。</summary>
+    private void ApplyToggleState(Button btn, bool on)
     {
-        // 媒体库设置（程序内覆盖层，常驻实例，扫描线程随其存活）
-        if (_settingDialog == null)
-        {
-            _settingDialog = new MediaLibSettingDialog();
-            _settingDialog.LibsChanged += Refresh;
-            _settingDialog.ScanDone += Refresh;
-        }
-        _settingDialog.Show(this);  // 程序内模态覆盖层，阻塞到关闭
+        btn.Background = (Brush)FindResource(on ? "AccentBrush" : "ButtonBrush");
+        btn.Foreground = on ? Brushes.White : (Brush)FindResource("TextBrush");
     }
 
     private void LibToggleButton_Click(object sender, RoutedEventArgs e)
@@ -461,7 +458,6 @@ public partial class MediaLibPage : UserControl
         MoveLibButton.Visibility = Visibility.Collapsed;
         ReadButton.Visibility = Visibility.Collapsed;
         FavButton.Visibility = Visibility.Collapsed;
-        LibSettingButton.Visibility = Visibility.Collapsed;  // 仅媒体库首页显示，由 ApplyCardFilter 重新打开
         LibToggleButton.Visibility = Visibility.Collapsed;   // 仅媒体库内作品/社团视图显示
         SortBox.Visibility = Visibility.Collapsed;            // 仅社团页/作品页显示，由 ApplyCardFilter 重新打开
         SearchBox.Visibility = Visibility.Visible;           // 默认显示搜索框，详情页由 ShowDetail 隐藏
@@ -910,10 +906,8 @@ public partial class MediaLibPage : UserControl
         _shownCards = key.Length == 0
             ? _gridCards.ToList()
             : _gridCards.Where(c => c.FilterKey.Contains(key)).ToList();
-        ClearCards();   // 统一关闭详情/设置按钮
+        ClearCards();   // 统一关闭详情按钮
         BackButton.Visibility = ShouldShowBack() ? Visibility.Visible : Visibility.Collapsed;
-        if (_level == "libs")
-            LibSettingButton.Visibility = Visibility.Visible;  // 媒体库设置仅在媒体库首页显示
         SortBox.Visibility = _level is "makers" or "all_makers" or "works" or "filtered_works" or "favorites" or "lib_works"
             ? Visibility.Visible : Visibility.Collapsed;
         UpdateLibToggleButton();

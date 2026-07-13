@@ -15,15 +15,20 @@ function renderDownloadSection() {
   $('title').textContent = '';
   const host = $('content'); host.innerHTML = '';
   const bar = el('div', 'toolbar');
-  const sb = el('button', 'icon-btn', '搜索作品'); sb.onclick = () => { sdView = 'search'; renderSearchDownload(); };
+  const sb = el('button', 'icon-btn', '搜索作品'); sb.onclick = () => navSd('search');
   const startBtn = el('button', 'icon-btn primary', '开始下载'); startBtn.id = 'engineBtn';
   startBtn.onclick = async () => { const running = startBtn.dataset.running === '1'; await apiPost('/api/engine', { action: running ? 'stop' : 'start' }); loadDownloads(); };
   const cd = el('button', 'icon-btn', '清除已完成'); cd.onclick = async () => { await apiPost('/api/cleardone'); loadDownloads(); };
+  const cn = el('button', 'icon-btn', '清除无可用连接'); cn.onclick = async () => { await apiPost('/api/clearnolink'); loadDownloads(); };
   const ca = el('button', 'icon-btn', '清空列表'); ca.onclick = async () => { if (await uiConfirm('确定要清空整个下载列表吗？等待中的任务也会被删除。', { danger: true })) { await apiPost('/api/clearall'); loadDownloads(); } };
-  // debrid-link 使用量卡片：与按钮同一行、靠右
+  // 全部重新解析：所有解析失败分卷重新排队，所有"无可用下载连接"占位重新自动解析
+  const ra = el('button', 'icon-btn', '全部重新解析'); ra.onclick = async () => { ra.disabled = true; try { await apiPost('/api/reparseall'); } finally { ra.disabled = false; } loadDownloads(); };
+  // debrid-link 使用量卡片：与按钮同一行、靠右；点击查看各网盘流量详情
   const usage = el('div', 'usage-card'); usage.id = 'usage';
   usage.innerHTML = '<div class="ut" id="usageText">debrid-link 使用量 --</div><div class="bar"><i id="usageBar" style="width:0;background:#a78bfa"></i></div>';
-  bar.append(sb, cd, ca, startBtn, usage);
+  usage.style.cursor = 'pointer'; usage.title = '点击查看各网盘流量详情';
+  usage.onclick = showUsageDetail;
+  bar.append(sb, cd, cn, ca, startBtn, ra, usage);
   host.appendChild(bar);
   host.appendChild(el('div', null)).id = 'dlList';
   loadDownloads(); loadUsage();
@@ -39,6 +44,9 @@ async function loadDownloads() {
     else { btn.dataset.running = '0'; btn.textContent = '开始下载'; btn.disabled = false; }
   }
   const list = $('dlList'); if (!list) return;
+  // 用户正在该列表内选中文本时跳过本次重建：否则每秒刷新会清掉选区，导致文件名/失败原因无法复制
+  const sel = window.getSelection && window.getSelection();
+  if (sel && !sel.isCollapsed && sel.anchorNode && list.contains(sel.anchorNode)) return;
   if (!d.groups.length) { list.innerHTML = '<div class="empty">下载列表为空</div>'; return; }
   list.innerHTML = '';
   d.groups.forEach(g => {
@@ -61,7 +69,7 @@ async function loadDownloads() {
     if (g.canPause) { const b = el('button', 'mini', '停止'); b.onclick = async () => { await apiPost('/api/pausework', { id: g.id }); loadDownloads(); }; act.appendChild(b); }
     if (g.canReparse) {
       const rp = el('button', 'mini', '重新解析'); rp.onclick = async () => { await apiPost('/api/reparse', { id: g.id }); loadDownloads(); };
-      const rs = el('button', 'mini', '重新搜索'); rs.onclick = async () => { if (await uiConfirm(`将删除 ${g.id} 已下载的分卷与文件夹，并重新搜索。是否继续？`, { danger: true })) { await apiPost('/api/research', { id: g.id }); sdView = 'search'; renderSearchDownload(); setTimeout(() => { $('sId').value = g.id; runSearch(); }, 50); } };
+      const rs = el('button', 'mini', '重新搜索'); rs.onclick = async () => { if (await uiConfirm(`将删除 ${g.id} 已下载的分卷与文件夹，并重新搜索。是否继续？`, { danger: true })) { await apiPost('/api/research', { id: g.id }); navSd('search'); setTimeout(() => { $('sId').value = g.id; runSearch(); }, 50); } };
       act.append(rp, rs);
     }
     if (g.canDelete) { const b = el('button', 'mini danger', '删除'); b.onclick = async () => { if (await uiConfirm(`将从下载列表删除 ${g.id}，并删除其作品记录与下载缓存。是否继续？`, { danger: true })) { await apiPost('/api/deletework', { id: g.id }); loadDownloads(); } }; act.appendChild(b); }
@@ -126,13 +134,35 @@ function renderDlTree(id, node, host) {
     }
   });
 }
+let lastUsage = null;   // 最近一次 /api/usage 结果，供点击卡片弹出详情用
 async function loadUsage() {
   if (section !== 'searchdownload' || sdView !== 'download') return;
   let d; try { d = await api('/api/usage'); } catch (e) { return; }
+  lastUsage = d;
   const t = $('usageText'), b = $('usageBar'); if (!t || !b) return;
   if (d.percent == null) { t.textContent = 'debrid-link 使用量 --'; b.style.width = '0'; return; }
   b.style.width = d.percent + '%';
   t.textContent = 'debrid-link 使用量' + (d.resetText ? ` · ${d.resetText} 后重置` : '');
+}
+// 点击顶部使用量卡片：列出各网盘用量并标出流量已用尽的网盘
+function showUsageDetail() {
+  const d = lastUsage;
+  const lines = [];
+  if (d && d.percent != null) lines.push(`总用量 ${d.percent}%` + (d.resetText ? `（${d.resetText} 后重置）` : ''));
+  const hosts = (d && d.hosts) || [];
+  if (hosts.length) {
+    lines.push('', '各网盘用量：');
+    hosts.slice().sort((a, b) => b.percent - a.percent).forEach(h => lines.push(`    ${h.host}  ${h.percent}%`));
+  }
+  const exhausted = (d && d.exhausted) || [];
+  if ((d && d.accountFull) || exhausted.length) {
+    lines.push('', '流量已用尽的网盘：');
+    if (d.accountFull) lines.push('    账户总流量（所有网盘）');
+    exhausted.forEach(h => lines.push('    ' + h));
+  } else if (!hosts.length) {
+    lines.push('', '暂无网盘流量用尽');
+  }
+  uiAlert(lines.join('\n') || 'debrid-link 使用量 --', 'debrid-link 流量详情');
 }
 
 // ========== 已下载（镜像 WPF DownloadedPage：可搜索/状态筛选/列排序/标记已品悦）==========
@@ -144,7 +174,7 @@ function renderDownloaded() {
   $('title').textContent = '';
   const host = $('content'); host.innerHTML = '';
   const bar = el('div', 'toolbar');
-  const back = el('button', 'icon-btn', '← 下载'); back.onclick = () => { sdView = 'download'; renderSearchDownload(); };
+  const back = el('button', 'icon-btn', '← 下载'); back.onclick = () => navSd('download');
   const refresh = el('button', 'icon-btn', '刷新'); refresh.onclick = loadDownloaded;
   const search = el('input'); search.className = 'grow'; search.placeholder = '搜索 RJ号 / 作品名 / 社团'; search.value = dledKw;
   const filter = el('select');

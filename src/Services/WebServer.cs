@@ -427,9 +427,9 @@ public static class WebServer
         if (!_authRequired || TokensEqual(Sha256Hex(password), _expectedToken))
         {
             lock (Sync) { _loginFails = 0; }
-            // 令牌写入 Cookie（HttpOnly，1 天）
+            // 令牌写入 Cookie（HttpOnly，长期有效：登录后不再过期）
             WriteJson(stream, 200, new { ok = true },
-                ("Set-Cookie", $"dasd_auth={_expectedToken}; Path=/; Max-Age=86400; HttpOnly; SameSite=Lax"));
+                ("Set-Cookie", $"dasd_auth={_expectedToken}; Path=/; Max-Age=315360000; HttpOnly; SameSite=Lax"));
         }
         else
         {

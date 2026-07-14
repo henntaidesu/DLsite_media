@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Net;
 using System.Net.Http;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using DLsiteMedia.Core;
@@ -49,6 +50,14 @@ public static class DownloadEngine
 
     // 被用户单独"停止"的作品：下载线程检测到后停到断点并退出当前文件，且其分卷置为已暂停('4')不再领取
     private static readonly ConcurrentDictionary<string, byte> PausedWorks = new();
+
+    // 因 debrid-link 流量用尽而暂停的网盘：host -> 预计流量重置的 UTC 时间；特殊键 "*" 表示账户总流量用尽
+    // （暂停所有论坛源解析）。到期后由流量重置监控线程把对应的已暂停分卷（'2' maxData/maxDataHost）
+    // 重新排队（'0'）自动续传。
+    private static readonly ConcurrentDictionary<string, DateTime> ExhaustedHosts = new();
+    private const string AccountKey = "*";
+    // 序列化流量用尽登记：避免多个下载线程同时命中流量用尽时重复请求 limits API、重复批量标记
+    private static readonly object ExhaustLock = new();
 
     // 领取任务与占位需原子进行，避免多个下载线程领到同一条记录
     private static readonly object ClaimLock = new();
@@ -402,6 +411,135 @@ public static class DownloadEngine
             ("@e", error), ("@k", key));
     }
 
+    // ---------- debrid-link 流量用尽自动暂停 / 重置后自动续传 ----------
+
+    /// <summary>从下载链接取主机名（去 www. 前缀），失败返回空串。</summary>
+    private static string HostOf(string url)
+    {
+        try
+        {
+            var h = new Uri(url).Host.ToLowerInvariant();
+            return h.StartsWith("www.") ? h[4..] : h;
+        }
+        catch (Exception)
+        {
+            return "";
+        }
+    }
+
+    /// <summary>
+    /// 登记某网盘（maxDataHost）或账户总流量（maxData）已用尽：记录预计重置时间，并把该网盘下
+    /// （账户级则为所有论坛源）待下载的分卷一并标记为流量用尽('2')暂停，避免继续解析空耗流量。
+    /// 重置时间到后由 <see cref="TrafficResetLoop"/> 自动重新排队续传。
+    /// </summary>
+    private static void RegisterTrafficExhausted(string url, string error)
+    {
+        var key = error == "maxData" ? AccountKey : HostOf(url);
+        if (key.Length == 0)
+            return;
+        lock (ExhaustLock)
+        {
+            // 仅在尚未记录或已过期时请求一次 limits API 取重置时间，避免每条失败都打 API
+            if (!ExhaustedHosts.TryGetValue(key, out var existing) || existing <= DateTime.UtcNow)
+            {
+                var seconds = FetchResetSeconds();
+                var resetUtc = DateTime.UtcNow.AddSeconds(seconds > 0 ? seconds : 3600);
+                ExhaustedHosts[key] = resetUtc;
+                Logger.Warning(
+                    $"debrid-link {(key == AccountKey ? "账户总流量" : key)} 流量用尽，暂停下载，" +
+                    $"预计 {resetUtc.ToLocalTime():yyyy-MM-dd HH:mm} 重置后自动继续");
+            }
+            PauseHostDownloads(key, error);
+        }
+    }
+
+    /// <summary>把某网盘（账户级则为所有论坛源）当前待下载('0')的分卷标记为流量用尽('2')暂停。</summary>
+    private static void PauseHostDownloads(string key, string error)
+    {
+        var rows = Db.Select(
+            "SELECT \"UUID\", \"url\" FROM \"download_list\" WHERE \"status\" = '0' AND (\"source\" IS NULL OR \"source\" != 'asmr')");
+        foreach (var r in rows ?? [])
+        {
+            var url = r[1] as string ?? "";
+            if (key == AccountKey || HostOf(url) == key)
+                SetParseFailed(r[0] as string ?? "", error);
+        }
+    }
+
+    /// <summary>查询 debrid-link 距离下载流量重置的秒数（失败或无数据返回 0）。</summary>
+    private static double FetchResetSeconds()
+    {
+        try
+        {
+            JsonElement? value;
+            using (var client = new DebridLinkClient())
+                value = client.DownloadLimitsAsync().GetAwaiter().GetResult();
+            if (value is { } v && v.ValueKind == JsonValueKind.Object &&
+                v.TryGetProperty("nextResetSeconds", out var reset) &&
+                reset.ValueKind == JsonValueKind.Object &&
+                reset.TryGetProperty("value", out var rv) &&
+                rv.ValueKind == JsonValueKind.Number)
+                return rv.GetDouble();
+        }
+        catch (Exception e)
+        {
+            Logger.Error(e, "查询流量重置时间");
+        }
+        return 0;
+    }
+
+    /// <summary>
+    /// 流量重置监控：每分钟检查因流量用尽而暂停的网盘，重置时间已到的把其暂停分卷（'2'）重新排队（'0'）
+    /// 供下载线程重新解析续传；若仍未真正重置会再次失败并以新的重置时间重新登记，自我修正。
+    /// </summary>
+    private static void TrafficResetLoop()
+    {
+        while (!_stopRequested)
+        {
+            for (var i = 0; i < 60 && !_stopRequested; i++)
+                Thread.Sleep(1000);
+            if (_stopRequested)
+                return;
+            if (ExhaustedHosts.IsEmpty)
+                continue;
+            var now = DateTime.UtcNow;
+            foreach (var kv in ExhaustedHosts)
+            {
+                if (kv.Value > now)
+                    continue;
+                if (ExhaustedHosts.TryRemove(kv.Key, out _))
+                    RequeueExhausted(kv.Key);
+            }
+        }
+    }
+
+    /// <summary>把某网盘（账户级则为所有论坛源）因流量用尽而暂停('2')的分卷重新排队('0')续传。</summary>
+    private static void RequeueExhausted(string key)
+    {
+        var err = key == AccountKey ? "maxData" : "maxDataHost";
+        var rows = Db.Select(
+            "SELECT \"UUID\", \"url\" FROM \"download_list\" WHERE \"status\" = '2' AND \"error\" = @e",
+            ("@e", err));
+        var count = 0;
+        foreach (var r in rows ?? [])
+        {
+            var url = r[1] as string ?? "";
+            if (key != AccountKey && HostOf(url) != key)
+                continue;
+            Db.Execute(
+                "UPDATE \"download_list\" SET \"status\" = '0', \"error\" = NULL WHERE \"UUID\" = @k",
+                ("@k", r[0] as string ?? ""));
+            count++;
+        }
+        if (count > 0)
+        {
+            Logger.Info(
+                $"debrid-link {(key == AccountKey ? "账户总流量" : key)} 流量已重置，" +
+                $"重新排队 {count} 个分卷继续下载");
+            Start();  // 引擎若已空闲退出，确保重新拉起下载线程
+        }
+    }
+
     /// <summary>从队列原子地领取一条待下载任务并立即标记为下载中；无任务返回 null。</summary>
     private static (string Key, string WorkId, string Url, string Source, string SubPath)? ClaimNext()
     {
@@ -646,6 +784,9 @@ public static class DownloadEngine
                     if (string.IsNullOrEmpty(directUrl))
                     {
                         Logger.Error($"{workId} debrid-link 解析失败: {url} ({parseError})");
+                        // 流量用尽：暂停该网盘（或账户级全部论坛源）下载，等流量重置后自动继续
+                        if (parseError is "maxData" or "maxDataHost")
+                            RegisterTrafficExhausted(url, parseError);
                         SetParseFailed(key, parseError);
                         continue;
                     }
@@ -703,6 +844,11 @@ public static class DownloadEngine
         // 上次运行中断时遗留的"下载中"任务重新排队，靠断点续传从已下载部分继续
         Db.Execute("UPDATE \"download_list\" SET \"status\" = '0' WHERE \"status\" = '3'");
 
+        // 上次因流量用尽而暂停的分卷（'2' maxData/maxDataHost）：内存暂停状态随重启丢失，
+        // 一律重新排队重试——流量若已重置则直接续传，否则再次失败并以新的重置时间重新暂停（自我修正）
+        Db.Execute(
+            "UPDATE \"download_list\" SET \"status\" = '0', \"error\" = NULL WHERE \"status\" = '2' AND \"error\" IN ('maxData', 'maxDataHost')");
+
         // 上次中途中断的作品：分卷已全部下载完但还未入库，重新触发解压/收尾 → 移动 → 入库
         var stuck = Db.Select("""
             SELECT w."work_id", w."source" FROM "works" w
@@ -722,6 +868,9 @@ public static class DownloadEngine
                 else
                     AutoUnzipIfDone(stuckId);
             }
+
+        // 流量重置监控线程：网盘流量用尽暂停后，到重置时间自动把暂停分卷重新排队续传
+        new Thread(TrafficResetLoop) { IsBackground = true, Name = "traffic-reset-monitor" }.Start();
 
         var workers = new List<Thread>();
         for (var i = 0; i < AppConfig.DownloadProcesses; i++)

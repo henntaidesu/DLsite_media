@@ -8,6 +8,8 @@
     <UseWPF>true</UseWPF>
     <!-- LibVLCSharp.WPF 的 VideoView 基于 WindowsFormsHost，需要启用 WinForms -->
     <UseWindowsForms>true</UseWindowsForms>
+    <!-- 程序图标（exe / 任务栏 / 窗口标题栏）：Window.Icon 未显式设置时 WPF 回退到本 exe 图标 -->
+    <ApplicationIcon>Web\favicon.ico</ApplicationIcon>
   </PropertyGroup>
 
   <ItemGroup>
@@ -15,6 +17,8 @@
     <EmbeddedResource Include="Web\index.html" />
     <EmbeddedResource Include="Web\app.css" />
     <EmbeddedResource Include="Web\js\*.js" />
+    <!-- 浏览器标签页图标（favicon），由 WebAssets 作为静态资源在鉴权前放行 -->
+    <EmbeddedResource Include="Web\favicon.ico" />
   </ItemGroup>
 
   <ItemGroup>

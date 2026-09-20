@@ -78,6 +78,12 @@ public class DownloadGroupItem : ObservableBase
 {
     public string WorkId { get; init; } = "";
 
+    /// <summary>
+    /// 列表上显示的名称：DLsite 作品直接用番号；fanbox 作品的 work_id 是内部键（fb_+作品号），
+    /// 对用户无意义，改显示"作家 · 标题"。
+    /// </summary>
+    public string DisplayName { get; init; } = "";
+
     /// <summary>全部分卷文件（扁平，按 UUID 就地更新进度/状态）。</summary>
     public ObservableCollection<DownloadFileItem> Children { get; } = [];
 
@@ -142,14 +148,11 @@ public class DownloadGroupItem : ObservableBase
 /// <summary>下载页（对应 Python 版 download_UI.py）。</summary>
 public partial class DownloadPage : UserControl
 {
-    /// <summary>解析失败的番号点击"重新搜索"时触发，由主窗口切回搜索页。</summary>
+    /// <summary>解析失败的番号点击"重新搜索"时触发，由主窗口切到"DLsite 搜索"分区。</summary>
     public event Action<string>? ResearchRequested;
 
     /// <summary>点击"已下载"按钮时触发，由主窗口切到已下载视图。</summary>
     public event Action? ShowDownloadedRequested;
-
-    /// <summary>点击"搜索作品"按钮时触发，由主窗口切到搜索视图。</summary>
-    public event Action? ShowSearchRequested;
 
     // download_list.status -> 显示文本（中文原文，渲染时经 Tr 翻译）与颜色
     private static readonly Dictionary<string, (string Text, string Color)> StatusMap = new()
@@ -184,7 +187,6 @@ public partial class DownloadPage : UserControl
 
     private void RetranslateUi()
     {
-        SearchWorkButton.Content = I18n.Tr("搜索作品");
         RefreshButton.Content = I18n.Tr("刷新");
         ClearDoneButton.Content = I18n.Tr("清除已完成");
         ClearAllButton.Content = I18n.Tr("清空列表");
@@ -196,9 +198,6 @@ public partial class DownloadPage : UserControl
 
     private void ShowDownloadedButton_Click(object sender, RoutedEventArgs e) =>
         ShowDownloadedRequested?.Invoke();
-
-    private void SearchWorkButton_Click(object sender, RoutedEventArgs e) =>
-        ShowSearchRequested?.Invoke();
 
     private void Page_IsVisibleChanged(object sender, DependencyPropertyChangedEventArgs e)
     {
@@ -472,7 +471,12 @@ public partial class DownloadPage : UserControl
             var items = groups[workId];
             if (!existing.TryGetValue(workId, out var group))
             {
-                group = new DownloadGroupItem { WorkId = workId };
+                group = new DownloadGroupItem
+                {
+                    WorkId = workId,
+                    DisplayName = FanboxService.IsFanboxWorkId(workId)
+                        ? FanboxService.DisplayName(workId) : workId,
+                };
                 _groups.Add(group);
             }
 
@@ -819,9 +823,18 @@ public partial class DownloadPage : UserControl
             "SELECT DISTINCT \"work_id\" FROM \"download_list\" WHERE \"status\" != '1'");
         if (rows != null)
             foreach (var row in rows)
-                Db.Execute(
-                    "DELETE FROM \"works\" WHERE \"work_id\" = @w AND \"state\" = '下载中'",
-                    ("@w", row[0] as string ?? ""));
+            {
+                // fanbox 的占位作品行在 fanbox_posts，不在 works
+                var wid = row[0] as string ?? "";
+                if (FanboxService.IsFanboxWorkId(wid))
+                    Db.Execute(
+                        "DELETE FROM \"fanbox_posts\" WHERE \"post_id\" = @p AND \"state\" = '下载中'",
+                        ("@p", FanboxService.PostIdOf(wid)));
+                else
+                    Db.Execute(
+                        "DELETE FROM \"works\" WHERE \"work_id\" = @w AND \"state\" = '下载中'",
+                        ("@w", wid));
+            }
         Db.Execute("DELETE FROM \"download_list\"");
         Refresh();
     }

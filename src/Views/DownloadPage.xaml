@@ -93,13 +93,13 @@
                 <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="Auto" />
-                <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="200" />
             </Grid.ColumnDefinitions>
-            <Button x:Name="SearchWorkButton" Style="{StaticResource AccentButton}" MinWidth="100"
-                    Click="SearchWorkButton_Click" Content="搜索作品" />
+            <!-- "已下载"为本分区第二视图入口（对齐 Web 下载管理工具栏首位）；搜索已移到独立的"DLsite 搜索"导航 -->
+            <Button x:Name="ShowDownloadedButton" MinWidth="100"
+                    Click="ShowDownloadedButton_Click" Content="已下载" />
             <Button x:Name="StartButton" Grid.Column="1" Margin="8,0,0,0" MinWidth="100"
                     Click="StartButton_Click" Content="开始下载" />
             <Button x:Name="RefreshButton" Grid.Column="2" Margin="8,0,0,0"
@@ -108,12 +108,10 @@
                     Click="ClearDoneButton_Click" Content="清除已完成" />
             <Button x:Name="ClearAllButton" Grid.Column="4" Margin="8,0,0,0"
                     Click="ClearAllButton_Click" Content="清空列表" />
-            <Button x:Name="ShowDownloadedButton" Grid.Column="5" Margin="8,0,0,0"
-                    Click="ShowDownloadedButton_Click" Content="已下载" />
-            <TextBlock x:Name="UsageLabel" Grid.Column="7" VerticalAlignment="Center"
+            <TextBlock x:Name="UsageLabel" Grid.Column="6" VerticalAlignment="Center"
                        Style="{StaticResource CaptionText}" Margin="0,0,8,0" Text="debrid-link 使用量 --"
                        Background="Transparent" Cursor="Hand" MouseLeftButtonUp="Usage_Click" />
-            <ProgressBar x:Name="UsageBar" Grid.Column="8" Height="10" VerticalAlignment="Center"
+            <ProgressBar x:Name="UsageBar" Grid.Column="7" Height="10" VerticalAlignment="Center"
                          Cursor="Hand" MouseLeftButtonUp="Usage_Click" />
         </Grid>
 
@@ -167,7 +165,8 @@
                                             </Style>
                                         </ToggleButton.Style>
                                     </ToggleButton>
-                                    <TextBlock Grid.Column="1" Text="{Binding WorkId}" FontWeight="SemiBold"
+                                    <TextBlock Grid.Column="1" Text="{Binding DisplayName}" FontWeight="SemiBold"
+                                               TextTrimming="CharacterEllipsis" ToolTip="{Binding WorkId}"
                                                VerticalAlignment="Center" />
                                     <Grid Grid.Column="2" VerticalAlignment="Center" Margin="0,0,12,0">
                                         <ProgressBar Value="{Binding Pct}" Maximum="100" Height="18" />

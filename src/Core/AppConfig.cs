@@ -45,6 +45,8 @@ public static class AppConfig
             ["username"] = "", ["password"] = "", ["token"] = "", ["recommender_uuid"] = "",
             ["mirror_site"] = "Original",
         },
+        // fanbox 数据源（pawchive 站点）：域名可换镜像，附件/缩略图子域由主域推导
+        ["pawchive"] = new() { ["host"] = "pawchive.pw" },
         // asmr.one 下载的文件类型过滤（仅勾选的类型会入队下载）
         ["asmr_filetype"] = new()
         {
@@ -295,4 +297,17 @@ public static class AppConfig
     /// <summary>全部受支持的 asmr 文件类型（用于设置页勾选 + 默认放行未知扩展名）。</summary>
     public static readonly string[] AsmrFileTypes =
         ["mp3", "mp4", "flac", "wav", "jpg", "png", "pdf", "txt", "vtt", "lrc"];
+
+    // ---------- fanbox 数据源（pawchive）----------
+
+    /// <summary>pawchive 主域名（换镜像站时改此项；附件 file.&lt;host&gt; / 缩略图 img.&lt;host&gt; 由它推导）。</summary>
+    public static string PawchiveHost
+    {
+        get
+        {
+            var host = (Read("pawchive", "host", "pawchive.pw") ?? "").Trim();
+            return host.Length > 0 ? host : "pawchive.pw";
+        }
+        set => Write("pawchive", "host", value.Trim());
+    }
 }

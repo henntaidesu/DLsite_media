@@ -1,29 +1,83 @@
-// search.js —— 下载搜索·搜索子视图：作品号/社团号搜索、AS 论坛扫描、加入下载队列。
-// ========== 搜索 ==========
-function renderSearch() {
+// search.js ——「作品搜索」分区（独立一级导航）：搜索前用下拉选数据源。
+//   dlsite —— 作品号/社团号/目录页搜索、AS 论坛扫描、加入下载队列（本文件）
+//   fanbox —— pawchive 作家搜索与作品下载（fanbox.js）
+// 两种来源共用同一条工具栏（来源下拉 + 输入框 + 查询），各自的结果面板并存、按来源切换显示。
+
+// 当前搜索来源；SEARCH_SOURCES 的顺序即下拉框顺序
+const SEARCH_SOURCES = [
+  { key: 'dlsite', label: 'DLsite', placeholder: '作品号(RJ/BJ/VJ)、社团号(RG) 或 DLsite 链接' },
+  { key: 'fanbox', label: 'FANBOX', placeholder: '作家名 / 作家 ID，或 pawchive 作家链接' },
+];
+let searchSrc = 'dlsite';
+
+// 分区入口：搭好共用工具栏 + 两套结果面板
+function renderSearchArea() {
   $('title').textContent = '';
   // 重置社团状态：让可能残留的后台扫描循环（makerState !== s）自行停止
   if (makerState && makerState.io) makerState.io.disconnect();
   makerState = null;
   const host = $('content'); host.innerHTML = '';
+
   const bar = el('div', 'toolbar');
-  const inp = el('input'); inp.placeholder = '作品号(RJ/BJ/VJ)、社团号(RG) 或 DLsite 链接'; inp.className = 'grow'; inp.id = 'sId';
+  // 来源下拉：放在输入框之前，切换即换占位文案与结果面板
+  const src = el('select'); src.id = 'srcSel'; src.className = 'src-sel';
+  SEARCH_SOURCES.forEach(s => { const o = el('option', null, s.label); o.value = s.key; src.appendChild(o); });
+  src.value = searchSrc;
+  src.onchange = () => setSearchSource(src.value);
+
+  const inp = el('input'); inp.className = 'grow'; inp.id = 'sId';
   const btn = el('button', 'icon-btn primary', '查询');
-  inp.addEventListener('keydown', e => { if (e.key === 'Enter') runSearch(); });
-  btn.onclick = runSearch;
-  // 自动下载总开关：原本在社团/目录网格里独立一行，移到工具栏紧随查询按钮；仅网格视图显示，默认关
+  inp.addEventListener('keydown', e => { if (e.key === 'Enter') runSearchAny(); });
+  btn.onclick = runSearchAny;
+
+  // 以下按钮按来源显示：前两个属 DLsite，末一个属 FANBOX
   const autoAll = el('button', 'icon-btn', '自动下载：关'); autoAll.id = 'autoAllBtn'; autoAll.style.display = 'none';
   autoAll.title = '开启后自动检测网盘并加入下载，无需逐个点击';
   autoAll.onclick = () => toggleAutoAll(autoAll);
-  // 返回作品列表：仅从社团/目录列表点进作品时显示（无箭头），放在工具栏内、替代原独立返回行
   const backList = el('button', 'icon-btn', '返回作品列表'); backList.id = 'backListBtn'; backList.style.display = 'none'; backList.onclick = goBackToMaker;
-  bar.append(inp, btn, autoAll, backList);
+  const fbBack = el('button', 'icon-btn', '返回作家列表'); fbBack.id = 'fbBackBtn'; fbBack.style.display = 'none'; fbBack.onclick = fbGoBackToArtists;
+
+  bar.append(src, inp, btn, autoAll, backList, fbBack);
   host.appendChild(bar);
-  // 社团网格与帖子列表分两个 pane：进入帖子列表时仅隐藏社团 pane（保留 DOM 与后台扫描），返回即缓存恢复
+
+  // DLsite：社团网格与帖子列表分两个 pane（进帖子列表时只隐藏社团 pane，保留 DOM 与后台扫描，返回即缓存恢复）
   const wrap = el('div'); wrap.id = 'searchResult';
   const mp = el('div'); mp.id = 'makerPane';
   const wp = el('div'); wp.id = 'workPane';
   wrap.append(mp, wp); host.appendChild(wrap);
+
+  // FANBOX：作家结果 / 作家主页两个 pane
+  fbBuildPanes(host);
+
+  applySearchSource();
+}
+
+// 切来源：换占位文案、显示对应结果面板、隐藏另一来源的工具栏按钮
+function setSearchSource(key) {
+  if (!SEARCH_SOURCES.some(s => s.key === key)) key = 'dlsite';
+  searchSrc = key;
+  applySearchSource();
+  syncSearchHash();
+}
+
+function applySearchSource() {
+  const meta = SEARCH_SOURCES.find(s => s.key === searchSrc) || SEARCH_SOURCES[0];
+  const inp = $('sId'); if (inp) inp.placeholder = meta.placeholder;
+  const dl = searchSrc === 'dlsite';
+  const res = $('searchResult'); if (res) res.style.display = dl ? '' : 'none';
+  const fb = $('fbResult'); if (fb) fb.style.display = dl ? 'none' : '';
+  $('count').textContent = '';
+  // 工具栏按钮按来源归位
+  const autoAll = $('autoAllBtn'); if (autoAll) autoAll.style.display = (dl && makerState) ? '' : 'none';
+  const backList = $('backListBtn'); if (backList) backList.style.display = 'none';
+  if (dl) updateBackListBtn(); else fbUpdateBackBtn();
+  const fbBack = $('fbBackBtn'); if (!dl) fbUpdateBackBtn(); else if (fbBack) fbBack.style.display = 'none';
+}
+
+// 查询入口：按当前来源分流
+function runSearchAny() {
+  syncSearchHash();   // 把来源与查询词写入地址栏（只 replace 不累积历史）
+  return searchSrc === 'fanbox' ? fbRunSearch() : runSearch();
 }
 function showMakerPane() { $('makerPane').style.display = ''; $('workPane').style.display = 'none'; const b = $('backListBtn'); if (b) b.style.display = 'none'; const a = $('autoAllBtn'); if (a) a.style.display = makerState ? '' : 'none'; }
 function showWorkPane() { $('makerPane').style.display = 'none'; $('workPane').style.display = ''; const a = $('autoAllBtn'); if (a) a.style.display = 'none'; }
@@ -57,8 +111,15 @@ function parseInput(raw) {
   if (/^RG\d+$/.test(up)) return { kind: 'maker', id: up };
   return { kind: 'invalid', id: '' };
 }
+// 跨分区跳转：下载列表「重新搜索」等处调用，切到「DLsite 搜索」分区并立即以该番号查询
+function gotoSearch(id) {
+  selectSection('dlsearch');   // 同步渲染搜索视图，返回后 #sId 已就绪
+  const inp = $('sId');
+  if (!inp) return;
+  inp.value = id;
+  runSearch();
+}
 async function runSearch() {
-  syncSdHash();   // 把当前查询词写入地址栏（搜索视图内，只 replace 不累积历史）
   const p = parseInput($('sId').value);
   if (p.kind === 'catalog') { await runGridSearch({ catalogUrl: p.id }); return; }
   if (p.kind === 'maker') { await runGridSearch({ id: p.id }); return; }
@@ -294,7 +355,7 @@ async function startMakerDownPoll() {
   if (!s || s.dlPolling) return;
   s.dlPolling = true;
   while (true) {
-    if (makerState !== s || section !== 'searchdownload' || sdView !== 'search') break;
+    if (makerState !== s || section !== 'dlsearch') break;
     let d;
     try { d = await api('/api/downloads'); } catch (e) { break; }
     if (makerState !== s) break;
@@ -342,14 +403,14 @@ async function runMakerScans() {
   if (!s || s.scanning) return;
   s.scanning = true;
   while (s.scanQueue.length) {
-    if (makerState !== s || section !== 'searchdownload' || sdView !== 'search') break;   // 已开始新搜索或离开搜索页则停止
+    if (makerState !== s || section !== 'dlsearch') break;   // 已开始新搜索或离开搜索分区则停止
     const id = s.scanQueue.shift();
     const st = s.cards[id];
     if (!st) continue;
     st.innerHTML = '<span class="spin"></span>';
     let d;
     try { d = await api('/api/asscan?id=' + enc(id)); } catch (e) { break; }
-    if (makerState !== s || section !== 'searchdownload' || sdView !== 'search') break;
+    if (makerState !== s || section !== 'dlsearch') break;
     if (d.count > 0) {
       st.textContent = `AS · ${d.count} 帖`; st.style.background = 'rgba(34,160,80,.88)';
       const card = st.closest('.card');

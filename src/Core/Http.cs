@@ -11,7 +11,12 @@ public static class Http
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
         "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
 
-    public static HttpClient CreateClient(TimeSpan? timeout = null)
+    /// <summary>
+    /// 创建客户端。userAgent 非空时覆盖默认的 Chrome UA——个别站点的防护网关
+    /// （如 pawchive 前置的 DDoS-Guard）会专门拦截"浏览器 UA 但没有浏览器握手"的请求，
+    /// 这类站点反而要用中性 UA 才放行，见 <see cref="Services.PawchiveApi.UserAgent"/>。
+    /// </summary>
+    public static HttpClient CreateClient(TimeSpan? timeout = null, string? userAgent = null)
     {
         var (enabled, proxy) = AppConfig.ReadProxy();
         // 像浏览器一样自动协商并解压 gzip/deflate/br，否则 Cloudflare 等可能返回压缩内容导致读到乱码
@@ -26,7 +31,7 @@ public static class Http
             handler.UseProxy = true;
         }
         var client = new HttpClient(handler) { Timeout = timeout ?? TimeSpan.FromSeconds(30) };
-        client.DefaultRequestHeaders.UserAgent.ParseAdd(UserAgent);
+        client.DefaultRequestHeaders.UserAgent.ParseAdd(userAgent ?? UserAgent);
         return client;
     }
 }

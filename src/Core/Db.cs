@@ -157,6 +157,38 @@ public static class Db
                         "time" text,
                         PRIMARY KEY ("work_id")
                     );
+                    -- fanbox（pawchive）数据源自成一套表：来源与字段语义都与 DLsite 不同，
+                    -- 混进 works 会污染 DL API 元数据补全与媒体库聚合。下载队列仍复用 download_list。
+                    CREATE TABLE IF NOT EXISTS "fanbox_artists" (
+                        "service" text NOT NULL,
+                        "artist_id" text NOT NULL,
+                        "name" TEXT,
+                        "public_id" text,
+                        "add_time" text,
+                        PRIMARY KEY ("service", "artist_id")
+                    );
+                    CREATE TABLE IF NOT EXISTS "fanbox_posts" (
+                        "service" text NOT NULL,
+                        "post_id" text NOT NULL,
+                        "artist_id" text NOT NULL,
+                        "artist_name" TEXT,
+                        "title" TEXT,
+                        "content" TEXT,
+                        "tags" TEXT,
+                        "published" text,
+                        "cover_url" text,
+                        "cover" text,
+                        "file_count" integer,
+                        "state" text,
+                        "folder" text,
+                        "library" text,
+                        "target" text,
+                        "target_lib" text,
+                        "down_time" text,
+                        "read_flag" text,
+                        "favorite" text,
+                        PRIMARY KEY ("service", "post_id")
+                    );
                     """;
                 cmd.ExecuteNonQuery();
             }
@@ -228,6 +260,8 @@ public static class Db
                     CREATE INDEX IF NOT EXISTS "idx_work_genres_genre" ON "work_genres" ("genre");
                     CREATE INDEX IF NOT EXISTS "idx_download_list_work_id" ON "download_list" ("work_id");
                     CREATE INDEX IF NOT EXISTS "idx_download_list_status" ON "download_list" ("status");
+                    CREATE INDEX IF NOT EXISTS "idx_fanbox_posts_artist" ON "fanbox_posts" ("artist_id");
+                    CREATE INDEX IF NOT EXISTS "idx_fanbox_posts_state" ON "fanbox_posts" ("state");
                     """;
                 cmd.ExecuteNonQuery();
             }

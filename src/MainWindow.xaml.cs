@@ -20,42 +20,52 @@ public partial class MainWindow : Window
     private bool _forceExit;   // true 时关闭直接退出（托盘菜单"退出"或已确认退出）
     // 默认媒体库页预建（启动即显示）；其余页首次导航时才实例化，缩短首屏时间。
     private readonly MediaLibPage _mediaLibPage = new(MediaLibRoot.Library);
-    // 下载页持有 search/downloaded 的事件闭包，故只需保留下载页字段即可根住三者。
-    private DownloadPage? _downloadPageField;
+    // 「作品搜索」（DLsite / FANBOX 两来源）与「下载管理」是两个独立导航分区（对齐 Web 端 SECTIONS）；
+    // 下载管理内部再分 下载列表 / 已下载 两视图，故三页各自惰性创建、按需互相跳转。
+    private DownloadPage? _downloadPage;
+    private SearchPage? _searchPage;
+    private DownloadedPage? _downloadedPage;
     private MediaLibPage? _tagPage;
     private MediaLibPage? _typePage;
     private MediaLibPage? _makerPage;
     private MediaLibPage? _favoritePage;
     private SettingsPage? _settingsPage;
 
-    // 搜索/下载三视图相互跳转由事件驱动，首次访问其一即需三者就绪，故统一惰性创建。
-    private DownloadPage DownloadPage => _downloadPageField ??= CreateDownloadTrio();
+    private SearchPage SearchPage => _searchPage ??= new SearchPage();
 
-    private DownloadPage CreateDownloadTrio()
+    private DownloadPage DownloadPage
     {
-        if (_downloadPageField != null)
-            return _downloadPageField;
-
-        var download = new DownloadPage();
-        var search = new SearchPage();
-        var downloaded = new DownloadedPage();
-        _downloadPageField = download;
-
-        // 搜索/下载合并为同一导航：下载页"搜索作品"切到搜索视图，搜索页返回切回下载视图
-        download.ShowSearchRequested += () => PageHost.Content = search;
-        search.BackToDownloadRequested += () => PageHost.Content = download;
-
-        // 下载页解析失败点击"重新搜索"：切到搜索视图并自动以该番号重新搜索
-        download.ResearchRequested += workId =>
+        get
         {
-            PageHost.Content = search;
-            search.SearchFor(workId);
-        };
+            if (_downloadPage != null)
+                return _downloadPage;
 
-        // "已下载"已并入下载页：下载页按钮切到已下载视图，已下载页按钮切回下载视图（导航仍停留在"搜索/下载"）
-        download.ShowDownloadedRequested += () => PageHost.Content = downloaded;
-        downloaded.BackToDownloadRequested += () => PageHost.Content = download;
-        return download;
+            var page = new DownloadPage();
+            _downloadPage = page;
+            // "已下载"是下载管理分区内的第二视图：按钮切过去，其返回按钮切回来（导航仍停留在"下载管理"）
+            page.ShowDownloadedRequested += () => PageHost.Content = DownloadedPage;
+            // 解析失败点击"重新搜索"：跨分区切到"DLsite 搜索"并自动以该番号重搜（同时同步左导航高亮）
+            page.ResearchRequested += workId =>
+            {
+                NavSearch.IsChecked = true;   // 触发 Nav_Checked 切页
+                SearchPage.SearchFor(workId);
+            };
+            return page;
+        }
+    }
+
+    private DownloadedPage DownloadedPage
+    {
+        get
+        {
+            if (_downloadedPage != null)
+                return _downloadedPage;
+
+            var page = new DownloadedPage();
+            _downloadedPage = page;
+            page.BackToDownloadRequested += () => PageHost.Content = DownloadPage;
+            return page;
+        }
     }
 
     public MainWindow()
@@ -73,18 +83,19 @@ public partial class MainWindow : Window
 
     private void RetranslateUi()
     {
-        LogoLabel.Text = I18n.Tr("DLsite媒体库");
-        Title = I18n.Tr("DLsite媒体库");
-        // 文案对齐 Web 端 SECTIONS (src/Web/js/core.js)：下载搜索/作品标签/作品社团/我的收藏/系统设置
+        LogoLabel.Text = I18n.Tr("R18媒体库");
+        Title = I18n.Tr("R18媒体库");
+        // 文案对齐 Web 端 SECTIONS (src/Web/js/core.js)：下载管理/作品搜索/作品标签/作品社团/我的收藏/系统设置
         NavMediaLibLabel.Text = I18n.Tr("媒体库");
-        NavSearchDownloadLabel.Text = I18n.Tr("下载搜索");
+        NavDownloadLabel.Text = I18n.Tr("下载管理");
+        NavSearchLabel.Text = I18n.Tr("作品搜索");
         NavTagLabel.Text = I18n.Tr("作品标签");
         NavTypeLabel.Text = I18n.Tr("作品形式");
         NavMakerLabel.Text = I18n.Tr("作品社团");
         NavFavoriteLabel.Text = I18n.Tr("我的收藏");
         NavSettingLabel.Text = I18n.Tr("系统设置");
         if (_trayIcon != null)
-            _trayIcon.Text = I18n.Tr("DLsite媒体库");
+            _trayIcon.Text = I18n.Tr("R18媒体库");
         if (_trayShowItem != null)
             _trayShowItem.Text = I18n.Tr("显示主界面");
         if (_trayExitItem != null)
@@ -97,7 +108,8 @@ public partial class MainWindow : Window
             return;  // InitializeComponent 期间的首次 Checked
         PageHost.Content = (sender as RadioButton)?.Tag switch
         {
-            "searchdownload" => DownloadPage,
+            "download" => DownloadPage,
+            "search" => SearchPage,
             "tag" => _tagPage ??= new MediaLibPage(MediaLibRoot.Genre),
             "type" => _typePage ??= new MediaLibPage(MediaLibRoot.WorkType),
             "maker" => _makerPage ??= new MediaLibPage(MediaLibRoot.Maker),
@@ -124,7 +136,7 @@ public partial class MainWindow : Window
         _trayIcon = new WinForms.NotifyIcon
         {
             Icon = LoadAppIcon(),
-            Text = I18n.Tr("DLsite媒体库"),
+            Text = I18n.Tr("R18媒体库"),
             Visible = true,
             ContextMenuStrip = menu,
         };

@@ -1,0 +1,126 @@
+<UserControl x:Class="DLsiteMedia.Views.FanboxSearchView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:ctrl="clr-namespace:DLsiteMedia.Controls">
+    <!-- 「作品搜索」分区里 FANBOX 来源的结果区（对齐 Web 端 src/Web/js/fanbox.js 的两个面板）。
+         工具栏（来源下拉 + 输入框 + 查询 + 返回作家列表）由宿主 SearchPage 统一提供，本控件只管结果。 -->
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <!-- 选择操作条：仅作家主页显示 -->
+        <Grid x:Name="SelectBar" Grid.Row="0" Margin="0,0,0,8" Visibility="Collapsed">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <TextBlock x:Name="SelectInfo" VerticalAlignment="Center"
+                       Style="{StaticResource CaptionText}" Text="已选 0 篇" />
+            <Button x:Name="SelectAllButton" Grid.Column="1" MinWidth="72" Margin="8,0,0,0"
+                    Click="SelectAll_Click" Content="全选" />
+            <Button x:Name="SelectNoneButton" Grid.Column="2" MinWidth="72" Margin="8,0,0,0"
+                    Click="SelectNone_Click" Content="清空" />
+            <Button x:Name="DownloadSelectedButton" Grid.Column="3" MinWidth="110" Margin="8,0,0,0"
+                    IsEnabled="False" Style="{StaticResource AccentButton}"
+                    Click="DownloadSelected_Click" Content="下载选中" />
+        </Grid>
+
+        <Grid Grid.Row="1">
+            <!-- 作家卡 / 作品卡共用同一个虚拟化换行网格（按当前层级填不同内容） -->
+            <ListBox x:Name="CardList"
+                     ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                     ScrollViewer.CanContentScroll="True"
+                     VirtualizingPanel.IsVirtualizing="True"
+                     VirtualizingPanel.VirtualizationMode="Standard"
+                     ScrollViewer.ScrollChanged="CardList_ScrollChanged"
+                     SelectionChanged="CardList_SelectionChanged">
+                <ListBox.ItemsPanel>
+                    <ItemsPanelTemplate>
+                        <ctrl:VirtualizingWrapPanel ItemWidth="168" ItemHeight="236" />
+                    </ItemsPanelTemplate>
+                </ListBox.ItemsPanel>
+                <ListBox.ItemContainerStyle>
+                    <Style TargetType="ListBoxItem" BasedOn="{StaticResource {x:Type ListBoxItem}}">
+                        <Setter Property="Padding" Value="0" />
+                        <Setter Property="Margin" Value="5" />
+                        <Setter Property="HorizontalContentAlignment" Value="Left" />
+                    </Style>
+                </ListBox.ItemContainerStyle>
+                <ListBox.ItemTemplate>
+                    <DataTemplate>
+                        <Border Width="158" CornerRadius="8" Background="{StaticResource CardBrush}"
+                                BorderThickness="1" BorderBrush="{Binding PickBorderBrush}"
+                                Opacity="{Binding CardOpacity}">
+                            <StackPanel>
+                                <Grid>
+                                    <Border Height="118" CornerRadius="8,8,0,0" ClipToBounds="True"
+                                            Background="{StaticResource WindowBrush}">
+                                        <Image Source="{Binding Thumb}" Stretch="UniformToFill" />
+                                    </Border>
+                                    <!-- 左上角小标：作家的 public_id -->
+                                    <Border HorizontalAlignment="Left" VerticalAlignment="Top" Margin="6"
+                                            Background="#9E000000" CornerRadius="4" Padding="6,1"
+                                            Visibility="{Binding TagVisibility}">
+                                        <TextBlock Text="{Binding TagText}" Foreground="#F3F3F3" FontSize="11" />
+                                    </Border>
+                                    <!-- 右上角小标：文件数 / 被收藏数 -->
+                                    <Border HorizontalAlignment="Right" VerticalAlignment="Top" Margin="6"
+                                            Background="#9E000000" CornerRadius="4" Padding="6,1"
+                                            Visibility="{Binding MetaVisibility}">
+                                        <TextBlock Text="{Binding MetaText}" Foreground="#F3F3F3" FontSize="11" />
+                                    </Border>
+                                    <!-- 底部状态角标：已下载 / 下载中 -->
+                                    <Border VerticalAlignment="Bottom" Margin="6" Background="#E66E6E7A"
+                                            CornerRadius="4" Padding="6,1" Visibility="{Binding StateVisibility}">
+                                        <TextBlock Text="{Binding StateText}" Foreground="#F3F3F3"
+                                                   FontSize="11" HorizontalAlignment="Center" />
+                                    </Border>
+                                </Grid>
+                                <TextBlock Text="{Binding Title}" FontSize="12.5" FontWeight="Medium"
+                                           TextWrapping="Wrap" MaxHeight="40" Margin="9,7,9,6" />
+                                <!-- 卡内常驻操作按钮行：对齐 Web 的 .mcard-actions（DLsite 作品卡同款）。
+                                     未下载 [选择/已选][下载]，已下载/下载中为禁用的状态按钮，作家卡无按钮。 -->
+                                <Grid Margin="8,0,8,8" Height="26">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <Button Style="{StaticResource CardActionButton}"
+                                            Visibility="{Binding SelectVisibility}"
+                                            Background="{Binding PickBackground}"
+                                            Foreground="{Binding PickForeground}"
+                                            Content="{Binding PickText}"
+                                            Click="PickButton_Click" />
+                                    <Button Grid.Column="1" Margin="6,0,0,0"
+                                            Style="{StaticResource CardActionButton}"
+                                            Visibility="{Binding SelectVisibility}"
+                                            Background="{StaticResource AccentBrush}"
+                                            Foreground="White"
+                                            ToolTip="只下载这一篇" Content="下载"
+                                            Click="DownloadOne_Click" />
+                                    <Button Grid.ColumnSpan="2" Style="{StaticResource CardActionButton}"
+                                            Visibility="{Binding BusyVisibility}" IsEnabled="False"
+                                            Content="{Binding StateText}" />
+                                </Grid>
+                            </StackPanel>
+                        </Border>
+                    </DataTemplate>
+                </ListBox.ItemTemplate>
+            </ListBox>
+
+            <!-- 加载遮罩 -->
+            <Border x:Name="LoadingOverlay" Background="#96000000" Visibility="Collapsed">
+                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+                    <ProgressBar IsIndeterminate="True" Width="220" Height="6"
+                                 Foreground="{StaticResource AccentLightBrush}" />
+                    <TextBlock x:Name="LoadingText" Text="正在查询…" Margin="0,12,0,0"
+                               HorizontalAlignment="Center" Foreground="#e6e9f0" />
+                </StackPanel>
+            </Border>
+        </Grid>
+    </Grid>
+</UserControl>

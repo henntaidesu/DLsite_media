@@ -1,15 +1,17 @@
 <UserControl x:Class="DLsiteMedia.Views.SearchPage"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-             xmlns:ctrl="clr-namespace:DLsiteMedia.Controls">
+             xmlns:ctrl="clr-namespace:DLsiteMedia.Controls"
+             xmlns:v="clr-namespace:DLsiteMedia.Views">
     <Grid>
         <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
-        <!-- 搜索栏 -->
+        <!-- 搜索栏：来源下拉在最前，之后是输入框/查询与各来源专属按钮（对齐 Web 端 renderSearchArea 的工具栏） -->
         <Grid Grid.Row="0" Margin="0,0,0,10">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="Auto" />
@@ -17,9 +19,10 @@
                 <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
-            <Button x:Name="BackToDownloadButton" Margin="0,0,8,0"
-                    Click="BackToDownloadButton_Click" Content="← 下载列表" />
+            <ComboBox x:Name="SourceBox" MinWidth="104" Margin="0,0,8,0" VerticalContentAlignment="Center"
+                      SelectionChanged="SourceBox_SelectionChanged" />
             <TextBox x:Name="InputBox" Grid.Column="1" FontSize="14" KeyDown="InputBox_KeyDown" />
             <Button x:Name="SearchButton" Grid.Column="2" Margin="8,0,0,0" MinWidth="90"
                     Style="{StaticResource AccentButton}" Click="SearchButton_Click" Content="查询" />
@@ -27,10 +30,16 @@
                     Click="BackButton_Click" Content="← 返回结果" />
             <Button x:Name="AutoDownloadButton" Grid.Column="4" Margin="8,0,0,0" MinWidth="110"
                     Visibility="Collapsed" Click="AutoDownloadToggle_Click" Content="自动下载：关" />
+            <Button x:Name="FanboxBackButton" Grid.Column="5" Margin="8,0,0,0" MinWidth="120"
+                    Visibility="Collapsed" Click="FanboxBack_Click" Content="← 返回作家列表" />
         </Grid>
 
+        <!-- 结果计数/提示（FANBOX 来源用；DLsite 来源的计数在各自结果里） -->
+        <TextBlock x:Name="CountText" Grid.Row="1" Style="{StaticResource CaptionText}"
+                   Margin="2,0,0,8" Visibility="Collapsed" TextTrimming="CharacterEllipsis" />
+
         <!-- asmr.one 直链下载横幅（仅 SOU 音声作品显示） -->
-        <Border x:Name="AsmrBanner" Grid.Row="1" Visibility="Collapsed" Margin="0,0,0,10"
+        <Border x:Name="AsmrBanner" Grid.Row="2" Visibility="Collapsed" Margin="0,0,0,10"
                 Background="{StaticResource CardBrush}" CornerRadius="8" Padding="12,10">
             <Grid>
                 <Grid.ColumnDefinitions>
@@ -52,7 +61,7 @@
         </Border>
 
         <!-- 结果列表 / 社团卡片 两页切换 -->
-        <Grid Grid.Row="2">
+        <Grid Grid.Row="3">
             <!-- 搜索结果列表（每个帖子内联展示抓取到的网盘卡片与自动检测状态） -->
             <ListBox x:Name="ResultList" ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                      VirtualizingPanel.ScrollUnit="Pixel"
@@ -221,6 +230,9 @@
                     </DataTemplate>
                 </ListBox.ItemTemplate>
             </ListBox>
+
+            <!-- FANBOX 来源的结果区（作家卡 / 作家主页作品网格），与上面的 DLsite 结果互斥显示 -->
+            <v:FanboxSearchView x:Name="FanboxView" Visibility="Collapsed" />
 
             <!-- 查询加载遮罩 -->
             <Border x:Name="LoadingOverlay" Background="#96000000" Visibility="Collapsed">

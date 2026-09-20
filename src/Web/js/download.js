@@ -1,21 +1,20 @@
-// download.js —— 下载搜索·下载列表 + 已下载表格。
-// ========== 下载搜索（合并「下载 / 搜索」两视图，对齐 WPF「搜索/下载」导航）==========
+// download.js —— 下载管理分区：下载列表 + 已下载表格（搜索已拆为独立的「DLsite 搜索」分区，见 search.js）。
+// ========== 下载管理（下载列表 / 已下载 两视图就地切换）==========
 let dlExpanded = new Set();
 // 下载目录树里被手动折叠的文件夹（键 = 番号 + '\n' + 文件夹相对路径）；默认展开，对齐 WPF
 let dlFolderCollapsed = new Set();
-let sdView = 'download';   // download | search | downloaded：三视图就地切换，不算一级导航
-// 视图调度：默认下载列表，可就地切到搜索/已下载。每次切换先清掉下载轮询定时器，避免重复叠加。
-function renderSearchDownload() {
+let dlView = 'download';   // download | downloaded：两视图就地切换，不算一级导航
+// 视图调度：默认下载列表，可就地切到已下载。每次切换先清掉下载轮询定时器，避免重复叠加。
+function renderDownloadArea() {
   stopTimers();
-  if (sdView === 'search') renderSearch();
-  else if (sdView === 'downloaded') renderDownloaded();
+  if (dlView === 'downloaded') renderDownloaded();
   else renderDownloadSection();
 }
 function renderDownloadSection() {
   $('title').textContent = '';
   const host = $('content'); host.innerHTML = '';
   const bar = el('div', 'toolbar');
-  const sb = el('button', 'icon-btn', '搜索作品'); sb.onclick = () => navSd('search');
+  const dled = el('button', 'icon-btn', '已下载'); dled.onclick = () => navDl('downloaded');
   const startBtn = el('button', 'icon-btn primary', '开始下载'); startBtn.id = 'engineBtn';
   startBtn.onclick = async () => { const running = startBtn.dataset.running === '1'; await apiPost('/api/engine', { action: running ? 'stop' : 'start' }); loadDownloads(); };
   const cd = el('button', 'icon-btn', '清除已完成'); cd.onclick = async () => { await apiPost('/api/cleardone'); loadDownloads(); };
@@ -28,7 +27,7 @@ function renderDownloadSection() {
   usage.innerHTML = '<div class="ut" id="usageText">debrid-link 使用量 --</div><div class="bar"><i id="usageBar" style="width:0;background:#a78bfa"></i></div>';
   usage.style.cursor = 'pointer'; usage.title = '点击查看各网盘流量详情';
   usage.onclick = showUsageDetail;
-  bar.append(sb, cd, cn, ca, startBtn, ra, usage);
+  bar.append(dled, cd, cn, ca, startBtn, ra, usage);
   host.appendChild(bar);
   host.appendChild(el('div', null)).id = 'dlList';
   loadDownloads(); loadUsage();
@@ -36,7 +35,7 @@ function renderDownloadSection() {
   usageTimer = setInterval(loadUsage, 15000);
 }
 async function loadDownloads() {
-  if (section !== 'searchdownload' || sdView !== 'download') return;
+  if (section !== 'download' || dlView !== 'download') return;
   let d; try { d = await api('/api/downloads'); } catch (e) { return; }
   const btn = $('engineBtn');
   if (btn) {
@@ -69,7 +68,7 @@ async function loadDownloads() {
     if (g.canPause) { const b = el('button', 'mini', '停止'); b.onclick = async () => { await apiPost('/api/pausework', { id: g.id }); loadDownloads(); }; act.appendChild(b); }
     if (g.canReparse) {
       const rp = el('button', 'mini', '重新解析'); rp.onclick = async () => { await apiPost('/api/reparse', { id: g.id }); loadDownloads(); };
-      const rs = el('button', 'mini', '重新搜索'); rs.onclick = async () => { if (await uiConfirm(`将删除 ${g.id} 已下载的分卷与文件夹，并重新搜索。是否继续？`, { danger: true })) { await apiPost('/api/research', { id: g.id }); navSd('search'); setTimeout(() => { $('sId').value = g.id; runSearch(); }, 50); } };
+      const rs = el('button', 'mini', '重新搜索'); rs.onclick = async () => { if (await uiConfirm(`将删除 ${g.id} 已下载的分卷与文件夹，并重新搜索。是否继续？`, { danger: true })) { await apiPost('/api/research', { id: g.id }); gotoSearch(g.id); } };
       act.append(rp, rs);
     }
     if (g.canDelete) { const b = el('button', 'mini danger', '删除'); b.onclick = async () => { if (await uiConfirm(`将从下载列表删除 ${g.id}，并删除其作品记录与下载缓存。是否继续？`, { danger: true })) { await apiPost('/api/deletework', { id: g.id }); loadDownloads(); } }; act.appendChild(b); }
@@ -136,7 +135,7 @@ function renderDlTree(id, node, host) {
 }
 let lastUsage = null;   // 最近一次 /api/usage 结果，供点击卡片弹出详情用
 async function loadUsage() {
-  if (section !== 'searchdownload' || sdView !== 'download') return;
+  if (section !== 'download' || dlView !== 'download') return;
   let d; try { d = await api('/api/usage'); } catch (e) { return; }
   lastUsage = d;
   const t = $('usageText'), b = $('usageBar'); if (!t || !b) return;
@@ -174,7 +173,7 @@ function renderDownloaded() {
   $('title').textContent = '';
   const host = $('content'); host.innerHTML = '';
   const bar = el('div', 'toolbar');
-  const back = el('button', 'icon-btn', '← 下载'); back.onclick = () => navSd('download');
+  const back = el('button', 'icon-btn', '← 下载'); back.onclick = () => navDl('download');
   const refresh = el('button', 'icon-btn', '刷新'); refresh.onclick = loadDownloaded;
   const search = el('input'); search.className = 'grow'; search.placeholder = '搜索 RJ号 / 作品名 / 社团'; search.value = dledKw;
   const filter = el('select');
@@ -189,7 +188,7 @@ function renderDownloaded() {
   loadDownloaded();
 }
 async function loadDownloaded() {
-  if (section !== 'searchdownload' || sdView !== 'downloaded') return;
+  if (section !== 'download' || dlView !== 'downloaded') return;
   let d; try { d = await api('/api/downloaded'); } catch (e) { return; }
   dledAll = d.works || [];
   drawDownloaded();

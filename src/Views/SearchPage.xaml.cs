@@ -283,13 +283,19 @@ public partial class SearchPage : UserControl
     // 自动下载自主翻页单实例守卫：逐页推进（等当前页 AS 扫完再翻页），避免并发翻页循环
     private bool _autoLoadingPages;
 
+    // 当前搜索来源："dlsite"（作品号/社团号/目录页）或 "fanbox"（pawchive 作家）。
+    // 两种来源共用同一条搜索栏，结果区互斥显示（对齐 Web 端 renderSearchArea 的来源下拉）。
+    private string _source = SourceDlsite;
+    private const string SourceDlsite = "dlsite";
+    private const string SourceFanbox = "fanbox";
+    // DLsite 侧最后停在哪个子视图（""=还没搜过 / "results"=帖子结果 / "maker"=社团作品网格），
+    // 切到 FANBOX 再切回来时按它原样恢复
+    private string _dlsiteLevel = "";
+
     // 社团卡片与下载页状态同步：每秒把下载列表的聚合状态写回对应卡片角标
     private readonly DispatcherTimer _downSyncTimer = new() { Interval = TimeSpan.FromSeconds(1) };
     // AS·无 倒计时：每秒刷新命中 7 天缓存作品卡片上的可再扫剩余时间
     private readonly DispatcherTimer _asCdTimer = new() { Interval = TimeSpan.FromSeconds(1) };
-
-    /// <summary>点击"← 下载列表"按钮时触发，由主窗口切回下载视图。</summary>
-    public event Action? BackToDownloadRequested;
 
     public SearchPage()
     {
@@ -298,34 +304,118 @@ public partial class SearchPage : UserControl
         MakerList.ItemsSource = _makerWorks;
         _downSyncTimer.Tick += (_, _) => SyncMakerDownloadStates();
         _asCdTimer.Tick += (_, _) => TickAsCountdown();
+
+        // FANBOX 结果区的计数与「返回作家列表」按钮由本页的搜索栏统一呈现
+        FanboxView.StatusChanged += text =>
+        {
+            CountText.Text = text;
+            CountText.Visibility = text.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
+        };
+        FanboxView.BackAvailabilityChanged += available =>
+            FanboxBackButton.Visibility =
+                available && _source == SourceFanbox ? Visibility.Visible : Visibility.Collapsed;
+
+        BuildSourceBox();
         RetranslateUi();
         I18n.LanguageChanged += RetranslateUi;
     }
 
+    /// <summary>来源下拉的选项（顺序即显示顺序，对齐 Web 的 SEARCH_SOURCES）。</summary>
+    private void BuildSourceBox()
+    {
+        SourceBox.Items.Clear();
+        SourceBox.Items.Add(new ComboBoxItem { Content = "DLsite", Tag = SourceDlsite });
+        SourceBox.Items.Add(new ComboBoxItem { Content = "FANBOX", Tag = SourceFanbox });
+        SourceBox.SelectedIndex = _source == SourceFanbox ? 1 : 0;
+    }
+
+    private void SourceBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (SourceBox.SelectedItem is not ComboBoxItem item || item.Tag is not string key)
+            return;
+        if (key == _source)
+            return;
+        _source = key;
+        ApplySource();
+    }
+
+    /// <summary>
+    /// 切来源：换输入框提示，互斥显示两套结果区，并把各来源专属的按钮/横幅归位。
+    /// 先把两边的专属控件全部收起，再只恢复当前来源该有的，避免切换后残留另一来源的按钮。
+    /// </summary>
+    private void ApplySource()
+    {
+        var dlsite = _source == SourceDlsite;
+        InputBox.ToolTip = dlsite
+            ? I18n.Tr("输入作品号(RJ/BJ/VJ)、社团号(RG)或 DLsite 链接")
+            : FanboxSearchView.InputHint;
+
+        // 全部收起
+        ResultList.Visibility = Visibility.Collapsed;
+        MakerList.Visibility = Visibility.Collapsed;
+        FanboxView.Visibility = Visibility.Collapsed;
+        AsmrBanner.Visibility = Visibility.Collapsed;
+        AutoDownloadButton.Visibility = Visibility.Collapsed;
+        BackButton.Visibility = Visibility.Collapsed;
+        FanboxBackButton.Visibility = Visibility.Collapsed;
+        CountText.Visibility = Visibility.Collapsed;
+
+        if (dlsite)
+        {
+            // 恢复上次停留的 DLsite 子视图（ShowResultsPage / ShowMakerPage 会一并处理专属按钮）
+            if (_dlsiteLevel == "maker")
+                ShowMakerPage();
+            else if (_dlsiteLevel == "results")
+                ShowResultsPage();
+            return;
+        }
+
+        FanboxView.Visibility = Visibility.Visible;
+        CountText.Text = FanboxView.CurrentStatus;
+        CountText.Visibility = CountText.Text.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
+        FanboxBackButton.Visibility = FanboxView.CanGoBack ? Visibility.Visible : Visibility.Collapsed;
+    }
+
     private void RetranslateUi()
     {
-        InputBox.ToolTip = I18n.Tr("输入作品号(RJ/BJ/VJ)、社团号(RG)或 DLsite 链接");
-        BackToDownloadButton.Content = I18n.Tr("← 下载列表");
         SearchButton.Content = I18n.Tr("查询");
+        FanboxBackButton.Content = I18n.Tr("← 返回作家列表");
         BackButton.Content = I18n.Tr("← 返回社团作品");
         LoadingText.Text = I18n.Tr("正在查询…");
         AutoDownloadButton.Content = _autoDownload ? I18n.Tr("自动下载：开") : I18n.Tr("自动下载：关");
+        InputBox.ToolTip = _source == SourceDlsite
+            ? I18n.Tr("输入作品号(RJ/BJ/VJ)、社团号(RG)或 DLsite 链接")
+            : FanboxSearchView.InputHint;
     }
 
-    /// <summary>由下载页"重新搜索"触发：填入番号并自动搜索。</summary>
+    /// <summary>由下载管理页"重新搜索"触发：填入番号并自动搜索。</summary>
     public async void SearchFor(string workId)
     {
+        // 番号重搜固定走 DLsite 来源（下拉同步归位）
+        if (_source != SourceDlsite)
+        {
+            SourceBox.SelectedIndex = 0;
+            _source = SourceDlsite;
+            ApplySource();
+        }
         InputBox.Text = workId;
         await RunSearchAsync();
     }
 
-    private async void SearchButton_Click(object sender, RoutedEventArgs e) => await RunSearchAsync();
+    private async void SearchButton_Click(object sender, RoutedEventArgs e) => await RunSearchAnyAsync();
 
     private async void InputBox_KeyDown(object sender, KeyEventArgs e)
     {
         if (e.Key == Key.Enter)
-            await RunSearchAsync();
+            await RunSearchAnyAsync();
     }
+
+    /// <summary>查询入口：按当前来源分流到 DLsite 搜索或 FANBOX 作家搜索。</summary>
+    private Task RunSearchAnyAsync() =>
+        _source == SourceFanbox ? FanboxView.RunSearchAsync(InputBox.Text) : RunSearchAsync();
+
+    /// <summary>搜索栏「← 返回作家列表」：回到 FANBOX 的作家搜索结果。</summary>
+    private void FanboxBack_Click(object sender, RoutedEventArgs e) => FanboxView.GoBackToArtists();
 
     private void BackButton_Click(object sender, RoutedEventArgs e)
     {
@@ -334,11 +424,9 @@ public partial class SearchPage : UserControl
             ShowMakerPage();
     }
 
-    private void BackToDownloadButton_Click(object sender, RoutedEventArgs e) =>
-        BackToDownloadRequested?.Invoke();
-
     private void ShowResultsPage()
     {
+        _dlsiteLevel = "results";
         ResultList.Visibility = Visibility.Visible;
         MakerList.Visibility = Visibility.Collapsed;
         BackButton.Visibility = _fromMaker ? Visibility.Visible : Visibility.Collapsed;
@@ -351,6 +439,7 @@ public partial class SearchPage : UserControl
 
     private void ShowMakerPage()
     {
+        _dlsiteLevel = "maker";
         ResultList.Visibility = Visibility.Collapsed;
         MakerList.Visibility = Visibility.Visible;
         BackButton.Visibility = Visibility.Collapsed;

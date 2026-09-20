@@ -1,7 +1,7 @@
 <Window x:Class="DLsiteMedia.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="DLsite媒体库" Height="760" Width="1280"
+        Title="R18媒体库" Height="760" Width="1280"
         Background="{StaticResource WindowBrush}"
         WindowStartupLocation="CenterScreen">
     <Grid>
@@ -13,7 +13,7 @@
         <!-- 左侧导航 -->
         <Border Grid.Column="0" Background="{StaticResource BaseBrush}">
             <StackPanel>
-                <TextBlock x:Name="LogoLabel" Text="DLsite媒体库" FontSize="17" FontWeight="Bold"
+                <TextBlock x:Name="LogoLabel" Text="R18媒体库" FontSize="17" FontWeight="Bold"
                            Margin="20,22,12,18" />
                 <!-- 顺序 / 文案 / 图标对齐 Web 端 SECTIONS (src/Web/js/core.js) -->
                 <RadioButton x:Name="NavMediaLib" Style="{StaticResource NavButton}" GroupName="nav"
@@ -24,12 +24,20 @@
                         <TextBlock x:Name="NavMediaLibLabel" Text="媒体库" VerticalAlignment="Center" />
                     </StackPanel>
                 </RadioButton>
-                <RadioButton x:Name="NavSearchDownload" Style="{StaticResource NavButton}" GroupName="nav"
-                             Checked="Nav_Checked" Tag="searchdownload">
+                <RadioButton x:Name="NavDownload" Style="{StaticResource NavButton}" GroupName="nav"
+                             Checked="Nav_Checked" Tag="download">
                     <StackPanel Orientation="Horizontal">
                         <TextBlock Text="⬇" FontFamily="Segoe UI Emoji" FontSize="15" Width="26"
                                    TextAlignment="Center" VerticalAlignment="Center" />
-                        <TextBlock x:Name="NavSearchDownloadLabel" Text="下载搜索" VerticalAlignment="Center" />
+                        <TextBlock x:Name="NavDownloadLabel" Text="下载管理" VerticalAlignment="Center" />
+                    </StackPanel>
+                </RadioButton>
+                <RadioButton x:Name="NavSearch" Style="{StaticResource NavButton}" GroupName="nav"
+                             Checked="Nav_Checked" Tag="search">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="🔍" FontFamily="Segoe UI Emoji" FontSize="15" Width="26"
+                                   TextAlignment="Center" VerticalAlignment="Center" />
+                        <TextBlock x:Name="NavSearchLabel" Text="作品搜索" VerticalAlignment="Center" />
                     </StackPanel>
                 </RadioButton>
                 <RadioButton x:Name="NavTag" Style="{StaticResource NavButton}" GroupName="nav"

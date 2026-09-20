@@ -1,0 +1,388 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Net.Http;
+using System.Text.Json;
+using System.Threading;
+using System.Threading.Tasks;
+using DLsiteMedia.Core;
+
+namespace DLsiteMedia.Services;
+
+/// <summary>pawchive 作家（creator）条目。</summary>
+public class PawchiveArtist
+{
+    public string Id { get; init; } = "";
+    public string Service { get; init; } = PawchiveApi.FanboxService;
+    public string Name { get; init; } = "";
+    public string PublicId { get; init; } = "";
+    public int Favorited { get; init; }
+    /// <summary>站上最后更新时间（unix 秒，0 表示未知）。</summary>
+    public long UpdatedUnix { get; init; }
+}
+
+/// <summary>作品内的单个文件：站上哈希路径 + 原始文件名。</summary>
+public class PawchiveFile
+{
+    public string Name { get; init; } = "";
+    public string Path { get; init; } = "";
+}
+
+/// <summary>pawchive 上的一篇作品（fanbox post）。</summary>
+public class PawchivePost
+{
+    public string Id { get; init; } = "";
+    public string Service { get; init; } = PawchiveApi.FanboxService;
+    public string ArtistId { get; init; } = "";
+    public string Title { get; init; } = "";
+    /// <summary>正文（已去掉 HTML 标签）。</summary>
+    public string Content { get; init; } = "";
+    public List<string> Tags { get; init; } = [];
+    public string Published { get; init; } = "";
+    /// <summary>封面的站上哈希路径（形如 /e1/1d/xxxx.jpeg），可空。</summary>
+    public string CoverPath { get; init; } = "";
+    public List<PawchiveFile> Files { get; init; } = [];
+}
+
+/// <summary>
+/// pawchive.pw 客户端（Kemono 系公开 API，无需登录）：
+///   /api/v1/creators                     → 全站作家表（约 15MB；站点自身也是前端本地过滤，没有服务端搜索接口）
+///   /api/v1/{service}/user/{id}/profile  → 作家信息
+///   /api/v1/{service}/user/{id}?o={n}    → 作品列表，每页 50 条
+/// 附件直链在 file.&lt;host&gt;（主站 /data 会 404），缩略图在 img.&lt;host&gt;，头像/横幅在主站。
+/// 作家表下载后落盘缓存，24 小时内复用；搜索在本地内存表上做（只保留 fanbox 服务的条目）。
+/// </summary>
+public static class PawchiveApi
+{
+    public const string FanboxService = "fanbox";
+
+    /// <summary>站点固定的作品列表分页大小。</summary>
+    public const int PageSize = 50;
+
+    /// <summary>
+    /// 访问 pawchive 专用的中性 User-Agent。
+    /// 站点前置 DDoS-Guard，会对"带浏览器 UA 却没有浏览器握手（JS 挑战 cookie / sec-ch-ua 等）"的请求
+    /// 直接回 403——附件域 file.&lt;host&gt; 尤其严格；换成非浏览器 UA 反而按普通客户端放行。
+    /// 故本站的所有请求（含下载引擎取附件时）都必须用这个 UA，不要用 Http.UserAgent 的 Chrome UA。
+    /// </summary>
+    public const string UserAgent = "DLsiteMedia/1.0";
+
+    private static string Host => AppConfig.PawchiveHost;
+    private static string ApiBase => $"https://{Host}/api/v1";
+
+    /// <summary>附件下载直链（支持 Range 断点续传）。</summary>
+    public static string FileUrl(string path, string name) =>
+        $"https://file.{Host}/data{path}" +
+        (string.IsNullOrEmpty(name) ? "" : $"?f={Uri.EscapeDataString(name)}");
+
+    /// <summary>站上缩略图（未下载的作品在列表里用它当封面）。</summary>
+    public static string ThumbUrl(string path) => $"https://img.{Host}/thumbnail/data{path}";
+
+    public static string IconUrl(string service, string id) => $"https://{Host}/icons/{service}/{id}";
+
+    public static string BannerUrl(string service, string id) => $"https://{Host}/banners/{service}/{id}";
+
+    /// <summary>作家主页地址（供 UI 展示/外链）。</summary>
+    public static string ArtistPageUrl(string service, string id) => $"https://{Host}/{service}/user/{id}";
+
+    // ---------- 作家表缓存 ----------
+
+    private static string CacheDir => Path.Combine(Environment.CurrentDirectory, "cache");
+    private static string CreatorsFile => Path.Combine(CacheDir, "pawchive-creators.json");
+    private static readonly TimeSpan CacheTtl = TimeSpan.FromHours(24);
+
+    // 解析后的 fanbox 作家表：只留四个字段，整表常驻内存，反复搜索无需重新读盘
+    private static List<PawchiveArtist>? _creators;
+    private static readonly SemaphoreSlim CreatorsLock = new(1, 1);
+
+    /// <summary>作家表是否已就绪（UI 据此提示"正在下载作家索引"）。</summary>
+    public static bool CreatorsReady => _creators is { Count: > 0 };
+
+    /// <summary>作家表缓存文件的落盘时间；无缓存返回 null。</summary>
+    public static DateTime? CreatorsCachedAt =>
+        File.Exists(CreatorsFile) ? File.GetLastWriteTime(CreatorsFile) : null;
+
+    /// <summary>
+    /// 确保本地有可用的作家表：内存已加载直接返回；缓存文件在有效期内则读盘；
+    /// 否则下载整表落盘后再读。force=true 时强制重新下载。
+    /// </summary>
+    public static async Task<bool> EnsureCreatorsAsync(bool force = false)
+    {
+        if (!force && CreatorsReady)
+            return true;
+        await CreatorsLock.WaitAsync();
+        try
+        {
+            if (!force && CreatorsReady)
+                return true;
+            var stale = !File.Exists(CreatorsFile) ||
+                        DateTime.Now - File.GetLastWriteTime(CreatorsFile) > CacheTtl;
+            if (force || stale)
+                await DownloadCreatorsAsync();
+            if (!File.Exists(CreatorsFile))
+                return false;
+            _creators = LoadCreators();
+            return CreatorsReady;
+        }
+        catch (Exception e)
+        {
+            Logger.Error(e, "pawchive 作家表");
+            return false;
+        }
+        finally
+        {
+            CreatorsLock.Release();
+        }
+    }
+
+    /// <summary>下载整份作家表到缓存文件（先写临时文件再改名，避免中断留下半截文件）。</summary>
+    private static async Task DownloadCreatorsAsync()
+    {
+        Logger.Info("正在下载 pawchive 作家索引…");
+        using var client = Http.CreateClient(TimeSpan.FromMinutes(5), UserAgent);
+        using var resp = await client.GetAsync($"{ApiBase}/creators", HttpCompletionOption.ResponseHeadersRead);
+        resp.EnsureSuccessStatusCode();
+        Directory.CreateDirectory(CacheDir);
+        var tmp = CreatorsFile + ".tmp";
+        await using (var fs = new FileStream(tmp, FileMode.Create, FileAccess.Write, FileShare.None))
+            await resp.Content.CopyToAsync(fs);
+        File.Move(tmp, CreatorsFile, overwrite: true);
+        Logger.Info($"pawchive 作家索引已更新：{new FileInfo(CreatorsFile).Length / 1024 / 1024} MB");
+    }
+
+    /// <summary>读缓存文件，只保留 fanbox 服务的作家条目。</summary>
+    private static List<PawchiveArtist> LoadCreators()
+    {
+        var list = new List<PawchiveArtist>();
+        using var stream = File.OpenRead(CreatorsFile);
+        using var doc = JsonDocument.Parse(stream);
+        if (doc.RootElement.ValueKind != JsonValueKind.Array)
+            return list;
+        foreach (var item in doc.RootElement.EnumerateArray())
+        {
+            if (DlsiteApi.JStr(item, "service") != FanboxService)
+                continue;
+            list.Add(new PawchiveArtist
+            {
+                Id = DlsiteApi.JStr(item, "id"),
+                Service = FanboxService,
+                Name = DlsiteApi.JStr(item, "name"),
+                PublicId = DlsiteApi.JStr(item, "public_id"),
+                Favorited = JInt(item, "favorited"),
+                UpdatedUnix = JLong(item, "updated"),
+            });
+        }
+        Logger.Info($"pawchive 作家索引已加载：{list.Count} 位 fanbox 作家");
+        return list;
+    }
+
+    /// <summary>
+    /// 在本地作家表里搜索：作家名或 public_id 包含关键字（忽略大小写）。
+    /// 完全相同者排最前，其余按被收藏数降序，最多返回 limit 条。
+    /// </summary>
+    public static async Task<List<PawchiveArtist>> SearchArtistsAsync(string keyword, int limit = 60)
+    {
+        keyword = (keyword ?? "").Trim();
+        if (keyword.Length == 0 || !await EnsureCreatorsAsync())
+            return [];
+        return _creators!
+            .Where(a => a.Name.Contains(keyword, StringComparison.OrdinalIgnoreCase) ||
+                        a.PublicId.Contains(keyword, StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(a => string.Equals(a.PublicId, keyword, StringComparison.OrdinalIgnoreCase) ||
+                                    string.Equals(a.Name, keyword, StringComparison.OrdinalIgnoreCase))
+            .ThenByDescending(a => a.Favorited)
+            .Take(limit)
+            .ToList();
+    }
+
+    // ---------- 作家 / 作品 ----------
+
+    /// <summary>取作家信息（/profile）；失败返回 null。</summary>
+    public static async Task<PawchiveArtist?> GetArtistAsync(string service, string artistId)
+    {
+        var text = await GetAsync($"{ApiBase}/{service}/user/{artistId}/profile");
+        if (text is null)
+            return null;
+        try
+        {
+            using var doc = JsonDocument.Parse(text);
+            var root = doc.RootElement;
+            return new PawchiveArtist
+            {
+                Id = DlsiteApi.JStr(root, "id"),
+                Service = DlsiteApi.JStr(root, "service"),
+                Name = DlsiteApi.JStr(root, "name"),
+                PublicId = DlsiteApi.JStr(root, "public_id"),
+            };
+        }
+        catch (JsonException e)
+        {
+            Logger.Error(e, "pawchive 解析作家信息");
+            return null;
+        }
+    }
+
+    /// <summary>取作家的一页作品（offset 为条目偏移，步长 PageSize）；失败返回 null。</summary>
+    public static async Task<List<PawchivePost>?> GetPostsAsync(string service, string artistId, int offset)
+    {
+        var url = $"{ApiBase}/{service}/user/{artistId}" + (offset > 0 ? $"?o={offset}" : "");
+        var text = await GetAsync(url);
+        if (text is null)
+            return null;
+        try
+        {
+            using var doc = JsonDocument.Parse(text);
+            if (doc.RootElement.ValueKind != JsonValueKind.Array)
+                return null;
+            var posts = new List<PawchivePost>();
+            foreach (var item in doc.RootElement.EnumerateArray())
+                posts.Add(ParsePost(item, service));
+            return posts;
+        }
+        catch (JsonException e)
+        {
+            Logger.Error(e, "pawchive 解析作品列表");
+            return null;
+        }
+    }
+
+    /// <summary>取作家全部作品（逐页拉到尾），每页回调一次已获取总数。</summary>
+    public static async Task<List<PawchivePost>> GetAllPostsAsync(
+        string service, string artistId, Action<int>? onPage = null, int maxPages = 200)
+    {
+        var all = new List<PawchivePost>();
+        for (var page = 0; page < maxPages; page++)
+        {
+            var batch = await GetPostsAsync(service, artistId, page * PageSize);
+            if (batch is null || batch.Count == 0)
+                break;
+            all.AddRange(batch);
+            onPage?.Invoke(all.Count);
+            if (batch.Count < PageSize)
+                break;   // 不足一页即最后一页
+        }
+        return all;
+    }
+
+    private static PawchivePost ParsePost(JsonElement item, string service)
+    {
+        var files = new List<PawchiveFile>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        // 封面（file）与附件（attachments）常指向同一份文件，按站上哈希路径去重
+        var coverPath = "";
+        if (item.TryGetProperty("file", out var file) && file.ValueKind == JsonValueKind.Object)
+        {
+            var path = DlsiteApi.JStr(file, "path");
+            if (path.Length > 0)
+            {
+                coverPath = path;
+                if (seen.Add(path))
+                    files.Add(new PawchiveFile { Name = DlsiteApi.JStr(file, "name"), Path = path });
+            }
+        }
+        if (item.TryGetProperty("attachments", out var atts) && atts.ValueKind == JsonValueKind.Array)
+            foreach (var att in atts.EnumerateArray())
+            {
+                var path = DlsiteApi.JStr(att, "path");
+                if (path.Length > 0 && seen.Add(path))
+                    files.Add(new PawchiveFile { Name = DlsiteApi.JStr(att, "name"), Path = path });
+            }
+        if (coverPath.Length == 0 && files.Count > 0)
+            coverPath = files[0].Path;
+
+        return new PawchivePost
+        {
+            Id = DlsiteApi.JStr(item, "id"),
+            Service = service,
+            ArtistId = DlsiteApi.JStr(item, "user"),
+            Title = DlsiteApi.JStr(item, "title"),
+            Content = StripHtml(DlsiteApi.JStr(item, "content")),
+            Tags = ParseTags(item),
+            Published = DlsiteApi.JStr(item, "published"),
+            CoverPath = coverPath,
+            Files = files,
+        };
+    }
+
+    /// <summary>tags 字段可能是 Postgres 数组字面量字符串（形如 {a,b}）或 JSON 数组，两种都解析。</summary>
+    private static List<string> ParseTags(JsonElement item)
+    {
+        var tags = new List<string>();
+        if (!item.TryGetProperty("tags", out var t))
+            return tags;
+        if (t.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var one in t.EnumerateArray())
+                if (one.ValueKind == JsonValueKind.String && one.GetString() is { Length: > 0 } s)
+                    tags.Add(s);
+            return tags;
+        }
+        if (t.ValueKind != JsonValueKind.String)
+            return tags;
+        var raw = (t.GetString() ?? "").Trim();
+        if (raw.StartsWith('{') && raw.EndsWith('}'))
+            raw = raw[1..^1];
+        foreach (var part in raw.Split(',', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var one = part.Trim().Trim('"').Trim();
+            if (one.Length > 0)
+                tags.Add(one);
+        }
+        return tags;
+    }
+
+    /// <summary>正文是 HTML 片段，转成纯文本保存/展示（br 与块级标签换行）。</summary>
+    private static string StripHtml(string html)
+    {
+        if (string.IsNullOrWhiteSpace(html))
+            return "";
+        try
+        {
+            var doc = new HtmlAgilityPack.HtmlDocument();
+            doc.LoadHtml(html
+                .Replace("<br>", "\n").Replace("<br/>", "\n").Replace("<br />", "\n")
+                .Replace("</p>", "\n").Replace("</div>", "\n"));
+            var text = HtmlAgilityPack.HtmlEntity.DeEntitize(doc.DocumentNode.InnerText) ?? "";
+            var lines = text.Split('\n').Select(l => l.Trim()).Where(l => l.Length > 0);
+            return string.Join('\n', lines);
+        }
+        catch (Exception e)
+        {
+            Logger.Error(e, "pawchive 正文转纯文本");
+            return "";
+        }
+    }
+
+    // ---------- HTTP ----------
+
+    /// <summary>GET 并返回响应文本；网络错误或非 2xx 返回 null（已记日志）。</summary>
+    private static async Task<string?> GetAsync(string url)
+    {
+        try
+        {
+            using var client = Http.CreateClient(TimeSpan.FromSeconds(30), UserAgent);
+            using var resp = await client.GetAsync(url);
+            if (!resp.IsSuccessStatusCode)
+            {
+                Logger.Error($"pawchive 请求失败 HTTP {(int)resp.StatusCode}: {url}");
+                return null;
+            }
+            return await resp.Content.ReadAsStringAsync();
+        }
+        catch (Exception e) when (e is HttpRequestException or TaskCanceledException)
+        {
+            Logger.Error($"pawchive 网络请求失败: {e.Message} ({url})");
+            return null;
+        }
+    }
+
+    private static int JInt(JsonElement e, string name) =>
+        e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Number &&
+        v.TryGetInt32(out var i) ? i : 0;
+
+    private static long JLong(JsonElement e, string name) =>
+        e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Number &&
+        v.TryGetInt64(out var i) ? i : 0;
+}

@@ -119,6 +119,17 @@
   /* 已在库作品：置灰降亮，仍可点击 */
   .card.dim { opacity: .5; filter: grayscale(.9); }
   .card.dim:hover { border-color: var(--line); }
+
+  /* ---------- FANBOX 分区 ---------- */
+  /* 作品搜索的来源下拉：与输入框同高，放在输入框之前 */
+  .src-sel { flex: none; min-width: 104px; }
+  /* 选中的作品卡：整卡描边强调（选择动作在卡内底部按钮行 .mcard-actions 上，与 DLsite 作品卡一致） */
+  .card.picked { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+  .card.picked:hover { border-color: var(--accent); }
+  /* 选择操作条：左侧计数撑开，右侧全选/清空/下载按钮 */
+  .fb-selbar { align-items: center; }
+  .fb-selinfo { flex: 1 1 auto; color: var(--muted); font-size: 13px; }
+  .detail h1.fb-subtitle { font-size: 17px; margin: 22px 0 10px; }
   /* 文本占卡片高度的 1/3；min-height:0 允许收缩，超出按行夹取隐藏 */
   .card .wt { flex: 1 1 0; min-height: 0; padding: 8px 10px 10px; font-size: 13.5px; font-weight: 500;
               display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }

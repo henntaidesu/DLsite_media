@@ -6,6 +6,10 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
+    <!-- 产品名 R-18MediaLibrary 带连字符，而 C# 命名空间不允许连字符，故两者分开：
+         程序集/exe 叫 R-18MediaLibrary，代码里的 namespace 与 RootNamespace 用 R18MediaLibrary。 -->
+    <AssemblyName>R-18MediaLibrary</AssemblyName>
+    <RootNamespace>R18MediaLibrary</RootNamespace>
     <!-- LibVLCSharp.WPF 的 VideoView 基于 WindowsFormsHost，需要启用 WinForms -->
     <UseWindowsForms>true</UseWindowsForms>
     <!-- 程序图标（exe / 任务栏 / 窗口标题栏）：Window.Icon 未显式设置时 WPF 回退到本 exe 图标 -->

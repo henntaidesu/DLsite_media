@@ -1,6 +1,6 @@
 using System;
 
-namespace DLsiteMedia.Core;
+namespace R18MediaLibrary.Core;
 
 /// <summary>
 /// AS 论坛扫描结果缓存：某作品扫描出"无结果"（count==0）时记录时间，7 天内不再重复扫 AS。

@@ -10,10 +10,10 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
-using DLsiteMedia.Core;
-using DLsiteMedia.Services;
+using R18MediaLibrary.Core;
+using R18MediaLibrary.Services;
 
-namespace DLsiteMedia.Views;
+namespace R18MediaLibrary.Views;
 
 /// <summary>FANBOX 搜索结果里的一张卡片：作家卡（artist）或作家主页的作品卡（post）。</summary>
 public class FanboxCardItem : ObservableBase

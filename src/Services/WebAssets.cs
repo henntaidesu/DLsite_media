@@ -5,7 +5,7 @@ using System.Linq;
 using System.Reflection;
 using System.Text;
 
-namespace DLsiteMedia.Services;
+namespace R18MediaLibrary.Services;
 
 /// <summary>
 /// 外部访问网页的静态资源：响应式 SPA 的外壳 + 拆分后的样式/各页面 JS 模块，全部作为嵌入资源打包

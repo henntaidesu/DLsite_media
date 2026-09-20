@@ -2,7 +2,7 @@ using System;
 using System.Net;
 using System.Net.Http;
 
-namespace DLsiteMedia.Core;
+namespace R18MediaLibrary.Core;
 
 /// <summary>HttpClient 工厂：按当前代理设置创建客户端（对应 Python 各模块的 requests.Session）。</summary>
 public static class Http

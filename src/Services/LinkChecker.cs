@@ -5,9 +5,9 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
-using DLsiteMedia.Core;
+using R18MediaLibrary.Core;
 
-namespace DLsiteMedia.Services;
+namespace R18MediaLibrary.Services;
 
 /// <summary>直连检测下载链接是否有效，不经过中转站（对应 Python 版 doun_url_test.py）。</summary>
 public static class LinkChecker

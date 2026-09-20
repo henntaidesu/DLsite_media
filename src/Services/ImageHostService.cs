@@ -4,9 +4,9 @@ using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using DLsiteMedia.Core;
+using R18MediaLibrary.Core;
 
-namespace DLsiteMedia.Services;
+namespace R18MediaLibrary.Services;
 
 /// <summary>
 /// 图床接管作品卡封面：把本地封面迁移到图床，并把"某作品的封面在图床上的地址"提供给

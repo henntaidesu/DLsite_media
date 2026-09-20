@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 
-namespace DLsiteMedia.Core;
+namespace R18MediaLibrary.Core;
 
 /// <summary>
 /// 用户"不喜欢"的作品（RJ 号）。命中的作品在下载搜索中跳过 AS 论坛扫描、直接置灰，可随时取消不喜欢。

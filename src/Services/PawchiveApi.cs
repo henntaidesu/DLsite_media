@@ -6,9 +6,9 @@ using System.Net.Http;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
-using DLsiteMedia.Core;
+using R18MediaLibrary.Core;
 
-namespace DLsiteMedia.Services;
+namespace R18MediaLibrary.Services;
 
 /// <summary>pawchive 作家（creator）条目。</summary>
 public class PawchiveArtist
@@ -66,7 +66,7 @@ public static class PawchiveApi
     /// 直接回 403——附件域 file.&lt;host&gt; 尤其严格；换成非浏览器 UA 反而按普通客户端放行。
     /// 故本站的所有请求（含下载引擎取附件时）都必须用这个 UA，不要用 Http.UserAgent 的 Chrome UA。
     /// </summary>
-    public const string UserAgent = "DLsiteMedia/1.0";
+    public const string UserAgent = "R-18MediaLibrary/1.0";
 
     private static string Host => AppConfig.PawchiveHost;
     private static string ApiBase => $"https://{Host}/api/v1";

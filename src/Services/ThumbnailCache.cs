@@ -6,7 +6,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Media.Imaging;
 
-namespace DLsiteMedia.Services;
+namespace R18MediaLibrary.Services;
 
 /// <summary>
 /// 进程级封面/缩略图缓存：后台线程解码 BitmapImage 并 Freeze，按 path|size|mtime|解码宽 缓存，

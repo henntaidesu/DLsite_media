@@ -4,7 +4,7 @@ using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Media;
 
-namespace DLsiteMedia.Controls;
+namespace R18MediaLibrary.Controls;
 
 /// <summary>
 /// 均匀尺寸的虚拟化 WrapPanel：只实例化视口内（含上下各一行缓冲）的容器，滚动出视口的容器被虚拟化回收，

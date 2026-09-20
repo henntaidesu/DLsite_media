@@ -1,8 +1,8 @@
 using System.Windows;
-using DLsiteMedia.Core;
-using DLsiteMedia.Services;
+using R18MediaLibrary.Core;
+using R18MediaLibrary.Services;
 
-namespace DLsiteMedia;
+namespace R18MediaLibrary;
 
 public partial class App : Application
 {

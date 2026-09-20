@@ -6,12 +6,12 @@ using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
-using DLsiteMedia.Core;
+using R18MediaLibrary.Core;
 using SharpCompress.Archives;
 using SharpCompress.Common;
 using SharpCompress.Readers;
 
-namespace DLsiteMedia.Services;
+namespace R18MediaLibrary.Services;
 
 /// <summary>
 /// 解压作品压缩包（对应 Python 版 unzip.py）：

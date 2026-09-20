@@ -5,9 +5,9 @@ using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.IO;
 using System.Linq;
-using DLsiteMedia.Core;
+using R18MediaLibrary.Core;
 
-namespace DLsiteMedia.Services;
+namespace R18MediaLibrary.Services;
 
 /// <summary>
 /// 把库内图片压缩成小缩略图（JPEG，默认 128KB 以内）供网页缩略图网格加载，避免直接传原图。

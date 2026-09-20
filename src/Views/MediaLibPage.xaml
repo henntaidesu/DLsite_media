@@ -1,7 +1,7 @@
-<UserControl x:Class="DLsiteMedia.Views.MediaLibPage"
+<UserControl x:Class="R18MediaLibrary.Views.MediaLibPage"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-             xmlns:ctrl="clr-namespace:DLsiteMedia.Controls"
+             xmlns:ctrl="clr-namespace:R18MediaLibrary.Controls"
              IsVisibleChanged="Page_IsVisibleChanged">
     <UserControl.Resources>
         <!-- 整页预览左右切换的半透明圆形箭头按钮 -->

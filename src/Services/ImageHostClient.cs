@@ -9,7 +9,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace DLsiteMedia.Services;
+namespace R18MediaLibrary.Services;
 
 /// <summary>
 /// 自建图床（D:\Project\Image_hosting，Flask）的 /api/v1 客户端：只认 Bearer 项目 Token，只回 JSON。

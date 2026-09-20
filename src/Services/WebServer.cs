@@ -12,9 +12,9 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
-using DLsiteMedia.Core;
+using R18MediaLibrary.Core;
 
-namespace DLsiteMedia.Services;
+namespace R18MediaLibrary.Services;
 
 /// <summary>
 /// 内嵌的外部访问 HTTP 服务：把媒体库（已品悦作品）以响应式网页的形式暴露给手机/电脑浏览器。
@@ -292,7 +292,9 @@ public static class WebServer
         // 静态资源（外壳 / 样式 / 各页面 JS 模块）在鉴权前放行：登录页本身要靠这些 CSS/JS 才能渲染
         if (WebAssets.TryGet(path, out var assetBytes, out var assetType))
         {
-            WriteBytes(stream, 200, "OK", assetType, assetBytes);
+            // SPA 的 html/css/js 是嵌到 exe 里的，随程序版本一起变；文件名又不带版本号，
+            // 浏览器一缓存就会在升级后继续跑旧页面（看不到新加的设置项）。禁掉缓存，局域网重取不值钱。
+            WriteBytes(stream, 200, "OK", assetType, assetBytes, ("Cache-Control", "no-store"));
             return;
         }
         if (path == "/api/state")

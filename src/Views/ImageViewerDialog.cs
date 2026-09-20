@@ -6,9 +6,9 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
-using DLsiteMedia.Core;
+using R18MediaLibrary.Core;
 
-namespace DLsiteMedia.Views;
+namespace R18MediaLibrary.Views;
 
 /// <summary>程序内看图：大图自适应窗口，左右键 / 按钮切换同文件夹的所有图片。</summary>
 public class ImageViewerDialog : Window

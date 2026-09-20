@@ -10,10 +10,10 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
-using DLsiteMedia.Core;
-using DLsiteMedia.Services;
+using R18MediaLibrary.Core;
+using R18MediaLibrary.Services;
 
-namespace DLsiteMedia.Views;
+namespace R18MediaLibrary.Views;
 
 /// <summary>下载页子行：单个分卷文件。</summary>
 public class DownloadFileItem : ObservableBase

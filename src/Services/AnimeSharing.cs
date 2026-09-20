@@ -2,10 +2,10 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
-using DLsiteMedia.Core;
+using R18MediaLibrary.Core;
 using HtmlAgilityPack;
 
-namespace DLsiteMedia.Services;
+namespace R18MediaLibrary.Services;
 
 /// <summary>Anime-sharing 论坛搜索结果的一条帖子。</summary>
 public class AsSearchResult

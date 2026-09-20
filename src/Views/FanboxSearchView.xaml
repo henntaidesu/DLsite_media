@@ -1,7 +1,7 @@
-<UserControl x:Class="DLsiteMedia.Views.FanboxSearchView"
+<UserControl x:Class="R18MediaLibrary.Views.FanboxSearchView"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-             xmlns:ctrl="clr-namespace:DLsiteMedia.Controls">
+             xmlns:ctrl="clr-namespace:R18MediaLibrary.Controls">
     <!-- 「作品搜索」分区里 FANBOX 来源的结果区（对齐 Web 端 src/Web/js/fanbox.js 的两个面板）。
          工具栏（来源下拉 + 输入框 + 查询 + 返回作家列表）由宿主 SearchPage 统一提供，本控件只管结果。 -->
     <Grid>

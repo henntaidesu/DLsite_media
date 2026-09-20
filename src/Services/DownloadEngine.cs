@@ -7,9 +7,9 @@ using System.Net.Http;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
-using DLsiteMedia.Core;
+using R18MediaLibrary.Core;
 
-namespace DLsiteMedia.Services;
+namespace R18MediaLibrary.Services;
 
 /// <summary>正在下载任务的实时进度（UUID -> 进度），由下载线程写入、下载页 UI 读取。</summary>
 public class DownloadProgressInfo

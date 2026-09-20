@@ -4,7 +4,7 @@ using System.Linq;
 using System.Net;
 using System.Text.Json;
 
-namespace DLsiteMedia.Core;
+namespace R18MediaLibrary.Core;
 
 /// <summary>一个媒体库：名称 + 文件夹列表。</summary>
 public class MediaLib

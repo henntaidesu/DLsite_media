@@ -12,10 +12,10 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
-using DLsiteMedia.Core;
-using DLsiteMedia.Services;
+using R18MediaLibrary.Core;
+using R18MediaLibrary.Services;
 
-namespace DLsiteMedia.Views;
+namespace R18MediaLibrary.Views;
 
 /// <summary>媒体库页的根视图模式。</summary>
 public enum MediaLibRoot

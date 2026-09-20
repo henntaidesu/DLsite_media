@@ -4,10 +4,12 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading;
 using DLsiteMedia.Core;
 using SharpCompress.Archives;
 using SharpCompress.Common;
+using SharpCompress.Readers;
 
 namespace DLsiteMedia.Services;
 
@@ -60,43 +62,92 @@ public static class UnzipService
         return total;
     }
 
-    /// <summary>解压一个压缩包到指定目录，返回是否成功。</summary>
+    /// <summary>解压一个压缩包到指定目录，返回是否成功。加密包按「解压密码库」里的密码逐个试。</summary>
     private static bool ExtractArchive(string filePath, string extractPath)
     {
         try
         {
-            if (File.Exists(BandizipBz))
-            {
-                // bz 返回非 0 多为输出文件被杀软/索引器临时占用（0x20 共享冲突），
-                // -aoa 会覆盖已解出的部分，因此可安全重试，等占用释放后再来。
-                // 但 .exe 多为作品自带可执行文件（仅极少数是自解压包），失败通常是"根本不是压缩包"
-                // 而非占用冲突，没必要长等重试——单次尝试即可，让上层快速判定为普通文件跳过。
-                var maxAttempts = Path.GetExtension(filePath).Equals(".exe", StringComparison.OrdinalIgnoreCase) ? 1 : 3;
-                var lastCode = 0;
-                for (var attempt = 1; attempt <= maxAttempts; attempt++)
-                {
-                    using var process = Process.Start(new ProcessStartInfo
-                    {
-                        FileName = BandizipBz,
-                        ArgumentList = { "x", $"-o:{extractPath}", "-aoa", "-y", filePath },
-                        UseShellExecute = false,
-                        CreateNoWindow = true,
-                    });
-                    process!.WaitForExit();
-                    if (process.ExitCode == 0)
-                        return true;
-                    lastCode = process.ExitCode;
-                    if (attempt < maxAttempts)
-                    {
-                        Logger.Warning($"bz.exe 解压返回码 {lastCode}，可能文件被占用，{attempt}/{maxAttempts} 次后重试");
-                        Thread.Sleep(10000);
-                    }
-                }
-                throw new Exception($"bz.exe 解压失败，返回码 {lastCode}");
-            }
+            return File.Exists(BandizipBz)
+                ? ExtractWithBandizip(filePath, extractPath)
+                : ExtractWithSharpCompress(filePath, extractPath);
+        }
+        catch (Exception e)
+        {
+            Logger.Error(e, $"解压 {filePath}");
+            return false;
+        }
+    }
 
-            // SharpCompress 回退：支持 zip / rar（含 RAR5 与分卷，需打开首卷）
-            using var archive = ArchiveFactory.OpenArchive(filePath);
+    private static bool ExtractWithBandizip(string filePath, string extractPath)
+    {
+        // bz 返回非 0 多为输出文件被杀软/索引器临时占用（0x20 共享冲突），
+        // -aoa 会覆盖已解出的部分，因此可安全重试，等占用释放后再来。
+        // 但 .exe 多为作品自带可执行文件（仅极少数是自解压包），失败通常是"根本不是压缩包"
+        // 而非占用冲突，没必要长等重试——单次尝试即可，让上层快速判定为普通文件跳过。
+        var maxAttempts = Path.GetExtension(filePath).Equals(".exe", StringComparison.OrdinalIgnoreCase) ? 1 : 3;
+        var lastCode = 0;
+        for (var attempt = 1; attempt <= maxAttempts; attempt++)
+        {
+            var (ok, exitCode, needsPassword) = RunBandizip(filePath, extractPath, null);
+            if (ok)
+                return true;
+            // 加密包：等多久都没用，直接转去试密码库（只有占用冲突才值得等）
+            if (needsPassword)
+                return TryPasswords(filePath, pwd => RunBandizip(filePath, extractPath, pwd).Ok);
+            lastCode = exitCode;
+            if (attempt < maxAttempts)
+            {
+                Logger.Warning($"bz.exe 解压返回码 {lastCode}，可能文件被占用，{attempt}/{maxAttempts} 次后重试");
+                Thread.Sleep(10000);
+            }
+        }
+        throw new Exception($"bz.exe 解压失败，返回码 {lastCode}");
+    }
+
+    /// <summary>
+    /// 跑一次 bz.exe。输出里的 0xa0000020（需要密码）/ 0xa0000021（密码错误）
+    /// 是区分「加密包」与「文件被占用」的唯一依据——两者的返回码都是 2。
+    /// </summary>
+    private static (bool Ok, int ExitCode, bool NeedsPassword) RunBandizip(
+        string filePath, string extractPath, string? password)
+    {
+        var psi = new ProcessStartInfo
+        {
+            FileName = BandizipBz,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+        };
+        psi.ArgumentList.Add("x");
+        psi.ArgumentList.Add($"-o:{extractPath}");
+        psi.ArgumentList.Add("-aoa");
+        psi.ArgumentList.Add("-y");
+        if (password != null)
+            psi.ArgumentList.Add($"-p:{password}");
+        psi.ArgumentList.Add(filePath);   // 压缩包必须放在最后（bz 的参数顺序要求）
+
+        using var process = Process.Start(psi)!;
+        var needsPassword = false;
+        // 边跑边读：大包会逐个文件打印，输出攒满管道会把子进程卡死
+        while (process.StandardOutput.ReadLine() is { } line)
+            if (line.Contains("0xa0000020", StringComparison.Ordinal) ||
+                line.Contains("0xa0000021", StringComparison.Ordinal))
+                needsPassword = true;
+        process.WaitForExit();
+        return (process.ExitCode == 0, process.ExitCode, needsPassword);
+    }
+
+    private static bool ExtractWithSharpCompress(string filePath, string extractPath) =>
+        IsEncryptedArchive(filePath)
+            ? TryPasswords(filePath, pwd => SharpCompressExtract(filePath, extractPath, pwd))
+            : SharpCompressExtract(filePath, extractPath, null);
+
+    /// <summary>SharpCompress 回退：支持 zip / rar（含 RAR5 与分卷，需打开首卷）。</summary>
+    private static bool SharpCompressExtract(string filePath, string extractPath, string? password)
+    {
+        try
+        {
+            using var archive = ArchiveFactory.OpenArchive(filePath, new ReaderOptions { Password = password });
             foreach (var entry in archive.Entries.Where(e => !e.IsDirectory))
                 entry.WriteToDirectory(extractPath, new ExtractionOptions
                 {
@@ -107,9 +158,45 @@ public static class UnzipService
         }
         catch (Exception e)
         {
-            Logger.Error(e, $"解压 {filePath}");
+            if (password == null)
+                Logger.Error(e, $"解压 {filePath}");   // 试密码过程中的失败由 TryPasswords 统一汇报
             return false;
         }
+    }
+
+    /// <summary>压缩包里是否有加密条目（bz.exe 缺席时用来判断该不该上密码库）。</summary>
+    private static bool IsEncryptedArchive(string filePath)
+    {
+        try
+        {
+            using var archive = ArchiveFactory.OpenArchive(filePath, new ReaderOptions());
+            return archive.Entries.Any(e => !e.IsDirectory && e.IsEncrypted);
+        }
+        catch (Exception)
+        {
+            return false;   // 打不开就当普通包走，失败由正常流程记日志
+        }
+    }
+
+    /// <summary>按「解压密码库」逐条试解，成功即止。日志只记第几条，不写出密码本身。</summary>
+    private static bool TryPasswords(string filePath, Func<string, bool> attempt)
+    {
+        var name = Path.GetFileName(filePath);
+        var passwords = AppConfig.UnzipPasswords;
+        if (passwords.Count == 0)
+        {
+            Logger.Error($"{name} 需要解压密码，但密码库是空的（系统设置 → 下载 → 解压密码库）");
+            return false;
+        }
+        Logger.Info($"{name} 需要解压密码，开始尝试密码库中的 {passwords.Count} 条");
+        for (var i = 0; i < passwords.Count; i++)
+            if (attempt(passwords[i]))
+            {
+                Logger.Info($"{name} 已用密码库第 {i + 1} 条密码解压");
+                return true;
+            }
+        Logger.Error($"{name} 需要解压密码，但密码库里的 {passwords.Count} 条都不匹配");
+        return false;
     }
 
     /// <summary>
@@ -222,6 +309,61 @@ public static class UnzipService
             Directory.Move(source, dest);
         else
             File.Move(source, dest);
+    }
+
+    // 分卷包只解首卷，后续分卷由解压器自己带上（否则会逐个尝试后续分卷、刷一堆失败日志）
+    private static readonly Regex NonFirstVolume =
+        new(@"\.part0*([2-9]|\d{2,})\.rar$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    /// <summary>
+    /// 就地解压目录里的压缩包（fanbox 投稿的附件常是压缩包，且常带密码）：
+    /// 每个包解到与包同名的子目录，避免包内文件与已下载的图片重名互相覆盖；
+    /// 成功则删包，失败则原样保留。返回是否全部解开——
+    /// 调用方无论成败都应继续入库，别让一个解不开的包把整篇作品挡在缓存目录里。
+    /// </summary>
+    public static bool ExtractArchivesInPlace(string workId, string folderPath)
+    {
+        // 先取快照：解出来的内容里若还套着压缩包，本轮不再深挖
+        var archives = GetAllArchiveFiles(folderPath)
+            .Where(a => !Path.GetExtension(a).Equals(".exe", StringComparison.OrdinalIgnoreCase))
+            .Where(a => !NonFirstVolume.IsMatch(a))
+            .ToList();
+        var allOk = true;
+        foreach (var archive in archives)
+        {
+            if (!File.Exists(archive))
+                continue;   // 已被上一个包当作分卷一并解掉
+            var dest = Path.Combine(folderPath, Path.GetFileNameWithoutExtension(archive));
+            var destExisted = Directory.Exists(dest);
+            Logger.Info($"{workId} 解压附件 {Path.GetFileName(archive)}");
+            if (ExtractArchive(archive, dest))
+            {
+                MoveToRoot(workId, dest);   // 包里常再套一层同名目录，拍平
+                FixEncoding(dest);          // SharpCompress 回退时的 Shift_JIS 乱码
+                try
+                {
+                    File.Delete(archive);
+                }
+                catch (Exception e)
+                {
+                    Logger.Error(e, $"删除压缩包 {archive}");
+                }
+                continue;
+            }
+            allOk = false;
+            if (destExisted)
+                continue;
+            try
+            {
+                if (Directory.Exists(dest))
+                    Directory.Delete(dest, true);   // 清掉解了一半的残留，别污染作品目录
+            }
+            catch (Exception e)
+            {
+                Logger.Error(e, $"清理解压残留 {dest}");
+            }
+        }
+        return allOk;
     }
 
     /// <summary>

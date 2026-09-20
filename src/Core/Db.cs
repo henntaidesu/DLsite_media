@@ -157,6 +157,24 @@ public static class Db
                         "time" text,
                         PRIMARY KEY ("work_id")
                     );
+                    -- 图床映射：本地图片 -> 图床上的那一份。external_key 同时是图床侧的幂等键
+                    -- （同 key 重复上传直接复用旧记录），一个作品封面至多一行，故"迁移两次"在此被挡住。
+                    -- src_* 是本地文件指纹（快路径：指纹一致就跳过，不读盘）；sha256 是内容指纹
+                    -- （慢路径：指纹变了但内容没变——移库改了路径、重扫改了 mtime——照样不重传）。
+                    -- 图床不可用/未接管时各处回退读本地原图，故本表可随时清空，靠图床的 lookup 重建。
+                    CREATE TABLE IF NOT EXISTS "image_host" (
+                        "external_key" text NOT NULL,
+                        "work_id" text,
+                        "kind" text,
+                        "stored_name" text,
+                        "path" text,
+                        "src_path" text,
+                        "src_size" text,
+                        "src_mtime" text,
+                        "sha256" text,
+                        "up_time" text,
+                        PRIMARY KEY ("external_key")
+                    );
                     """;
                 cmd.ExecuteNonQuery();
             }
@@ -215,6 +233,23 @@ public static class Db
                 }
             }
 
+            // image_host 补 sha256 列：该表在加入内容指纹之前就可能已被建出来（开发期跑过一次），
+            // 那种库里 INSERT 会因缺列直接失败，故照 works/download_list 的做法补一手。
+            var ihColumns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            using (var cmd = conn.CreateCommand())
+            {
+                cmd.CommandText = "PRAGMA table_info(\"image_host\")";
+                using var reader = cmd.ExecuteReader();
+                while (reader.Read())
+                    ihColumns.Add(reader.GetString(1));
+            }
+            if (ihColumns.Count > 0 && !ihColumns.Contains("sha256"))
+            {
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = "ALTER TABLE \"image_host\" ADD COLUMN \"sha256\" text";
+                cmd.ExecuteNonQuery();
+            }
+
             // 为高频过滤/排序列建二级索引（列必已由上方建表或补列保证存在），
             // 避免媒体库/标签/形式/已下载页的全表扫描。
             using (var cmd = conn.CreateCommand())
@@ -228,11 +263,59 @@ public static class Db
                     CREATE INDEX IF NOT EXISTS "idx_work_genres_genre" ON "work_genres" ("genre");
                     CREATE INDEX IF NOT EXISTS "idx_download_list_work_id" ON "download_list" ("work_id");
                     CREATE INDEX IF NOT EXISTS "idx_download_list_status" ON "download_list" ("status");
+                    CREATE INDEX IF NOT EXISTS "idx_image_host_work" ON "image_host" ("work_id");
                     """;
                 cmd.ExecuteNonQuery();
             }
+
+            MigrateFanboxTables(conn);
             _initialized = true;
         }
+    }
+
+    /// <summary>
+    /// 一次性迁移：早期版本把 fanbox 作品存在独立的 fanbox_artists / fanbox_posts 两张表里，
+    /// 现已改为和 DLsite 作品一样存进 works（用 works.source = 'fanbox' 区分）。
+    /// 这里把老数据搬进 works（作品号 fb_xxx 统一改成 FBxxx）后删掉旧表；没有旧表时什么都不做。
+    /// </summary>
+    private static void MigrateFanboxTables(SqliteConnection conn)
+    {
+        using (var check = conn.CreateCommand())
+        {
+            check.CommandText =
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'fanbox_posts'";
+            if (Convert.ToInt64(check.ExecuteScalar() ?? 0L) == 0)
+                return;
+        }
+
+        using (var cmd = conn.CreateCommand())
+        {
+            cmd.CommandText = """
+                INSERT OR REPLACE INTO "works"
+                    ("work_id", "work_name", "maker_id", "maker_name", "work_type", "intro_s",
+                     "genre", "sell_date", "state", "library", "folder", "target", "target_lib",
+                     "cover", "down_time", "read_flag", "favorite", "source", "meta_scanned")
+                SELECT 'FB' || "post_id", "title", "artist_id", "artist_name", 'FANBOX', "content",
+                       "tags",
+                       CASE WHEN length("published") >= 10
+                            THEN substr("published", 1, 4) || '年' || substr("published", 6, 2) || '月'
+                                 || substr("published", 9, 2) || '日'
+                            ELSE "published" END,
+                       "state", "library", "folder", "target", "target_lib",
+                       "cover", "down_time", "read_flag", "favorite", 'fanbox', '1'
+                FROM "fanbox_posts";
+                -- 下载队列与标签索引里的旧作品号一并改写
+                UPDATE "download_list" SET "work_id" = 'FB' || substr("work_id", 4)
+                    WHERE "work_id" LIKE 'fb\_%' ESCAPE '\';
+                UPDATE OR REPLACE "work_genres" SET "work_id" = 'FB' || substr("work_id", 4)
+                    WHERE "work_id" LIKE 'fb\_%' ESCAPE '\';
+                DROP VIEW IF EXISTS "works_all";
+                DROP TABLE IF EXISTS "fanbox_posts";
+                DROP TABLE IF EXISTS "fanbox_artists";
+                """;
+            cmd.ExecuteNonQuery();
+        }
+        Console.WriteLine("[DASD] 已把 fanbox 独立表的数据迁入 works 表并删除旧表");
     }
 
     /// <summary>查询：返回行列表，每行为 object?[]（列序与 SQL 一致），失败时返回 null 并记日志。</summary>

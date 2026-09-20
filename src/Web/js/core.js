@@ -65,7 +65,8 @@ $('modal').addEventListener('click', e => { if (e.target.id === 'modal' && _moda
 
 const SECTIONS = [
   { key: 'medialib', label: '媒体库', root: 'libs',     icon: '📚' },
-  { key: 'searchdownload', label: '下载搜索',            icon: '⬇' },
+  { key: 'download', label: '下载管理',                  icon: '⬇' },
+  { key: 'search',   label: '作品搜索',                    icon: '🔍' },
   { key: 'tag',      label: '作品标签', root: 'genres',   icon: '🏷' },
   { key: 'maker',    label: '作品社团', root: 'allmakers', icon: '🏢' },
   { key: 'type',     label: '作品形式', root: 'types',   icon: '🎬' },
@@ -112,7 +113,7 @@ async function doLogin() {
 // ---------- 左侧导航（桌面常驻 / 移动抽屉） ----------
 function buildTabs() {
   const box = $('nav'); box.innerHTML = '';
-  box.appendChild(el('div', 'brand', 'DLsite媒体库'));
+  box.appendChild(el('div', 'brand', 'R18媒体库'));
   SECTIONS.forEach(s => {
     const b = el('div', 'navitem' + (s.key === section ? ' active' : ''));
     b.appendChild(el('span', null, s.label));
@@ -143,7 +144,7 @@ function stopTimers() { if (pollTimer) clearInterval(pollTimer); if (usageTimer)
 
 function selectSection(key) {
   section = key; stopTimers(); closeVideo(); closeAudio(); closeDrawer();
-  if (key === 'searchdownload') sdView = 'download';   // 进入分区先归位到下载视图，再写基线历史（encodeHash 依赖 sdView）
+  if (key === 'download') dlView = 'download';   // 进入分区先归位到下载列表视图，再写基线历史（encodeHash 依赖 dlView）
   const s = SECTIONS.find(x => x.key === key);
   buildTabs();
   $('search').hidden = !s.root;
@@ -158,7 +159,8 @@ function selectSection(key) {
   // 反映到地址栏；切换分区重置历史基线（不累积层级），但 URL 可见当前分区
   history.replaceState({ nav: true, depth: s.root ? 1 : 0 }, '', encodeHash());
   if (s.root) render();
-  else if (key === 'searchdownload') renderSearchDownload();
+  else if (key === 'search') renderSearchArea();
+  else if (key === 'download') renderDownloadArea();
   else if (key === 'settings') renderSettings();
 }
 
@@ -167,7 +169,8 @@ function selectSection(key) {
 // 内存 stack 仍是渲染与滚动恢复的主数据源；哈希仅作 URL 呈现与新开页面时的恢复。
 function encodeHash() {
   const s = SECTIONS.find(x => x.key === section);
-  if (section === 'searchdownload') return encodeSdHash();   // 下载搜索有三视图，走独立编码
+  if (section === 'search') return encodeSearchHash();       // 作品搜索把来源与查询词编进地址栏
+  if (section === 'download') return encodeDlHash();         // 下载管理有两视图，走独立编码
   if (!s || !s.root) return '#/' + section;             // 其它叶子分区（设置）
   const segs = stack.slice(1).map(e => {
     const ctx = { ...e.ctx }; delete ctx.nodes;          // nodes 为运行时文件树缓存，过大不入 URL
@@ -176,35 +179,35 @@ function encodeHash() {
   });
   return '#/' + s.key + (segs.length ? '/' + segs.join('/') : '');
 }
-// 下载搜索三视图（下载/搜索/已下载）纳入地址栏路由：搜索视图带上查询词，可刷新/分享/前进后退恢复。
-// 形如 #/searchdownload（下载）、#/searchdownload/search~RJ123456（搜索）、#/searchdownload/downloaded（已下载）。
-function encodeSdHash() {
-  if (sdView === 'search') {
-    const q = ($('sId') && $('sId').value.trim()) || '';
-    return '#/searchdownload/search' + (q ? '~' + encodeURIComponent(q) : '');
-  }
-  if (sdView === 'downloaded') return '#/searchdownload/downloaded';
-  return '#/searchdownload';
+// 作品搜索分区：来源 + 查询词纳入地址栏，可刷新/分享恢复。
+// 形如 #/search/dlsite、#/search/dlsite/RJ123456、#/search/fanbox/alkaloid404。
+// 查询词整段 URI 编码，故 DLsite 链接里的 '/' 不会被误当作层级分隔符。
+function encodeSearchHash() {
+  const q = ($('sId') && $('sId').value.trim()) || '';
+  return '#/search/' + searchSrc + (q ? '/' + encodeURIComponent(q) : '');
+}
+// 下载管理两视图（下载列表/已下载）纳入地址栏路由。形如 #/download、#/download/downloaded。
+function encodeDlHash() {
+  return dlView === 'downloaded' ? '#/download/downloaded' : '#/download';
 }
 // 子视图切换：作为可回退的路由层级压入历史并反映到地址栏（对齐卡片区 pushView）
-function navSd(view) {
-  sdView = view;
-  history.pushState({ nav: true, sd: view }, '', encodeSdHash());
-  renderSearchDownload();
+function navDl(view) {
+  dlView = view;
+  history.pushState({ nav: true, dl: view }, '', encodeDlHash());
+  renderDownloadArea();
 }
-// 搜索视图内输入查询后刷新地址栏（只 replace，不为每次查询累积历史层级）
-function syncSdHash() {
-  if (section === 'searchdownload' && sdView === 'search')
-    history.replaceState({ nav: true, sd: 'search' }, '', encodeSdHash());
+// 搜索分区内输入查询后刷新地址栏（只 replace，不为每次查询累积历史层级）
+function syncSearchHash() {
+  if (section === 'search')
+    history.replaceState({ nav: true }, '', encodeSearchHash());
 }
-// 前进/后退（popstate）落在下载搜索分区时，按地址栏恢复子视图；搜索视图带查询词则复跑一次
-function syncSdFromHash() {
+// 前进/后退（popstate）落在下载管理分区时，按地址栏恢复子视图
+function syncDlFromHash() {
   const p = parseHash();
-  const sd = (p && p.key === 'searchdownload') ? p.sd : 'download';
-  if (sd === sdView) return;
-  sdView = sd;
-  renderSearchDownload();
-  if (sd === 'search' && p && p.query) { const inp = $('sId'); if (inp) { inp.value = p.query; runSearch(); } }
+  const dl = (p && p.key === 'download') ? p.dl : 'download';
+  if (dl === dlView) return;
+  dlView = dl;
+  renderDownloadArea();
 }
 function parseHash() {
   const raw = (location.hash || '').replace(/^#\/?/, '');
@@ -212,16 +215,17 @@ function parseHash() {
   const parts = raw.split('/').filter(Boolean);
   const s = SECTIONS.find(x => x.key === parts[0]);
   if (!s) return null;
-  if (s.key === 'searchdownload') {
-    // parts[1]：search | downloaded（缺省 download）；search 可携 ~查询词
-    let sd = 'download', query = '';
-    if (parts[1]) {
-      const t = parts[1].indexOf('~');
-      sd = t < 0 ? parts[1] : parts[1].slice(0, t);
-      if (t >= 0) { try { query = decodeURIComponent(parts[1].slice(t + 1)); } catch (e) { } }
-    }
-    if (!['download', 'search', 'downloaded'].includes(sd)) sd = 'download';
-    return { key: s.key, root: false, sd, query };
+  if (s.key === 'search') {
+    // parts[1]：来源（dlsite / fanbox，缺省 dlsite）；parts[2..]：查询词（整段 URI 编码）
+    const src = parts[1] === 'fanbox' ? 'fanbox' : 'dlsite';
+    let query = '';
+    if (parts[2]) { try { query = decodeURIComponent(parts.slice(2).join('/')); } catch (e) { } }
+    return { key: s.key, root: false, src, query };
+  }
+  if (s.key === 'download') {
+    // parts[1]：downloaded（缺省 download）
+    const dl = parts[1] === 'downloaded' ? 'downloaded' : 'download';
+    return { key: s.key, root: false, dl };
   }
   const stk = s.root ? [{ view: s.root, ctx: {} }] : [];
   for (let i = 1; i < parts.length; i++) {
@@ -252,7 +256,8 @@ async function popView() {
   return true;
 }
 window.addEventListener('popstate', () => {
-  if (section === 'searchdownload') { syncSdFromHash(); return; }
+  if (section === 'search') return;   // 搜索分区内不压历史层级（来源/查询词只 replace）
+  if (section === 'download') { syncDlFromHash(); return; }
   const s = SECTIONS.find(x => x.key === section);
   if (s && s.root && stack.length > 1) popView();
 });
@@ -305,7 +310,14 @@ function drawGroups(items, mapFn, unit) {
 function makeWorkCard(w) {
   const c = el('div', 'card');
   const cov = el('div', 'cover');
-  if (w.cover) { const img = el('img'); img.loading = 'lazy'; img.src = `/api/cover?id=${enc(w.id)}&thumb=1`; cov.appendChild(img); }
+  if (w.cover) {
+    const img = el('img'); img.loading = 'lazy';
+    const local = `/api/cover?id=${enc(w.id)}&thumb=1`;
+    // 图床接管该封面时直取图床（不经本服务、不读本机 HDD）；图床取不到再回退本地
+    img.src = w.coverUrl || local;
+    if (w.coverUrl) img.onerror = () => { img.onerror = null; img.src = local; };
+    cov.appendChild(img);
+  }
   cov.appendChild(el('div', 'badge rj', w.id));
   if (w.type) cov.appendChild(el('div', 'badge type', w.type));
   c.appendChild(cov); c.appendChild(el('div', 'wt', w.name || w.id));

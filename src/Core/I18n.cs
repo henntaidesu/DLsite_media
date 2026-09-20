@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 
 namespace DLsiteMedia.Core;
@@ -73,13 +73,73 @@ public static class I18n
     // 简体中文原文 -> {语言代码: 译文}
     private static readonly Dictionary<string, Dictionary<string, string>> Translations = new()
     {
+        // ---------- FANBOX（pawchive 数据源）----------
+        ["FANBOX"] = new() { ["zh_TW"] = "FANBOX", ["ja"] = "FANBOX", ["en"] = "FANBOX" },
+        ["📚 我的库"] = new() { ["zh_TW"] = "📚 我的庫", ["ja"] = "📚 マイライブラリ", ["en"] = "📚 My Library" },
+        ["输入作家名 / 作家 ID，或粘贴 pawchive 作家链接"] = new()
+        {
+            ["zh_TW"] = "輸入作家名 / 作家 ID，或貼上 pawchive 作家連結",
+            ["ja"] = "作家名／作家 ID を入力、または pawchive の作家リンクを貼り付け",
+            ["en"] = "Enter an artist name / ID, or paste a pawchive artist link",
+        },
+        ["正在搜索作家…"] = new() { ["zh_TW"] = "正在搜尋作家…", ["ja"] = "作家を検索中…", ["en"] = "Searching artists…" },
+        ["正在下载站点作家索引（约 15MB），首次搜索稍慢…"] = new()
+        {
+            ["zh_TW"] = "正在下載站點作家索引（約 15MB），首次搜尋較慢…",
+            ["ja"] = "サイトの作家インデックス（約 15MB）をダウンロード中。初回検索は時間がかかります…",
+            ["en"] = "Downloading the site artist index (~15MB); the first search is slower…",
+        },
+        ["搜索到 {n} 位作家"] = new() { ["zh_TW"] = "搜尋到 {n} 位作家", ["ja"] = "{n} 人の作家が見つかりました", ["en"] = "Found {n} artists" },
+        ["索引更新于 {time}"] = new() { ["zh_TW"] = "索引更新於 {time}", ["ja"] = "インデックス更新: {time}", ["en"] = "Index updated {time}" },
+        ["没有匹配的作家"] = new() { ["zh_TW"] = "沒有符合的作家", ["ja"] = "一致する作家がありません", ["en"] = "No matching artists" },
+        ["正在获取作品…"] = new() { ["zh_TW"] = "正在取得作品…", ["ja"] = "作品を取得中…", ["en"] = "Loading posts…" },
+        ["获取作品列表失败"] = new() { ["zh_TW"] = "取得作品清單失敗", ["ja"] = "作品リストの取得に失敗しました", ["en"] = "Failed to load the post list" },
+        ["已加载 {n} 篇作品"] = new() { ["zh_TW"] = "已載入 {n} 篇作品", ["ja"] = "{n} 件の作品を読み込みました", ["en"] = "{n} posts loaded" },
+        ["（下拉加载更多）"] = new() { ["zh_TW"] = "（下拉載入更多）", ["ja"] = "（スクロールで続きを読み込み）", ["en"] = " (scroll for more)" },
+        ["{n} 文件"] = new() { ["zh_TW"] = "{n} 檔案", ["ja"] = "{n} ファイル", ["en"] = "{n} files" },
+        ["已选 {n} 篇"] = new() { ["zh_TW"] = "已選 {n} 篇", ["ja"] = "{n} 件選択中", ["en"] = "{n} selected" },
+        ["选择"] = new() { ["zh_TW"] = "選擇", ["ja"] = "選択", ["en"] = "Select" },
+        ["已选"] = new() { ["zh_TW"] = "已選", ["ja"] = "選択中", ["en"] = "Selected" },
+        ["查看"] = new() { ["zh_TW"] = "檢視", ["ja"] = "表示", ["en"] = "View" },
+        ["全选"] = new() { ["zh_TW"] = "全選", ["ja"] = "すべて選択", ["en"] = "Select all" },
+        ["清空"] = new() { ["zh_TW"] = "清空", ["ja"] = "クリア", ["en"] = "Clear" },
+        ["下载选中"] = new() { ["zh_TW"] = "下載選取", ["ja"] = "選択をダウンロード", ["en"] = "Download selected" },
+        ["正在加入下载队列…"] = new() { ["zh_TW"] = "正在加入下載佇列…", ["ja"] = "ダウンロードキューに追加中…", ["en"] = "Adding to the download queue…" },
+        ["已加入下载：{posts} 篇作品 / {files} 个文件"] = new()
+        {
+            ["zh_TW"] = "已加入下載：{posts} 篇作品 / {files} 個檔案",
+            ["ja"] = "ダウンロードに追加：{posts} 件の作品 / {files} ファイル",
+            ["en"] = "Queued {posts} posts / {files} files",
+        },
+        ["，跳过 {n} 篇"] = new() { ["zh_TW"] = "，略過 {n} 篇", ["ja"] = "、{n} 件をスキップ", ["en"] = ", skipped {n}" },
+        ["加入下载失败"] = new() { ["zh_TW"] = "加入下載失敗", ["ja"] = "ダウンロードへの追加に失敗しました", ["en"] = "Failed to queue the download" },
+        ["{n} 篇已入库 · 共 {total} 篇"] = new()
+        {
+            ["zh_TW"] = "{n} 篇已入庫 · 共 {total} 篇",
+            ["ja"] = "{n} 件が取り込み済み · 全 {total} 件",
+            ["en"] = "{n} in library · {total} total",
+        },
+        ["共 {n} 位作家"] = new() { ["zh_TW"] = "共 {n} 位作家", ["ja"] = "作家 {n} 人", ["en"] = "{n} artists" },
+        ["共 {n} 篇作品"] = new() { ["zh_TW"] = "共 {n} 篇作品", ["ja"] = "作品 {n} 件", ["en"] = "{n} posts" },
+        ["还没有下载过 fanbox 作品，用上方搜索框找作家吧"] = new()
+        {
+            ["zh_TW"] = "還沒有下載過 fanbox 作品，用上方搜尋框找作家吧",
+            ["ja"] = "まだ fanbox 作品をダウンロードしていません。上の検索欄から作家を探してください",
+            ["en"] = "No fanbox posts downloaded yet — find an artist with the search box above",
+        },
+        ["作品不存在"] = new() { ["zh_TW"] = "作品不存在", ["ja"] = "作品が存在しません", ["en"] = "Post not found" },
+        ["作家"] = new() { ["zh_TW"] = "作家", ["ja"] = "作家", ["en"] = "Artist" },
+        ["发布日"] = new() { ["zh_TW"] = "發佈日", ["ja"] = "公開日", ["en"] = "Published" },
+        ["目录"] = new() { ["zh_TW"] = "目錄", ["ja"] = "フォルダ", ["en"] = "Folder" },
+        ["附件"] = new() { ["zh_TW"] = "附件", ["ja"] = "添付ファイル", ["en"] = "Attachments" },
+
         // ---------- 导航 / 通用 ----------
-        ["DLsite媒体库"] = new() { ["zh_TW"] = "DLsite媒體庫", ["ja"] = "DLsiteメディアライブラリ", ["en"] = "DLsite Media Library" },
+        ["R18媒体库"] = new() { ["zh_TW"] = "R18媒體庫", ["ja"] = "R18メディアライブラリ", ["en"] = "R18 Media Library" },
         ["搜索"] = new() { ["zh_TW"] = "搜尋", ["ja"] = "検索", ["en"] = "Search" },
         ["下载"] = new() { ["zh_TW"] = "下載", ["ja"] = "ダウンロード", ["en"] = "Download" },
-        ["搜索/下载"] = new() { ["zh_TW"] = "搜尋/下載", ["ja"] = "検索/ダウンロード", ["en"] = "Search / Download" },
         // 左导航文案对齐 Web 端 SECTIONS (src/Web/js/core.js)
-        ["下载搜索"] = new() { ["zh_TW"] = "下載搜尋", ["ja"] = "ダウンロード/検索", ["en"] = "Download / Search" },
+        ["DLsite 搜索"] = new() { ["zh_TW"] = "DLsite 搜尋", ["ja"] = "DLsite 検索", ["en"] = "DLsite Search" },
+        ["下载管理"] = new() { ["zh_TW"] = "下載管理", ["ja"] = "ダウンロード管理", ["en"] = "Downloads" },
         ["作品社团"] = new() { ["zh_TW"] = "作品社團", ["ja"] = "サークル", ["en"] = "Makers" },
         ["我的收藏"] = new() { ["zh_TW"] = "我的收藏", ["ja"] = "お気に入り", ["en"] = "Favorites" },
         ["系统设置"] = new() { ["zh_TW"] = "系統設定", ["ja"] = "システム設定", ["en"] = "Settings" },
@@ -110,7 +170,6 @@ public static class I18n
         ["← 返回结果"] = new() { ["zh_TW"] = "← 返回結果", ["ja"] = "← 結果に戻る", ["en"] = "← Back to results" },
         ["← 返回作品列表"] = new() { ["zh_TW"] = "← 返回作品列表", ["ja"] = "← 作品一覧に戻る", ["en"] = "← Back to works" },
         ["未找到匹配的作品"] = new() { ["zh_TW"] = "未找到相符的作品", ["ja"] = "一致する作品が見つかりません", ["en"] = "No matching works found" },
-        ["← 下载列表"] = new() { ["zh_TW"] = "← 下載列表", ["ja"] = "← ダウンロード一覧", ["en"] = "← Downloads" },
         ["选择下载位置"] = new() { ["zh_TW"] = "選擇下載位置", ["ja"] = "ダウンロード先を選択", ["en"] = "Choose download location" },
         ["选择下载到哪个媒体库"] = new()
         {
@@ -165,7 +224,6 @@ public static class I18n
         ["debrid-link 使用量"] = new() { ["zh_TW"] = "debrid-link 使用量", ["ja"] = "debrid-link 使用量", ["en"] = "debrid-link usage" },
         ["debrid-link 使用量 --"] = new() { ["zh_TW"] = "debrid-link 使用量 --", ["ja"] = "debrid-link 使用量 --", ["en"] = "debrid-link usage --" },
         [" · {reset} 后重置"] = new() { ["zh_TW"] = " · {reset} 後重置", ["ja"] = " · {reset} 後にリセット", ["en"] = " · resets in {reset}" },
-        ["搜索作品"] = new() { ["zh_TW"] = "搜尋作品", ["ja"] = "作品を検索", ["en"] = "Search works" },
         ["开始下载"] = new() { ["zh_TW"] = "開始下載", ["ja"] = "ダウンロード開始", ["en"] = "Start" },
         ["暂停下载"] = new() { ["zh_TW"] = "暫停下載", ["ja"] = "ダウンロード停止", ["en"] = "Pause" },
         ["暂停中…"] = new() { ["zh_TW"] = "暫停中…", ["ja"] = "停止中…", ["en"] = "Pausing…" },
@@ -269,6 +327,16 @@ public static class I18n
         ["打开文件夹"] = new() { ["zh_TW"] = "開啟資料夾", ["ja"] = "フォルダを開く", ["en"] = "Open folder" },
         ["移动媒体库"] = new() { ["zh_TW"] = "移動媒體庫", ["ja"] = "ライブラリを移動", ["en"] = "Move library" },
         ["查看作品"] = new() { ["zh_TW"] = "查看作品", ["ja"] = "作品を見る", ["en"] = "Browse files" },
+        ["解压密码库"] = new()
+        {
+            ["zh_TW"] = "解壓密碼庫", ["ja"] = "解凍パスワード一覧", ["en"] = "Archive passwords",
+        },
+        ["一行一个密码，解压加密压缩包时按顺序尝试"] = new()
+        {
+            ["zh_TW"] = "一行一個密碼，解壓加密壓縮檔時依序嘗試",
+            ["ja"] = "1 行に 1 つ。暗号化書庫の解凍時に上から順に試します",
+            ["en"] = "One password per line, tried in order on encrypted archives",
+        },
         ["作品信息"] = new() { ["zh_TW"] = "作品資訊", ["ja"] = "作品情報", ["en"] = "Work info" },
         ["查看图片"] = new() { ["zh_TW"] = "查看圖片", ["ja"] = "画像を表示", ["en"] = "View image" },
         ["{count} 项"] = new() { ["zh_TW"] = "{count} 項", ["ja"] = "{count} 件", ["en"] = "{count} items" },
@@ -486,5 +554,33 @@ public static class I18n
         },
         ["选择下载路径"] = new() { ["zh_TW"] = "選擇下載路徑", ["ja"] = "ダウンロード先を選択", ["en"] = "Choose download path" },
         ["选择缓存路径"] = new() { ["zh_TW"] = "選擇快取路徑", ["ja"] = "キャッシュ先を選択", ["en"] = "Choose cache path" },
+
+        // ---------- 图床存储（设置页）----------
+        ["图床存储"] = new() { ["zh_TW"] = "圖床儲存", ["ja"] = "画像ホスティング", ["en"] = "Image hosting" },
+        ["启用"] = new() { ["zh_TW"] = "啟用", ["ja"] = "有効", ["en"] = "Enabled" },
+        ["项目"] = new() { ["zh_TW"] = "專案", ["ja"] = "プロジェクト", ["en"] = "Project" },
+        ["服务地址"] = new() { ["zh_TW"] = "服務位址", ["ja"] = "サービスアドレス", ["en"] = "Service URL" },
+        ["测试连接"] = new() { ["zh_TW"] = "測試連線", ["ja"] = "接続テスト", ["en"] = "Test connection" },
+        ["迁移封面"] = new() { ["zh_TW"] = "遷移封面", ["ja"] = "カバーを移行", ["en"] = "Migrate covers" },
+        ["测试中…"] = new() { ["zh_TW"] = "測試中…", ["ja"] = "テスト中…", ["en"] = "Testing…" },
+        ["请先启用图床存储"] = new()
+        {
+            ["zh_TW"] = "請先啟用圖床儲存",
+            ["ja"] = "先に画像ホスティングを有効にしてください",
+            ["en"] = "Enable image hosting first"
+        },
+        ["⏳ 迁移中 "] = new() { ["zh_TW"] = "⏳ 遷移中 ", ["ja"] = "⏳ 移行中 ", ["en"] = "⏳ Migrating " },
+        ["✓ 已连接（图床现有 {count} 张）"] = new()
+        {
+            ["zh_TW"] = "✓ 已連線（圖床現有 {count} 張）",
+            ["ja"] = "✓ 接続済み（画像ホスト上に {count} 枚）",
+            ["en"] = "✓ Connected ({count} images on host)"
+        },
+        ["开启后作品卡封面由图床提供，未迁移的封面自动回退本地硬盘。迁移只复制不删除本地原图（它也是详情页的第一张图）；同一个作品重复迁移会被跳过，中断后再点一次即可续传。手机要看到图，服务地址须填电脑的局域网地址（不能是 127.0.0.1），并在图床「系统设置 → 附加访问主机名」里放行该地址。"] = new()
+        {
+            ["zh_TW"] = "開啟後作品卡封面由圖床提供，未遷移的封面自動回退本機硬碟。遷移只複製、不刪除本機原圖（它也是詳情頁的第一張圖）；同一個作品重複遷移會被跳過，中斷後再點一次即可續傳。手機要看到圖，服務位址須填電腦的區域網路位址（不能是 127.0.0.1），並在圖床「系統設定 → 附加存取主機名稱」裡放行該位址。",
+            ["ja"] = "有効にすると作品カードのカバーは画像ホストから配信されます（未移行分はローカルにフォールバック）。移行はコピーのみでローカル原本は消しません（詳細ページの1枚目でもあるため）。同じ作品の重複移行はスキップされ、中断しても再実行で続きから進みます。スマホで表示するにはサービスアドレスに PC の LAN アドレス（127.0.0.1 以外）を指定し、画像ホストの「システム設定 → 追加の許可ホスト名」に登録してください。",
+            ["en"] = "Work card covers are served from the image host; covers not yet migrated fall back to the local disk. Migration copies only — the local original is kept (it is also the first image on the detail page) — and a work already migrated is skipped, so an interrupted run just resumes. For phones, set the service URL to this PC's LAN address (not 127.0.0.1) and allow it under the image host's Settings → additional trusted hosts."
+        },
     };
 }

@@ -23,10 +23,12 @@ internal static class WebAssets
     private static readonly (string Path, string Suffix, string Type)[] Assets =
     [
         ("/index.html",     ".index.html",  "text/html; charset=utf-8"),
+        ("/favicon.ico",    ".favicon.ico", "image/x-icon"),
         ("/app.css",        ".app.css",     "text/css; charset=utf-8"),
         ("/js/core.js",     ".core.js",     "application/javascript; charset=utf-8"),
         ("/js/library.js",  ".library.js",  "application/javascript; charset=utf-8"),
         ("/js/search.js",   ".search.js",   "application/javascript; charset=utf-8"),
+        ("/js/fanbox.js",   ".fanbox.js",   "application/javascript; charset=utf-8"),
         ("/js/download.js", ".download.js", "application/javascript; charset=utf-8"),
         ("/js/settings.js", ".settings.js", "application/javascript; charset=utf-8"),
         ("/js/viewer.js",   ".viewer.js",   "application/javascript; charset=utf-8"),

@@ -83,6 +83,8 @@ public static class WebServer
         "down_list/min_speed", "down_list/speed_limit",
         "proxy/openproxy", "proxy/host", "proxy/port", "proxy/type",
         "debrid/api_key", "language/lang", "loglevel/level", "encoding/encoding",
+        "unzip/passwords",
+        "image_host/enabled", "image_host/base_url", "image_host/project", "image_host/token",
     ];
 
     // ---------- 生命周期 ----------
@@ -360,9 +362,17 @@ public static class WebServer
                 case "/api/downloaded": ApiDownloaded(stream); break;
                 case "/api/mark": ApiMark(stream, req); break;
                 case "/api/dislike": ApiDislike(stream, req); break;
+                // FANBOX（pawchive）
+                case "/api/fanbox/artists": await ApiFanboxArtistsAsync(stream, req); break;
+                case "/api/fanbox/posts": await ApiFanboxPostsAsync(stream, req); break;
+                case "/api/fanbox/enqueue": await ApiFanboxEnqueueAsync(stream, req); break;
+                case "/api/fanbox/image": await ApiFanboxImageAsync(stream, req); break;
                 // 设置
                 case "/api/settings": if (req.Method == "POST") ApiSettingsWrite(stream, req); else ApiSettings(stream); break;
                 case "/api/debridtest": await ApiDebridTestAsync(stream, req); break;
+                case "/api/imagehost/test": await ApiImageHostTestAsync(stream, req); break;
+                case "/api/imagehost/migrate": ApiImageHostMigrate(stream); break;
+                case "/api/imagehost/status": ApiImageHostStatus(stream); break;
                 // 媒体库管理
                 case "/api/medialibs": ApiMediaLibs(stream); break;
                 case "/api/lib/create": ApiLibCreate(stream, req); break;
@@ -427,9 +437,9 @@ public static class WebServer
         if (!_authRequired || TokensEqual(Sha256Hex(password), _expectedToken))
         {
             lock (Sync) { _loginFails = 0; }
-            // 令牌写入 Cookie（HttpOnly，1 天）
+            // 令牌写入 Cookie（HttpOnly，长期有效：登录后不再过期）
             WriteJson(stream, 200, new { ok = true },
-                ("Set-Cookie", $"dasd_auth={_expectedToken}; Path=/; Max-Age=86400; HttpOnly; SameSite=Lax"));
+                ("Set-Cookie", $"dasd_auth={_expectedToken}; Path=/; Max-Age=315360000; HttpOnly; SameSite=Lax"));
         }
         else
         {
@@ -706,14 +716,22 @@ public static class WebServer
     }
 
     private static IEnumerable<object> WorksJson(List<object?[]>? rows) =>
-        (rows ?? []).Select(r => new
+        (rows ?? []).Select(r =>
         {
-            id = r[0] as string ?? "",
-            name = r[1] as string ?? "",
-            maker = r[2] as string ?? "",
-            type = r[3] as string ?? "",
-            age = r[4]?.ToString() ?? "",
-            cover = r[5] != null && File.Exists(r[5] as string),
+            var id = r[0] as string ?? "";
+            // 图床接管该封面时直接给出图床直链：浏览器绕开本服务与本机 HDD 取图，
+            // 也省掉下面那次 File.Exists（媒体库在 HDD 上时，逐行 stat 本身就是一次唤醒）
+            var hosted = ImageHostService.CoverUrl(id);
+            return new
+            {
+                id,
+                name = r[1] as string ?? "",
+                maker = r[2] as string ?? "",
+                type = r[3] as string ?? "",
+                age = r[4]?.ToString() ?? "",
+                cover = hosted != null || (r[5] != null && File.Exists(r[5] as string)),
+                coverUrl = hosted,
+            };
         });
 
     // ---------- API：详情 ----------
@@ -732,13 +750,16 @@ public static class WebServer
             return;
         }
         var r = rows[0];
+        // fanbox 作品目录里摊着整篇投稿的图（动辄上百张），且没有 description.txt，
+        // 进详情一律不翻目录：左侧只挂封面，要看图走「查看作品」
+        var isFanbox = FanboxService.IsFanboxWorkId(id);
         var folder = ResolveAssetFolder(id, r[13] as string);
 
         // 正文：按 [img:文件名] 占位标记拆成 文本/图片 块
         var body = new List<object>();
         var bodyFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var txtPath = Path.Combine(folder, DlsitePage.DescriptionTxt);
-        if (File.Exists(txtPath))
+        if (!isFanbox && File.Exists(txtPath))
         {
             string raw;
             try { raw = File.ReadAllText(txtPath).Trim(); }
@@ -763,9 +784,10 @@ public static class WebServer
                 body.Add(new { kind = "text", value = string.Join('\n', buf) });
         }
 
-        // 轮播图：数据源中除正文图片外的图片，主图排最前
+        // 轮播图：数据源中除正文图片外的图片，主图排最前。
+        // fanbox 不给列表（前端据此回退到 /api/cover，只显示封面一张）
         var slider = new List<string>();
-        if (Directory.Exists(folder))
+        if (!isFanbox && Directory.Exists(folder))
         {
             slider = Directory.GetFiles(folder)
                 .Select(Path.GetFileName)
@@ -891,6 +913,9 @@ public static class WebServer
     /// <summary>详情资源文件夹：作品文件夹/DataSource 优先，否则回退 images/&lt;RJ&gt;。</summary>
     private static string ResolveAssetFolder(string id, string? workFolder)
     {
+        // fanbox 作品的图片直接摊在作品目录里，没有 DLsite 那套 DataSource 子目录
+        if (FanboxService.IsFanboxWorkId(id))
+            return workFolder ?? "";
         if (workFolder != null)
         {
             var ds = Path.Combine(workFolder, DlsitePage.DataSourceDir);
@@ -2100,8 +2125,7 @@ public static class WebServer
     {
         var rows = Db.Select("SELECT DISTINCT \"work_id\" FROM \"download_list\" WHERE \"status\" != '1'");
         foreach (var row in rows ?? [])
-            Db.Execute("DELETE FROM \"works\" WHERE \"work_id\" = @w AND \"state\" = '下载中'",
-                ("@w", row[0] as string ?? ""));
+            ClearPlaceholderWork(row[0] as string ?? "");
         Db.Execute("DELETE FROM \"download_list\"");
         WriteJson(stream, 200, new { ok = true });
     }
@@ -2119,9 +2143,17 @@ public static class WebServer
             // 该作品已无任何下载行时，清除仅为占位而建的"下载中"作品记录（有真实下载/已入库的则保留）
             var remain = Db.Select("SELECT 1 FROM \"download_list\" WHERE \"work_id\" = @w", ("@w", wid));
             if (remain is not { Count: > 0 })
-                Db.Execute("DELETE FROM \"works\" WHERE \"work_id\" = @w AND \"state\" = '下载中'", ("@w", wid));
+                ClearPlaceholderWork(wid);
         }
         WriteJson(stream, 200, new { ok = true });
+    }
+
+    /// <summary>删除尚未下载完成时留下的占位作品行（已入库的不动，避免清下载列表把媒体库作品删没）。</summary>
+    private static void ClearPlaceholderWork(string workId)
+    {
+        if (workId.Length == 0)
+            return;
+        Db.Execute("DELETE FROM \"works\" WHERE \"work_id\" = @w AND \"state\" = '下载中'", ("@w", workId));
     }
 
     private static void ApiDownloaded(NetworkStream stream)
@@ -2162,6 +2194,7 @@ public static class WebServer
             downpath = AppConfig.DownloadPath,
             autoDownload = AppConfig.AutoDownload,
             autoUnzip = AppConfig.AutoUnzip,
+            unzipPasswords = AppConfig.UnzipPasswordsText,   // 压缩包密码而非账号凭据，可回传编辑
             proxy = new { open = proxyOpen == "True", host = proxyHost, port = proxyPort, type = proxyType },
             // 敏感值不回传明文，仅告知是否已设置（编辑时留空表示不修改）
             debridKeySet = AppConfig.DebridApiKey.Length > 0,
@@ -2174,6 +2207,14 @@ public static class WebServer
             encoding = AppConfig.SysEncoding,
             mediaLibs = libs,                       // 只读：文件夹管理需桌面端原生选择器
             web = new { enabled = AppConfig.WebEnabled, port = AppConfig.WebPort, password = AppConfig.WebPassword.Length > 0 },
+            imageHost = new
+            {
+                enabled = AppConfig.ImageHostEnabled,
+                baseUrl = AppConfig.ImageHostBaseUrl,
+                project = AppConfig.ImageHostProject,
+                tokenSet = AppConfig.ImageHostToken.Length > 0,   // 同 debrid：敏感值不回传明文
+                mapped = ImageHostService.MappedCount,
+            },
         });
     }
 
@@ -2202,6 +2243,12 @@ public static class WebServer
             System.Windows.Application.Current?.Dispatcher.Invoke(() => I18n.ApplyLanguage(value));
         else
             AppConfig.Write(section, key, value);
+        // 图床配置变了：内存映射按新的启用状态/地址重建，并顺手补传缺的封面
+        if (section == "image_host")
+        {
+            ImageHostService.Invalidate();
+            ImageHostService.Kick();
+        }
         WriteJson(stream, 200, new { ok = true });
     }
 
@@ -2342,6 +2389,210 @@ public static class WebServer
         {
             WriteJson(stream, 200, new { ok = false });
         }
+    }
+
+    // ---------- API：图床 ----------
+
+    /// <summary>
+    /// 图床连接自检。地址/项目/Token 可由请求体临时覆盖（同 debrid 测试）：
+    /// 设置页是失焦即存的，点"测试"时刚输入的值可能还没落库。
+    /// </summary>
+    private static async Task ApiImageHostTestAsync(NetworkStream stream, Request req)
+    {
+        var baseUrl = ReadStringField(req.Body, "baseUrl");
+        var project = ReadStringField(req.Body, "project");
+        var token = ReadStringField(req.Body, "token");
+        var (ok, info, error) = await ImageHostClient.PingAsync(
+            baseUrl.Length > 0 ? baseUrl : AppConfig.ImageHostBaseUrl,
+            project.Length > 0 ? project : AppConfig.ImageHostProject,
+            token.Length > 0 ? token : AppConfig.ImageHostToken);
+        WriteJson(stream, 200, new { ok, error, name = info?.Name ?? "", count = info?.ImageCount ?? 0 });
+    }
+
+    /// <summary>手动触发封面迁移（未开启图床时为空操作；已在迁移中则忽略，不会并发跑两轮）。</summary>
+    private static void ApiImageHostMigrate(NetworkStream stream)
+    {
+        ImageHostService.Kick();
+        var (running, status) = ImageHostService.State();
+        WriteJson(stream, 200, new { ok = true, running, status });
+    }
+
+    private static void ApiImageHostStatus(NetworkStream stream)
+    {
+        var (running, status) = ImageHostService.State();
+        WriteJson(stream, 200, new
+        {
+            running,
+            status,
+            active = ImageHostService.Active,
+            mapped = ImageHostService.MappedCount,
+            pending = ImageHostService.PendingCount,
+            idle = ImageHostService.IdleSummary(),
+        });
+    }
+
+    // ---------- API：FANBOX（pawchive）----------
+
+    /// <summary>搜索作家：站点无服务端搜索接口，由 PawchiveApi 在本地缓存的作家表上过滤。</summary>
+    private static async Task ApiFanboxArtistsAsync(NetworkStream stream, Request req)
+    {
+        var keyword = (req.Query.GetValueOrDefault("q") ?? "").Trim();
+        if (keyword.Length == 0)
+        {
+            WriteJson(stream, 200, new { artists = Array.Empty<object>() });
+            return;
+        }
+        var list = await PawchiveApi.SearchArtistsAsync(keyword);
+        WriteJson(stream, 200, new
+        {
+            artists = list.Select(a => new
+            {
+                id = a.Id, service = a.Service, name = a.Name, publicId = a.PublicId,
+                favorited = a.Favorited,
+                icon = PawchiveApi.IconUrl(a.Service, a.Id),
+                banner = PawchiveApi.BannerUrl(a.Service, a.Id),
+            }),
+            cachedAt = PawchiveApi.CreatorsCachedAt?.ToString("yyyy-MM-dd HH:mm") ?? "",
+        });
+    }
+
+    /// <summary>作家主页的一页作品（站点固定每页 50 条），附带本地已下载/下载中状态。</summary>
+    private static async Task ApiFanboxPostsAsync(NetworkStream stream, Request req)
+    {
+        var artistId = (req.Query.GetValueOrDefault("id") ?? "").Trim();
+        var service = FanboxServiceParam(req);
+        if (!IsPlainId(artistId))
+        {
+            WriteJson(stream, 400, new { error = "bad request" });
+            return;
+        }
+        var offset = GetInt(req, "o");
+        var posts = await PawchiveApi.GetPostsAsync(service, artistId, offset);
+        if (posts is null)
+        {
+            WriteJson(stream, 502, new { error = "获取作品列表失败" });
+            return;
+        }
+        // 首页顺带带上作家信息，供标题与入队时落库使用
+        object? artist = null;
+        if (offset == 0 && await PawchiveApi.GetArtistAsync(service, artistId) is { } a)
+            artist = new { id = a.Id, service = a.Service, name = a.Name, publicId = a.PublicId };
+
+        var states = FanboxService.PostStates(artistId);
+        WriteJson(stream, 200, new
+        {
+            artist,
+            posts = posts.Select(p => new
+            {
+                id = p.Id, title = p.Title, published = p.Published, tags = p.Tags,
+                files = p.Files.Count,
+                cover = p.CoverPath.Length > 0 ? PawchiveApi.ThumbUrl(p.CoverPath) : "",
+                state = states.GetValueOrDefault(p.Id, ""),
+            }),
+            hasMore = posts.Count >= PawchiveApi.PageSize,
+        });
+    }
+
+    /// <summary>
+    /// 把选中的作品加入下载队列。请求只带作品号，作品详情由服务端重新拉取
+    /// （逐页翻到选中的作品都凑齐为止），避免信任前端提交的文件清单。
+    /// </summary>
+    private static async Task ApiFanboxEnqueueAsync(NetworkStream stream, Request req)
+    {
+        var artistId = ReadStringField(req.Body, "id").Trim();
+        var service = ReadStringField(req.Body, "service").Trim();
+        if (service.Length == 0)
+            service = PawchiveApi.FanboxService;
+        var wanted = new HashSet<string>(ReadStringArray(req.Body, "posts"));
+        var lib = ReadStringField(req.Body, "lib");
+        var folder = ReadStringField(req.Body, "folder");
+        if (!IsPlainId(artistId) || service != PawchiveApi.FanboxService || wanted.Count == 0)
+        {
+            WriteJson(stream, 400, new { error = "bad request" });
+            return;
+        }
+
+        var artist = await PawchiveApi.GetArtistAsync(service, artistId)
+                     ?? new PawchiveArtist { Id = artistId, Service = service };
+        var picked = new List<PawchivePost>();
+        for (var page = 0; page < 200 && picked.Count < wanted.Count; page++)
+        {
+            var batch = await PawchiveApi.GetPostsAsync(service, artistId, page * PawchiveApi.PageSize);
+            if (batch is null || batch.Count == 0)
+                break;
+            picked.AddRange(batch.Where(p => wanted.Contains(p.Id)));
+            if (batch.Count < PawchiveApi.PageSize)
+                break;
+        }
+        if (picked.Count == 0)
+        {
+            WriteJson(stream, 404, new { error = "未找到选中的作品" });
+            return;
+        }
+
+        var result = await FanboxService.EnqueuePostsAsync(
+            artist, picked, folder.Length > 0 ? folder : null, lib.Length > 0 ? lib : null);
+        if (!result.Ok)
+        {
+            WriteJson(stream, 200, new { ok = false, error = result.Error ?? "入队失败" });
+            return;
+        }
+        WriteJson(stream, 200, new
+        {
+            ok = true, posts = result.PostCount, files = result.FileCount, skipped = result.Skipped,
+        });
+    }
+
+    /// <summary>
+    /// 站上图片（作家头像/未下载作品的缩略图）代理：浏览器直连站点会受跨域与代理设置影响，
+    /// 统一由本服务按配置的代理取回。只允许当前配置的 pawchive 域名及其 file./img. 子域。
+    /// </summary>
+    private static async Task ApiFanboxImageAsync(NetworkStream stream, Request req)
+    {
+        var url = req.Query.GetValueOrDefault("url") ?? "";
+        if (!IsPawchiveUrl(url) || !IsSafeFetchUrl(url))
+        {
+            WriteBytes(stream, 400, "Bad Request", "text/plain", []);
+            return;
+        }
+        try
+        {
+            // 同下载路径：pawchive 的防护网关拦浏览器 UA，统一用中性 UA
+            using var client = Http.CreateClient(TimeSpan.FromSeconds(20), PawchiveApi.UserAgent);
+            using var resp = await client.GetAsync(url);
+            resp.EnsureSuccessStatusCode();
+            var bytes = await resp.Content.ReadAsByteArrayAsync();
+            var type = resp.Content.Headers.ContentType?.MediaType ?? "";
+            // 站点的头像/横幅不带扩展名且常返回 application/octet-stream，按图片交付浏览器才会渲染
+            if (!type.StartsWith("image/", StringComparison.OrdinalIgnoreCase))
+                type = ContentType(url);
+            WriteBytes(stream, 200, "OK", type, bytes, ("Cache-Control", "max-age=86400"));
+        }
+        catch (Exception)
+        {
+            WriteBytes(stream, 404, "Not Found", "text/plain", []);
+        }
+    }
+
+    /// <summary>URL 是否指向当前配置的 pawchive 站点（主域或其 file./img. 子域）。</summary>
+    private static bool IsPawchiveUrl(string url)
+    {
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) || uri.Scheme != Uri.UriSchemeHttps)
+            return false;
+        var host = uri.Host;
+        var baseHost = AppConfig.PawchiveHost;
+        return string.Equals(host, baseHost, StringComparison.OrdinalIgnoreCase) ||
+               host.EndsWith("." + baseHost, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>pawchive 的作家号/作品号都是纯数字；用作 SQL/URL 参数前先校验。</summary>
+    private static bool IsPlainId(string id) =>
+        id.Length is > 0 and <= 32 && id.All(char.IsAsciiDigit);
+
+    private static string FanboxServiceParam(Request req)
+    {
+        var service = (req.Query.GetValueOrDefault("service") ?? "").Trim();
+        return service == PawchiveApi.FanboxService ? service : PawchiveApi.FanboxService;
     }
 
     // ---------- 请求体解析 ----------

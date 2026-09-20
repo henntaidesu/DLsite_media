@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Net;
 using System.Net.Http;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using DLsiteMedia.Core;
@@ -50,6 +51,14 @@ public static class DownloadEngine
     // 被用户单独"停止"的作品：下载线程检测到后停到断点并退出当前文件，且其分卷置为已暂停('4')不再领取
     private static readonly ConcurrentDictionary<string, byte> PausedWorks = new();
 
+    // 因 debrid-link 流量用尽而暂停的网盘：host -> 预计流量重置的 UTC 时间；特殊键 "*" 表示账户总流量用尽
+    // （暂停所有论坛源解析）。到期后由流量重置监控线程把对应的已暂停分卷（'2' maxData/maxDataHost）
+    // 重新排队（'0'）自动续传。
+    private static readonly ConcurrentDictionary<string, DateTime> ExhaustedHosts = new();
+    private const string AccountKey = "*";
+    // 序列化流量用尽登记：避免多个下载线程同时命中流量用尽时重复请求 limits API、重复批量标记
+    private static readonly object ExhaustLock = new();
+
     // 领取任务与占位需原子进行，避免多个下载线程领到同一条记录
     private static readonly object ClaimLock = new();
 
@@ -75,7 +84,8 @@ public static class DownloadEngine
     /// <summary>作品子文件夹名：按设置以 RJ号 或 DL API 返回的作品名称命名。</summary>
     private static string FolderLeafName(string workId)
     {
-        if (AppConfig.FolderNameMode != "work_name")
+        // fanbox 作品固定以作品号命名（标题会改、会重名，且顶层扫描要靠作品号认出它们）
+        if (AppConfig.FolderNameMode != "work_name" || FanboxService.IsFanboxWorkId(workId))
             return workId;
         var name = WorkNameCache.GetOrAdd(workId, id =>
         {
@@ -115,13 +125,15 @@ public static class DownloadEngine
         return Path.Combine(AppConfig.DownloadPath, FolderLeafName(workId));
     }
 
-    /// <summary>把作品的缓存文件夹路径写入 works 表（仅在尚未写入时）。</summary>
-    public static void PersistWorkFolder(string workId, string path) =>
+    /// <summary>把作品的缓存文件夹路径写入作品行（仅在尚未写入时）。</summary>
+    public static void PersistWorkFolder(string workId, string path)
+    {
         Db.Execute(
             "UPDATE \"works\" SET \"folder\" = @p WHERE \"work_id\" = @w AND (\"folder\" IS NULL OR \"folder\" = '')",
             ("@p", path), ("@w", workId));
+    }
 
-    /// <summary>作品所属媒体库名：优先本次会话的内存选择，其次 works.target_lib（重启后用）。</summary>
+    /// <summary>作品所属媒体库名：优先本次会话的内存选择，其次作品行的 target_lib（重启后用）。</summary>
     public static string? ReadWorkTargetLib(string workId)
     {
         if (WorkTargetLibs.TryGetValue(workId, out var lib) && !string.IsNullOrEmpty(lib))
@@ -155,20 +167,22 @@ public static class DownloadEngine
     }
 
     /// <summary>
-    /// 解压完成后把作品从缓存目录移动到媒体库目标目录，并更新 works.folder，返回最终目录路径。
+    /// 解压完成后把作品从缓存目录移动到媒体库目标目录，并更新作品行的 folder，返回最终目录路径。
     /// 未设置目标、目标即缓存、或移动失败时，保持在缓存目录。
     /// 移动期间把进度写入 UnzipProgress（state='moving'）供下载页显示。
+    /// destOverride 非空时直接用它作为目标目录（fanbox 需要 目标库/FANBOX/作家/作品 的多级结构，
+    /// 而非默认的"目标库根 + 缓存目录叶子名"）。
     /// </summary>
-    public static string MoveToTargetFolder(string workId, string cacheFolder)
+    public static string MoveToTargetFolder(string workId, string cacheFolder, string? destOverride = null)
     {
         var targetRoot = ReadWorkTarget(workId);
-        if (string.IsNullOrEmpty(targetRoot))
+        if (string.IsNullOrEmpty(targetRoot) || cacheFolder.Length == 0)
         {
             Logger.Warning($"{workId} 未设置媒体库目标目录，保留在缓存目录: {cacheFolder}");
             return cacheFolder;
         }
         var leaf = Path.GetFileName(Path.TrimEndingDirectorySeparator(cacheFolder));
-        var dest = Path.Combine(targetRoot, leaf);
+        var dest = destOverride ?? Path.Combine(targetRoot, leaf);
         if (string.Equals(Path.GetFullPath(dest), Path.GetFullPath(cacheFolder),
                 StringComparison.OrdinalIgnoreCase))
             return cacheFolder;  // 缓存路径就是媒体库目录，无需移动
@@ -195,14 +209,7 @@ public static class DownloadEngine
             monitor.Start();
             try
             {
-                Directory.CreateDirectory(targetRoot);
-                if (Directory.Exists(dest))
-                {
-                    Logger.Warning($"{workId} 媒体库已存在同名目录，先删除再移动: {dest}");
-                    Directory.Delete(dest, true);
-                }
-                Logger.Info($"{workId} 开始移动到媒体库: {dest}");
-                MoveDirectory(cacheFolder, dest);
+                MoveIntoLibraryWithRetry(workId, cacheFolder, dest, targetRoot);
             }
             catch (Exception e)
             {
@@ -223,6 +230,43 @@ public static class DownloadEngine
             return dest;
         }
     }
+
+    /// <summary>
+    /// 建目标目录并移动，失败按 <see cref="MoveRetryDelays"/> 重试。
+    /// 媒体库常放在映射网络盘上，闲置断连后的首次访问会抛 IOException（「找不到网络路径」），
+    /// 重试一下就能连上；直链下载（asmr / fanbox）没有解压那几秒缓冲，下完立刻访问，尤其容易撞上。
+    /// 重试用尽仍失败则把异常抛给调用方，由其保留在缓存目录。
+    /// </summary>
+    private static void MoveIntoLibraryWithRetry(string workId, string cacheFolder, string dest, string targetRoot)
+    {
+        for (var attempt = 0; ; attempt++)
+        {
+            try
+            {
+                // dest 可能带子级目录（fanbox 的 作家/作品），按其父目录建
+                Directory.CreateDirectory(Path.GetDirectoryName(dest) ?? targetRoot);
+                if (Directory.Exists(dest))
+                {
+                    Logger.Warning($"{workId} 媒体库已存在同名目录，先删除再移动: {dest}");
+                    Directory.Delete(dest, true);
+                }
+                Logger.Info($"{workId} 开始移动到媒体库: {dest}");
+                MoveDirectory(cacheFolder, dest);
+                return;
+            }
+            catch (IOException e) when (attempt < MoveRetryDelays.Length)
+            {
+                var wait = MoveRetryDelays[attempt];
+                Logger.Warning(
+                    $"{workId} 移动到媒体库失败（{e.Message.Trim()}），{wait / 1000} 秒后重试" +
+                    $"（{attempt + 1}/{MoveRetryDelays.Length}）");
+                Thread.Sleep(wait);
+            }
+        }
+    }
+
+    /// <summary>移动失败的重试间隔（毫秒）：够网络盘重新连上，又不至于把收尾拖太久。</summary>
+    private static readonly int[] MoveRetryDelays = [2000, 5000, 10000];
 
     /// <summary>跨盘安全的目录移动：同盘直接 Move，跨盘复制后删除源。</summary>
     private static void MoveDirectory(string source, string dest)
@@ -303,9 +347,16 @@ public static class DownloadEngine
         PausedWorks[workId] = 0;   // 让正在下载该作品的线程停下，避免边删边写
         var folder = Db.Scalar(
             "SELECT \"folder\" FROM \"works\" WHERE \"work_id\" = @w", ("@w", workId)) as string;
+        var state = Db.Scalar(
+            "SELECT \"state\" FROM \"works\" WHERE \"work_id\" = @w", ("@w", workId)) as string;
         Db.Execute("DELETE FROM \"download_list\" WHERE \"work_id\" = @w", ("@w", workId));
-        Db.Execute("DELETE FROM \"works\" WHERE \"work_id\" = @w", ("@w", workId));
-        Db.Execute("DELETE FROM \"work_genres\" WHERE \"work_id\" = @w", ("@w", workId));
+        // 已入库的作品只从下载列表里移除，作品本身保留在媒体库——否则清理下载记录会把
+        // 媒体库里的作品一并"删没"（文件还在盘上，界面上却不见了）。
+        if (state != "已品悦")
+        {
+            Db.Execute("DELETE FROM \"works\" WHERE \"work_id\" = @w", ("@w", workId));
+            Db.Execute("DELETE FROM \"work_genres\" WHERE \"work_id\" = @w", ("@w", workId));
+        }
         if (!string.IsNullOrEmpty(folder) && IsUnderDownloadCache(folder) && Directory.Exists(folder))
         {
             try { Directory.Delete(folder, true); } catch (IOException) { }
@@ -402,6 +453,137 @@ public static class DownloadEngine
             ("@e", error), ("@k", key));
     }
 
+    // ---------- debrid-link 流量用尽自动暂停 / 重置后自动续传 ----------
+
+    /// <summary>从下载链接取主机名（去 www. 前缀），失败返回空串。</summary>
+    private static string HostOf(string url)
+    {
+        try
+        {
+            var h = new Uri(url).Host.ToLowerInvariant();
+            return h.StartsWith("www.") ? h[4..] : h;
+        }
+        catch (Exception)
+        {
+            return "";
+        }
+    }
+
+    /// <summary>
+    /// 登记某网盘（maxDataHost）或账户总流量（maxData）已用尽：记录预计重置时间，并把该网盘下
+    /// （账户级则为所有论坛源）待下载的分卷一并标记为流量用尽('2')暂停，避免继续解析空耗流量。
+    /// 重置时间到后由 <see cref="TrafficResetLoop"/> 自动重新排队续传。
+    /// </summary>
+    private static void RegisterTrafficExhausted(string url, string error)
+    {
+        var key = error == "maxData" ? AccountKey : HostOf(url);
+        if (key.Length == 0)
+            return;
+        lock (ExhaustLock)
+        {
+            // 仅在尚未记录或已过期时请求一次 limits API 取重置时间，避免每条失败都打 API
+            if (!ExhaustedHosts.TryGetValue(key, out var existing) || existing <= DateTime.UtcNow)
+            {
+                var seconds = FetchResetSeconds();
+                var resetUtc = DateTime.UtcNow.AddSeconds(seconds > 0 ? seconds : 3600);
+                ExhaustedHosts[key] = resetUtc;
+                Logger.Warning(
+                    $"debrid-link {(key == AccountKey ? "账户总流量" : key)} 流量用尽，暂停下载，" +
+                    $"预计 {resetUtc.ToLocalTime():yyyy-MM-dd HH:mm} 重置后自动继续");
+            }
+            PauseHostDownloads(key, error);
+        }
+    }
+
+    /// <summary>把某网盘（账户级则为所有论坛源）当前待下载('0')的分卷标记为流量用尽('2')暂停。</summary>
+    private static void PauseHostDownloads(string key, string error)
+    {
+        // 直链源（asmr / fanbox）不经 debrid-link，不受其流量限制，不参与暂停
+        var rows = Db.Select(
+            "SELECT \"UUID\", \"url\" FROM \"download_list\" WHERE \"status\" = '0' " +
+            "AND (\"source\" IS NULL OR \"source\" NOT IN ('asmr', 'fanbox'))");
+        foreach (var r in rows ?? [])
+        {
+            var url = r[1] as string ?? "";
+            if (key == AccountKey || HostOf(url) == key)
+                SetParseFailed(r[0] as string ?? "", error);
+        }
+    }
+
+    /// <summary>查询 debrid-link 距离下载流量重置的秒数（失败或无数据返回 0）。</summary>
+    private static double FetchResetSeconds()
+    {
+        try
+        {
+            JsonElement? value;
+            using (var client = new DebridLinkClient())
+                value = client.DownloadLimitsAsync().GetAwaiter().GetResult();
+            if (value is { } v && v.ValueKind == JsonValueKind.Object &&
+                v.TryGetProperty("nextResetSeconds", out var reset) &&
+                reset.ValueKind == JsonValueKind.Object &&
+                reset.TryGetProperty("value", out var rv) &&
+                rv.ValueKind == JsonValueKind.Number)
+                return rv.GetDouble();
+        }
+        catch (Exception e)
+        {
+            Logger.Error(e, "查询流量重置时间");
+        }
+        return 0;
+    }
+
+    /// <summary>
+    /// 流量重置监控：每分钟检查因流量用尽而暂停的网盘，重置时间已到的把其暂停分卷（'2'）重新排队（'0'）
+    /// 供下载线程重新解析续传；若仍未真正重置会再次失败并以新的重置时间重新登记，自我修正。
+    /// </summary>
+    private static void TrafficResetLoop()
+    {
+        while (!_stopRequested)
+        {
+            for (var i = 0; i < 60 && !_stopRequested; i++)
+                Thread.Sleep(1000);
+            if (_stopRequested)
+                return;
+            if (ExhaustedHosts.IsEmpty)
+                continue;
+            var now = DateTime.UtcNow;
+            foreach (var kv in ExhaustedHosts)
+            {
+                if (kv.Value > now)
+                    continue;
+                if (ExhaustedHosts.TryRemove(kv.Key, out _))
+                    RequeueExhausted(kv.Key);
+            }
+        }
+    }
+
+    /// <summary>把某网盘（账户级则为所有论坛源）因流量用尽而暂停('2')的分卷重新排队('0')续传。</summary>
+    private static void RequeueExhausted(string key)
+    {
+        var err = key == AccountKey ? "maxData" : "maxDataHost";
+        var rows = Db.Select(
+            "SELECT \"UUID\", \"url\" FROM \"download_list\" WHERE \"status\" = '2' AND \"error\" = @e",
+            ("@e", err));
+        var count = 0;
+        foreach (var r in rows ?? [])
+        {
+            var url = r[1] as string ?? "";
+            if (key != AccountKey && HostOf(url) != key)
+                continue;
+            Db.Execute(
+                "UPDATE \"download_list\" SET \"status\" = '0', \"error\" = NULL WHERE \"UUID\" = @k",
+                ("@k", r[0] as string ?? ""));
+            count++;
+        }
+        if (count > 0)
+        {
+            Logger.Info(
+                $"debrid-link {(key == AccountKey ? "账户总流量" : key)} 流量已重置，" +
+                $"重新排队 {count} 个分卷继续下载");
+            Start();  // 引擎若已空闲退出，确保重新拉起下载线程
+        }
+    }
+
     /// <summary>从队列原子地领取一条待下载任务并立即标记为下载中；无任务返回 null。</summary>
     private static (string Key, string WorkId, string Url, string Source, string SubPath)? ClaimNext()
     {
@@ -422,12 +604,13 @@ public static class DownloadEngine
     }
 
     /// <summary>探测文件总大小；返回 (总字节数, 是否支持 Range)。</summary>
-    private static (long Total, bool Range) ProbeSize(HttpClient client, string url)
+    private static (long Total, bool Range) ProbeSize(HttpClient client, string url, string? userAgent)
     {
         try
         {
             using var request = new HttpRequestMessage(HttpMethod.Get, url);
             request.Headers.Range = new System.Net.Http.Headers.RangeHeaderValue(0, 0);
+            ApplyUserAgent(request, userAgent);
             using var response = client.Send(request, HttpCompletionOption.ResponseHeadersRead);
             if (response.StatusCode == HttpStatusCode.PartialContent)
             {
@@ -444,12 +627,13 @@ public static class DownloadEngine
 
     private static string MetaPath(string filePath) => filePath + ".dlmeta";
 
-    /// <summary>单连接下载（断点续传 + 暂停 + 低速重试），返回 done/paused/slow/failed。</summary>
+    /// <summary>单连接下载（断点续传 + 暂停 + 低速重试），返回 done/paused/slow/failed/throttled。</summary>
     private static string DownloadSingle(HttpClient client, string url, string filePath,
-        string filename, string key, string workId)
+        string filename, string key, string workId, string? userAgent)
     {
         long downloaded = 0;
         using var request = new HttpRequestMessage(HttpMethod.Get, url);
+        ApplyUserAgent(request, userAgent);
         if (File.Exists(filePath))
         {
             downloaded = new FileInfo(filePath).Length;
@@ -476,7 +660,10 @@ public static class DownloadEngine
             {
                 Logger.Error($"{filename} 下载失败 HTTP {(int)response.StatusCode}");
                 SetStatus(key, "0");
-                return "failed";
+                // 403/429/503 多为站点限流（如 pawchive 前置的 DDoS-Guard）：5 秒一轮的热重试
+                // 只会让封锁一直续期，交由上层改用长冷却再试
+                return response.StatusCode is HttpStatusCode.Forbidden or HttpStatusCode.TooManyRequests
+                    or HttpStatusCode.ServiceUnavailable ? "throttled" : "failed";
             }
             var append = response.StatusCode == HttpStatusCode.PartialContent;
             if (!append)
@@ -574,11 +761,11 @@ public static class DownloadEngine
         }
     }
 
-    /// <summary>下载单个文件：清理旧版分段下载元数据后单连接下载，返回 done/paused/slow/failed。</summary>
+    /// <summary>下载单个文件：清理旧版分段下载元数据后单连接下载，返回 done/paused/slow/failed/throttled。</summary>
     private static string DownloadFile(HttpClient client, string directUrl, string filePath,
-        string filename, string key, string workId)
+        string filename, string key, string workId, string? userAgent = null)
     {
-        var (totalSize, _) = ProbeSize(client, directUrl);
+        var (totalSize, _) = ProbeSize(client, directUrl, userAgent);
 
         // 旧版分段下载遗留的元数据：其预分配的整文件内容不可信，连同文件一起清掉后重下
         if (File.Exists(MetaPath(filePath)))
@@ -592,8 +779,20 @@ public static class DownloadEngine
         if (totalSize > 0 && File.Exists(filePath) && new FileInfo(filePath).Length == totalSize)
             return "done";
 
-        return DownloadSingle(client, directUrl, filePath, filename, key, workId);
+        return DownloadSingle(client, directUrl, filePath, filename, key, workId, userAgent);
     }
+
+    /// <summary>按来源覆盖单次请求的 User-Agent（下载线程的 client 为各来源共用，只能逐请求设置）。</summary>
+    private static void ApplyUserAgent(HttpRequestMessage request, string? userAgent)
+    {
+        if (string.IsNullOrEmpty(userAgent))
+            return;
+        request.Headers.UserAgent.Clear();
+        request.Headers.UserAgent.ParseAdd(userAgent);
+    }
+
+    /// <summary>被站点限流后的冷却时长：期间该线程不再发起请求，让封锁自然解除。</summary>
+    private static readonly TimeSpan ThrottleCooldown = TimeSpan.FromSeconds(60);
 
     /// <summary>单个下载线程：不断领取队列任务，通过 debrid-link 中转下载（支持断点续传）。</summary>
     private static void WorkerLoop()
@@ -622,13 +821,14 @@ public static class DownloadEngine
 
                 var (k, workId, url, source, subPath) = claimed.Value;
                 key = k;
-                var isAsmr = source == "asmr";
+                // asmr.one 与 fanbox 都是直链源：url 即可直接下载，且 sub_path 保留作品内目录结构
+                var isDirect = source is "asmr" or "fanbox";
 
                 string directUrl;
                 string filename;
-                if (isAsmr)
+                if (isDirect)
                 {
-                    // asmr.one：download_list.url 本身就是直链，无需 debrid 解析；
+                    // 直链源：download_list.url 本身就是直链，无需 debrid 解析；
                     // sub_path 为作品内相对路径（含文件名），按其重建目录树落盘
                     directUrl = url;
                     filename = string.IsNullOrEmpty(subPath)
@@ -646,6 +846,9 @@ public static class DownloadEngine
                     if (string.IsNullOrEmpty(directUrl))
                     {
                         Logger.Error($"{workId} debrid-link 解析失败: {url} ({parseError})");
+                        // 流量用尽：暂停该网盘（或账户级全部论坛源）下载，等流量重置后自动继续
+                        if (parseError is "maxData" or "maxDataHost")
+                            RegisterTrafficExhausted(url, parseError);
                         SetParseFailed(key, parseError);
                         continue;
                     }
@@ -657,18 +860,28 @@ public static class DownloadEngine
                 var downloadPath = WorkFolderPath(workId);
                 // 首个分卷处理时落库缓存目录，保证后续分卷、重启续传后的解压/入库都用同一目录
                 PersistWorkFolder(workId, downloadPath);
-                // asmr 保留作品内子目录结构；其它源扁平落盘
-                var filePath = isAsmr && !string.IsNullOrEmpty(subPath)
+                // 直链源保留作品内子目录结构；论坛源扁平落盘
+                var filePath = isDirect && !string.IsNullOrEmpty(subPath)
                     ? Path.Combine(downloadPath, subPath.Replace('/', Path.DirectorySeparatorChar))
                     : Path.Combine(downloadPath, filename);
                 Directory.CreateDirectory(Path.GetDirectoryName(filePath) ?? downloadPath);
 
-                var result = DownloadFile(client, directUrl, filePath, filename, key, workId);
+                // pawchive 的防护网关会拦截浏览器 UA 的请求，取附件须换成中性 UA（见 PawchiveApi.UserAgent）
+                var userAgent = source == "fanbox" ? PawchiveApi.UserAgent : null;
+                var result = DownloadFile(client, directUrl, filePath, filename, key, workId, userAgent);
                 DownloadProgress.TryRemove(key, out _);
                 if (result == "paused")
                     return;  // 全局暂停：部分文件保留在磁盘上，下次从断点续传
                 if (result == "workpaused")
                     continue;  // 单独停止该作品：保留断点，本线程继续领取其它作品的任务
+                if (result == "throttled")
+                {
+                    Logger.Warning($"{filename} 被站点限流，冷却 {ThrottleCooldown.TotalSeconds:F0} 秒后重试");
+                    // 分段睡眠，保证暂停请求仍能及时响应
+                    for (var i = 0; i < ThrottleCooldown.TotalSeconds && !_stopRequested; i++)
+                        Thread.Sleep(1000);
+                    continue;
+                }
                 if (result is "slow" or "failed")
                 {
                     Thread.Sleep(5000);
@@ -678,9 +891,11 @@ public static class DownloadEngine
                 Logger.Info($"{workId}已完成下载");
                 SetStatus(key, "1", 100);
                 MarkWorkDownloaded(workId);
-                // asmr 直链下载无压缩包，下完直接入库；其它源走自动解压
-                if (isAsmr)
+                // 直链源无压缩包，下完直接入库；论坛源走自动解压
+                if (source == "asmr")
                     AsmrFinalizeIfDone(workId);
+                else if (source == "fanbox")
+                    FanboxFinalizeIfDone(workId);
                 else
                     AutoUnzipIfDone(workId);
             }
@@ -703,6 +918,11 @@ public static class DownloadEngine
         // 上次运行中断时遗留的"下载中"任务重新排队，靠断点续传从已下载部分继续
         Db.Execute("UPDATE \"download_list\" SET \"status\" = '0' WHERE \"status\" = '3'");
 
+        // 上次因流量用尽而暂停的分卷（'2' maxData/maxDataHost）：内存暂停状态随重启丢失，
+        // 一律重新排队重试——流量若已重置则直接续传，否则再次失败并以新的重置时间重新暂停（自我修正）
+        Db.Execute(
+            "UPDATE \"download_list\" SET \"status\" = '0', \"error\" = NULL WHERE \"status\" = '2' AND \"error\" IN ('maxData', 'maxDataHost')");
+
         // 上次中途中断的作品：分卷已全部下载完但还未入库，重新触发解压/收尾 → 移动 → 入库
         var stuck = Db.Select("""
             SELECT w."work_id", w."source" FROM "works" w
@@ -717,11 +937,16 @@ public static class DownloadEngine
                 var stuckId = row[0] as string ?? "";
                 Logger.Info($"{stuckId} 分卷已全部下载但未完成入库，重新触发收尾");
                 MarkWorkDownloaded(stuckId);
-                if (row[1] as string == "asmr")
-                    AsmrFinalizeIfDone(stuckId);
-                else
-                    AutoUnzipIfDone(stuckId);
+                switch (row[1] as string)
+                {
+                    case "asmr": AsmrFinalizeIfDone(stuckId); break;
+                    case FanboxService.SourceName: FanboxFinalizeIfDone(stuckId); break;
+                    default: AutoUnzipIfDone(stuckId); break;
+                }
             }
+
+        // 流量重置监控线程：网盘流量用尽暂停后，到重置时间自动把暂停分卷重新排队续传
+        new Thread(TrafficResetLoop) { IsBackground = true, Name = "traffic-reset-monitor" }.Start();
 
         var workers = new List<Thread>();
         for (var i = 0; i < AppConfig.DownloadProcesses; i++)
@@ -734,7 +959,7 @@ public static class DownloadEngine
             thread.Join();
     }
 
-    /// <summary>该番号的所有任务都下载完成后，works 表状态从 下载中 改为 已下载。</summary>
+    /// <summary>该番号的所有任务都下载完成后，作品行状态从 下载中 改为 已下载。</summary>
     private static void MarkWorkDownloaded(string workId)
     {
         var pending = Db.Scalar(
@@ -793,6 +1018,54 @@ public static class DownloadEngine
         new Thread(() => RunAsmrFinalize(workId)) { IsBackground = true, Name = $"asmr-finalize-{workId}" }.Start();
     }
 
+    /// <summary>
+    /// fanbox 作品下完后的收尾（无解压）：所有文件完成后在后台移动到媒体库、写正文、定位封面并标记已品悦。
+    /// 每篇作品只执行一次。
+    /// </summary>
+    private static void FanboxFinalizeIfDone(string workId)
+    {
+        var pending = Db.Scalar(
+            "SELECT COUNT(*) FROM \"download_list\" WHERE \"work_id\" = @w AND \"status\" != '1'",
+            ("@w", workId));
+        if (pending is null || Convert.ToInt64(pending) != 0)
+            return;  // 还有未完成的文件
+
+        lock (UnzipLock)
+        {
+            if (!Unzipping.Add(workId))
+                return;  // 已有线程在收尾该作品（并发完成时去重）
+        }
+
+        UnzipProgress[workId] = new UnzipProgressInfo { State = "moving", Pct = 0 };
+        Logger.Info($"{workId} fanbox 下载完成，开始入库");
+        new Thread(() => RunFanboxFinalize(workId))
+            { IsBackground = true, Name = $"fanbox-finalize-{workId}" }.Start();
+    }
+
+    /// <summary>在后台把 fanbox 作品移入媒体库并入库，进度由 MoveToTargetFolder 维护。</summary>
+    private static void RunFanboxFinalize(string workId)
+    {
+        try
+        {
+            // fanbox 的附件常常是压缩包（且多带密码）：开了自动解压就先在缓存目录里解开再入库。
+            // 解不开也照样往下走，只是压缩包原样留在作品目录里。
+            var folder = WorkFolderPath(workId);
+            if (AppConfig.AutoUnzip && UnzipService.GetAllArchiveFiles(folder).Count > 0)
+                ExtractWithProgress(workId, folder, () => UnzipService.ExtractArchivesInPlace(workId, folder));
+            FanboxService.FinalizeIntoLibrary(workId);
+        }
+        catch (Exception e)
+        {
+            Logger.Error(e, "fanbox 入库收尾");
+        }
+        finally
+        {
+            UnzipProgress.TryRemove(workId, out _);
+            lock (UnzipLock)
+                Unzipping.Remove(workId);
+        }
+    }
+
     /// <summary>在后台把 asmr 作品移入媒体库并回标，进度由 MoveToTargetFolder 维护。</summary>
     private static void RunAsmrFinalize(string workId)
     {
@@ -821,7 +1094,21 @@ public static class DownloadEngine
     /// <summary>在后台解压一个作品，并用独立线程按解压产出量估算进度写入 UnzipProgress。</summary>
     private static void RunUnzip(string workId)
     {
-        var folder = WorkFolderPath(workId);
+        try
+        {
+            ExtractWithProgress(workId, WorkFolderPath(workId), () => UnzipService.Unzip(workId));
+        }
+        finally
+        {
+            UnzipProgress.TryRemove(workId, out _);
+            lock (UnzipLock)
+                Unzipping.Remove(workId);
+        }
+    }
+
+    /// <summary>跑一段解压逻辑，期间用独立线程按解压产出量估算进度写入 UnzipProgress。</summary>
+    private static void ExtractWithProgress(string workId, string folder, Action extract)
+    {
         long total = 0;
         foreach (var f in UnzipService.GetAllArchiveFiles(folder))
             try { total += new FileInfo(f).Length; } catch (IOException) { }
@@ -850,15 +1137,12 @@ public static class DownloadEngine
         monitor.Start();
         try
         {
-            UnzipService.Unzip(workId);
+            extract();
         }
         finally
         {
             stop.Set();
             monitor.Join();  // 先等监控线程退出再弹出条目，避免条目被"复活"卡在解压中
-            UnzipProgress.TryRemove(workId, out _);
-            lock (UnzipLock)
-                Unzipping.Remove(workId);
         }
     }
 

@@ -10,6 +10,7 @@ using System.Windows.Data;
 using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using DLsiteMedia.Core;
 using DLsiteMedia.Services;
@@ -1020,10 +1021,16 @@ public partial class MediaLibPage : UserControl
     /// <summary>
     /// 后台解码封面/缩略图并在完成后赋值（先显示占位底色，避免 UI 线程逐张同步解码卡顿）。
     /// 用 image.Tag == path 作有效性判据：容器被回收改指其它图片时丢弃过期结果。
+    ///
+    /// hostUrl 非空时优先向图床取图——媒体库多在 HDD 上，成批卡片逐张随机读会明显卡顿；
+    /// 图床取不到（未同步到 / 服务没开）再回退本地原图，保证任何情况下都不少图。
     /// </summary>
-    private static async void LoadImageAsync(Image image, string path, int decodePixelWidth)
+    private static async void LoadImageAsync(Image image, string path, int decodePixelWidth, string? hostUrl = null)
     {
-        var bmp = await ThumbnailCache.LoadAsync(path, decodePixelWidth);
+        BitmapSource? bmp = null;
+        if (hostUrl != null)
+            bmp = await ThumbnailCache.LoadUrlAsync(hostUrl, decodePixelWidth);
+        bmp ??= await ThumbnailCache.LoadAsync(path, decodePixelWidth);
         if (bmp != null && ReferenceEquals(image.Tag, path))
             image.Source = bmp;
     }
@@ -1060,7 +1067,7 @@ public partial class MediaLibPage : UserControl
             // 封面后台解码：存在性检查也并入后台流程（LoadAsync→ThumbnailCache 内做 FileInfo）
             var image = new Image { Stretch = Stretch.UniformToFill, Tag = cover };
             coverGrid.Children.Add(image);
-            LoadImageAsync(image, cover, (int)WorkCoverW * 2);
+            LoadImageAsync(image, cover, (int)WorkCoverW * 2, ImageHostService.CoverUrl(workId));
         }
         // RJ 号：封面左上角；作品形式：右上角
         var badgeStyleBg = new SolidColorBrush(Color.FromArgb(170, 0, 0, 0));
@@ -1122,7 +1129,8 @@ public partial class MediaLibPage : UserControl
         var rows = Db.Select(
             "SELECT \"work_id\", \"work_name\", \"maker_name\", \"sell_date\", \"series\", " +
             "\"scenario\", \"illust\", \"voice_actor\", \"age_category\", \"work_type\", " +
-            "\"genre\", \"file_size\", \"intro_s\", \"folder\", \"read_flag\", \"favorite\" " +
+            "\"genre\", \"file_size\", \"intro_s\", \"folder\", \"read_flag\", \"favorite\", " +
+            "\"maker_id\", \"cover\" " +
             "FROM \"works\" WHERE \"work_id\" = @w",
             ("@w", _currentWork));
         if (rows is not { Count: > 0 })
@@ -1137,16 +1145,22 @@ public partial class MediaLibPage : UserControl
         ClearCards();
         ShowContentHost();   // 详情用 ContentHost 承载，隐藏卡片列表
         CountLabel.Text = "";
-        // 详情页不显示搜索框；RJ 号居左显示为可点击跳转 DLsite 作品页的超链接
+        // 详情页不显示搜索框；作品号居左显示为可点击跳转作品页的超链接
         SearchBox.Visibility = Visibility.Collapsed;
         RjLabel.Inlines.Clear();
-        var rjLink = new Hyperlink(new Run(workId))
+        var isFanbox = FanboxService.IsFanboxWorkId(workId);
+        // fanbox 的 work_id 是内部键（fb_+作品号），展示与跳转都用站上的作品号
+        var linkText = isFanbox ? FanboxService.PostIdOf(workId) : workId;
+        var linkUrl = isFanbox
+            ? $"https://{AppConfig.PawchiveHost}/{PawchiveApi.FanboxService}/user/" +
+              $"{r[16] as string ?? ""}/post/{FanboxService.PostIdOf(workId)}"   // r[16]=maker_id=作家号
+            : $"https://www.dlsite.com/maniax/work/=/product_id/{workId}.html";
+        var rjLink = new Hyperlink(new Run(linkText))
         {
             Foreground = (Brush)FindResource("AccentLightBrush"),
             TextDecorations = null,
         };
-        rjLink.Click += (_, _) => Process.Start(new ProcessStartInfo(
-            $"https://www.dlsite.com/maniax/work/=/product_id/{workId}.html") { UseShellExecute = true });
+        rjLink.Click += (_, _) => Process.Start(new ProcessStartInfo(linkUrl) { UseShellExecute = true });
         RjLabel.Inlines.Add(rjLink);
         RjLabel.Visibility = Visibility.Visible;
         if (workFolder != null && Directory.Exists(workFolder))
@@ -1177,9 +1191,14 @@ public partial class MediaLibPage : UserControl
             FontWeight = FontWeights.SemiBold, FontSize = 18, TextWrapping = TextWrapping.Wrap,
         });
 
-        var folder = workFolder != null ? Path.Combine(workFolder, DlsitePage.DataSourceDir) : "";
-        if (!Directory.Exists(folder))
-            folder = Path.Combine(DlsitePage.ImagesDir, workId);
+        // fanbox 作品的图片就摊在作品目录里（没有 DLsite 那套 DataSource 子目录与正文占位图）
+        var folder = workFolder ?? "";
+        if (!isFanbox)
+        {
+            folder = workFolder != null ? Path.Combine(workFolder, DlsitePage.DataSourceDir) : "";
+            if (!Directory.Exists(folder))
+                folder = Path.Combine(DlsitePage.ImagesDir, workId);
+        }
 
         // 字段网格（带可点击链接）：右侧详情先建好，正文/轮播图随后台读盘完成再补
         var infoPanel = BuildDetailFields(workId, r);
@@ -1195,8 +1214,13 @@ public partial class MediaLibPage : UserControl
         ContentHost.Content = root;
         CardsScroll.ScrollToVerticalOffset(0);
 
-        // 正文文本与轮播图列表在后台线程读盘/解析
-        var detail = await Task.Run(() => LoadDetailContent(folder));
+        // 正文文本与轮播图列表在后台线程读盘/解析。
+        // fanbox 作品目录里是整篇投稿的图（动辄上百张），进详情只挂封面一张、不翻目录，
+        // 要看图走「查看作品」（对齐 Web：/api/detail 对 fanbox 不返回轮播图列表）
+        var coverPath = r[17] as string ?? "";
+        var detail = await Task.Run(() => isFanbox
+            ? new DetailContent([], File.Exists(coverPath) ? [coverPath] : [])
+            : LoadDetailContent(folder));
         if (_currentWork != workId || _level != "detail")
             return;   // 加载期间已导航离开，丢弃结果
 

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
@@ -40,6 +40,8 @@ public partial class SettingsPage : UserControl
         AutoUnzipCombo.Items.Add(I18n.Tr("关闭"));
         WebEnableCombo.Items.Add(I18n.Tr("开启"));
         WebEnableCombo.Items.Add(I18n.Tr("关闭"));
+        ImageHostEnableCombo.Items.Add(I18n.Tr("开启"));
+        ImageHostEnableCombo.Items.Add(I18n.Tr("关闭"));
         // 关闭按钮行为：索引 0=每次询问 / 1=最小化到托盘 / 2=退出程序
         CloseActionCombo.Items.Add(I18n.Tr("每次询问"));
         CloseActionCombo.Items.Add(I18n.Tr("最小化到托盘"));
@@ -149,10 +151,20 @@ public partial class SettingsPage : UserControl
         MinSpeedBox.ToolTip = I18n.Tr("持续低于该速度 30 秒后自动重试，0 表示不限制");
         SpeedLimitLabel.Text = I18n.Tr("速度限制 (KB/s)");
         SpeedLimitBox.ToolTip = I18n.Tr("下载总速度上限，0 表示不限速");
+        UnzipPwdLabel.Text = I18n.Tr("解压密码库");
+        UnzipPwdHint.Text = I18n.Tr("一行一个密码，解压加密压缩包时按顺序尝试");
         LanguageLabel.Text = I18n.Tr("语言");
         LogLevelLabel.Text = I18n.Tr("日志级别");
         EncodingLabel.Text = I18n.Tr("解压编码");
         CloseActionLabel.Text = I18n.Tr("关闭按钮");
+        ImageHostGroup.Header = I18n.Tr("图床存储");
+        ImageHostEnableLabel.Text = I18n.Tr("启用");
+        ImageHostProjectLabel.Text = I18n.Tr("项目");
+        ImageHostUrlLabel.Text = I18n.Tr("服务地址");
+        ImageHostTokenLabel.Text = "API Token";
+        ImageHostTestButton.Content = I18n.Tr("测试连接");
+        ImageHostMigrateButton.Content = I18n.Tr("迁移封面");
+        ImageHostHint.Text = I18n.Tr("开启后作品卡封面由图床提供，未迁移的封面自动回退本地硬盘。迁移只复制不删除本地原图（它也是详情页的第一张图）；同一个作品重复迁移会被跳过，中断后再点一次即可续传。手机要看到图，服务地址须填电脑的局域网地址（不能是 127.0.0.1），并在图床「系统设置 → 附加访问主机名」里放行该地址。");
         WebGroup.Header = I18n.Tr("外部访问");
         WebEnableLabel.Text = I18n.Tr("外部访问");
         WebPortLabel.Text = I18n.Tr("端口");
@@ -167,6 +179,8 @@ public partial class SettingsPage : UserControl
         AutoUnzipCombo.Items[1] = I18n.Tr("关闭");
         WebEnableCombo.Items[0] = I18n.Tr("开启");
         WebEnableCombo.Items[1] = I18n.Tr("关闭");
+        ImageHostEnableCombo.Items[0] = I18n.Tr("开启");
+        ImageHostEnableCombo.Items[1] = I18n.Tr("关闭");
         CloseActionCombo.Items[0] = I18n.Tr("每次询问");
         CloseActionCombo.Items[1] = I18n.Tr("最小化到托盘");
         CloseActionCombo.Items[2] = I18n.Tr("退出程序");
@@ -242,6 +256,7 @@ public partial class SettingsPage : UserControl
         DownProcBox.Text = AppConfig.DownloadProcesses.ToString();
         MinSpeedBox.Text = AppConfig.MinSpeedKb.ToString();
         SpeedLimitBox.Text = AppConfig.SpeedLimitKb.ToString();
+        UnzipPwdBox.Text = AppConfig.UnzipPasswordsText;
         LogLevelCombo.SelectedIndex = AppConfig.Read("loglevel", "level") switch
         {
             "error" => 1,
@@ -259,11 +274,17 @@ public partial class SettingsPage : UserControl
         var langIndex = codes.IndexOf(I18n.CurrentLanguage);
         LanguageCombo.SelectedIndex = langIndex >= 0 ? langIndex : 0;
 
+        ImageHostEnableCombo.SelectedIndex = AppConfig.ImageHostEnabled ? 0 : 1;
+        ImageHostUrlBox.Text = AppConfig.ImageHostBaseUrl;
+        ImageHostProjectBox.Text = AppConfig.ImageHostProject;
+        ImageHostTokenBox.Text = AppConfig.ImageHostToken;
+
         WebEnableCombo.SelectedIndex = AppConfig.WebEnabled ? 0 : 1;
         WebPortBox.Text = AppConfig.WebPort.ToString();
         WebPasswordBox.Text = AppConfig.WebPassword;
         _loading = false;
         UpdateWebStatus();
+        UpdateImageHostStatus();
     }
 
     // ---------- 保存 ----------
@@ -436,6 +457,14 @@ public partial class SettingsPage : UserControl
         AppConfig.Write("down_list", "speed_limit", int.TryParse(value, out _) ? value : "0");
     }
 
+    private void UnzipPwdBox_LostFocus(object sender, RoutedEventArgs e)
+    {
+        if (_loading)
+            return;
+        // 原样存（一行一个），取用时再拆行去空去重
+        AppConfig.Write("unzip", "passwords", UnzipPwdBox.Text);
+    }
+
     private void LanguageCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (_loading || LanguageCombo.SelectedIndex < 0)
@@ -503,6 +532,111 @@ public partial class SettingsPage : UserControl
         else
             WebServer.Stop();
         UpdateWebStatus();
+    }
+
+    // ---------- 图床存储 ----------
+
+    private void ImageHostEnableCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_loading)
+            return;
+        AppConfig.Write("image_host", "enabled", ImageHostEnableCombo.SelectedIndex == 0 ? "True" : "False");
+        ApplyImageHost();
+    }
+
+    private void ImageHostUrlBox_LostFocus(object sender, RoutedEventArgs e)
+    {
+        if (_loading)
+            return;
+        AppConfig.Write("image_host", "base_url", ImageHostUrlBox.Text.Trim());
+        ImageHostUrlBox.Text = AppConfig.ImageHostBaseUrl;   // 回显补全协议后的地址
+        ApplyImageHost();
+    }
+
+    private void ImageHostProjectBox_LostFocus(object sender, RoutedEventArgs e)
+    {
+        if (_loading)
+            return;
+        AppConfig.Write("image_host", "project", ImageHostProjectBox.Text.Trim());
+        ApplyImageHost();
+    }
+
+    private void ImageHostTokenBox_LostFocus(object sender, RoutedEventArgs e)
+    {
+        if (_loading)
+            return;
+        AppConfig.Write("image_host", "token", ImageHostTokenBox.Text.Trim());
+        ApplyImageHost();
+    }
+
+    /// <summary>图床配置变更后：丢弃内存映射并补传缺的封面（未启用时 Kick 为空操作）。</summary>
+    private void ApplyImageHost()
+    {
+        ImageHostService.Invalidate();
+        ImageHostService.Kick();
+        UpdateImageHostStatus();
+    }
+
+    private async void ImageHostTestButton_Click(object sender, RoutedEventArgs e)
+    {
+        ImageHostStatusLabel.Text = I18n.Tr("测试中…");
+        // 用输入框里的现值：失焦即存，但点按钮那一下的值可能还没写进库
+        var (ok, info, error) = await ImageHostClient.PingAsync(
+            ImageHostUrlBox.Text.Trim(), ImageHostProjectBox.Text.Trim(), ImageHostTokenBox.Text.Trim());
+        ImageHostStatusLabel.Text = ok
+            ? I18n.Format(I18n.Tr("✓ 已连接（图床现有 {count} 张）"), ("count", (info?.ImageCount ?? 0).ToString()))
+            : $"✗ {error}";
+    }
+
+    private void ImageHostMigrateButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (!AppConfig.ImageHostEnabled)
+        {
+            ImageHostStatusLabel.Text = I18n.Tr("请先启用图床存储");
+            return;
+        }
+        ImageHostService.Kick();
+        StartImageHostPoll();
+    }
+
+    /// <summary>同步进行中每 1.5s 刷新状态文本（同 Web 设置页的轮询节奏），结束即停。</summary>
+    private void StartImageHostPoll()
+    {
+        _imageHostTimer ??= new System.Windows.Threading.DispatcherTimer
+        {
+            Interval = TimeSpan.FromMilliseconds(1500),
+        };
+        _imageHostTimer.Tick -= ImageHostTimer_Tick;
+        _imageHostTimer.Tick += ImageHostTimer_Tick;
+        _imageHostTimer.Start();
+        UpdateImageHostStatus();
+    }
+
+    private System.Windows.Threading.DispatcherTimer? _imageHostTimer;
+
+    private void ImageHostTimer_Tick(object? sender, EventArgs e)
+    {
+        UpdateImageHostStatus();
+        if (!ImageHostService.State().Running)
+            _imageHostTimer?.Stop();
+    }
+
+    private void UpdateImageHostStatus()
+    {
+        if (ImageHostStatusLabel == null)
+            return;
+        var (running, status) = ImageHostService.State();
+        if (running)
+        {
+            ImageHostStatusLabel.Text = I18n.Tr("⏳ 迁移中 ") + status;
+            // 外部（Web 端 / 启动时）触发的迁移也能在本页看到进度。
+            // 必须判 IsEnabled：StartImageHostPoll 回头又会调本方法，不判就是无限递归。
+            if (_imageHostTimer is not { IsEnabled: true })
+                StartImageHostPoll();
+            return;
+        }
+        // 常驻提示（已迁移/待迁移）取服务端同一句文案，与 Web 设置页保持一致
+        ImageHostStatusLabel.Text = status.Length > 0 ? "✓ " + status : ImageHostService.IdleSummary();
     }
 
     private void UpdateWebStatus()

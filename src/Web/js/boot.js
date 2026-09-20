@@ -30,7 +30,8 @@ async function boot() {
 function restoreFromHash() {
   const p = parseHash();
   if (!p) { selectSection('medialib'); return; }
-  if (p.key === 'searchdownload') { restoreSearchDownload(p); return; }
+  if (p.key === 'search') { restoreSearch(p); return; }
+  if (p.key === 'download') { restoreDownload(p); return; }
   if (!p.root) { selectSection(p.key); return; }
   section = p.key; stopTimers(); closeVideo(); closeAudio(); closeDrawer();
   buildTabs();
@@ -40,14 +41,27 @@ function restoreFromHash() {
   history.replaceState({ nav: true, depth: stack.length }, '', encodeHash());
   render();
 }
-// 恢复下载搜索分区：先按常规进入（基线为下载视图），再切到目标子视图；搜索带查询词则复跑一次
-function restoreSearchDownload(p) {
-  selectSection('searchdownload');
-  if (p.sd === 'download') return;
-  sdView = p.sd;
-  renderSearchDownload();   // search 视图会同步建好 #sId
-  if (p.sd === 'search' && p.query) { const inp = $('sId'); if (inp) inp.value = p.query; }
-  history.replaceState({ nav: true, sd: p.sd }, '', encodeSdHash());
-  if (p.sd === 'search' && p.query) runSearch();
+// 恢复作品搜索分区：进入分区（同步建好 #srcSel / #sId）后切到对应来源，填回查询词并复跑一次
+function restoreSearch(p) {
+  selectSection('search');
+  if (p.src && p.src !== searchSrc) {
+    const sel = $('srcSel');
+    if (sel) sel.value = p.src;
+    setSearchSource(p.src);
+  }
+  if (!p.query) return;
+  const inp = $('sId');
+  if (!inp) return;
+  inp.value = p.query;
+  history.replaceState({ nav: true }, '', encodeSearchHash());
+  runSearchAny();
+}
+// 恢复下载管理分区：先按常规进入（基线为下载列表），再切到已下载视图
+function restoreDownload(p) {
+  selectSection('download');
+  if (p.dl !== 'downloaded') return;
+  dlView = 'downloaded';
+  renderDownloadArea();
+  history.replaceState({ nav: true, dl: 'downloaded' }, '', encodeDlHash());
 }
 boot();

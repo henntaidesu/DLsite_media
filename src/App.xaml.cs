@@ -17,10 +17,13 @@ public partial class App : Application
         // 设置中开启了外部访问时，随程序启动内嵌 Web 服务
         if (AppConfig.WebEnabled)
             WebServer.StartFromConfig();
+        // 开启了图床存储时，后台把新入库作品的封面补传上去（未开启为空操作）
+        ImageHostService.Kick();
     }
 
     protected override void OnExit(ExitEventArgs e)
     {
+        ImageHostService.Stop();
         WebServer.Stop();
         Db.Checkpoint();
         base.OnExit(e);

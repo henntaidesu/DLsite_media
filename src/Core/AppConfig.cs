@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Net;
 using System.Text.Json;
 
@@ -27,6 +28,8 @@ public static class AppConfig
         ["proxy"] = new() { ["openproxy"] = "False", ["host"] = "127.0.0.1", ["port"] = "7890", ["type"] = "http" },
         ["loglevel"] = new() { ["level"] = "info" },
         ["encoding"] = new() { ["encoding"] = "cp437" },
+        // 解压密码库：用户手填，一行一个；遇到加密压缩包时按填写顺序逐个尝试
+        ["unzip"] = new() { ["passwords"] = "" },
         ["down_list"] = new()
         {
             ["auto_download"] = "False", ["auto_unzip"] = "False", ["download_processes"] = "5",
@@ -199,6 +202,17 @@ public static class AppConfig
     public static int SpeedLimitKb => ReadInt("down_list", "speed_limit", 0);
 
     public static string SysEncoding => Read("encoding", "encoding", "cp437") ?? "cp437";
+
+    /// <summary>解压密码库原文（一行一个，供设置页编辑）。</summary>
+    public static string UnzipPasswordsText => Read("unzip", "passwords", "") ?? "";
+
+    /// <summary>解压密码库：按行拆开去空去重，顺序即尝试顺序。</summary>
+    public static List<string> UnzipPasswords =>
+        UnzipPasswordsText.Split('\n')
+            .Select(p => p.Trim())
+            .Where(p => p.Length > 0)
+            .Distinct()
+            .ToList();
 
     public static string Language => Read("language", "lang", "zh_CN") ?? "zh_CN";
 

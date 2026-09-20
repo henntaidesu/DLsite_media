@@ -16,6 +16,11 @@ async function renderSettings() {
   f.append(el('label', null, '缓存路径'), mkInput(d.downpath, v => write('downpath', 'downpath', v)));
   f.append(el('label', null, '自动下载'), mkSelect(boolOpts, d.autoDownload ? 'True' : 'False', v => write('down_list', 'auto_download', v)));
   f.append(el('label', null, '自动解压'), mkSelect(boolOpts, d.autoUnzip ? 'True' : 'False', v => write('down_list', 'auto_unzip', v)));
+  // 解压密码库：遇到加密压缩包时按这里的密码逐条试（一行一个，失焦即存）
+  const pwBox = el('textarea'); pwBox.value = d.unzipPasswords || '';
+  pwBox.placeholder = '一行一个密码，解压加密压缩包时按顺序尝试';
+  pwBox.onchange = () => write('unzip', 'passwords', pwBox.value);
+  f.append(el('label', 'top', '解压密码库'), pwBox);
   f.append(el('label', null, '单文件线程数'), mkInput(d.downProc, v => write('down_list', 'download_processes', v)));
   f.append(el('label', null, '最低速度 (KB/s)'), mkInput(d.minSpeed, v => write('down_list', 'min_speed', v)));
   f.append(el('label', null, '速度限制 (KB/s)'), mkInput(d.speedLimit, v => write('down_list', 'speed_limit', v)));

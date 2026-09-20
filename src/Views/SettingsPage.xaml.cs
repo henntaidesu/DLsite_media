@@ -151,6 +151,8 @@ public partial class SettingsPage : UserControl
         MinSpeedBox.ToolTip = I18n.Tr("持续低于该速度 30 秒后自动重试，0 表示不限制");
         SpeedLimitLabel.Text = I18n.Tr("速度限制 (KB/s)");
         SpeedLimitBox.ToolTip = I18n.Tr("下载总速度上限，0 表示不限速");
+        UnzipPwdLabel.Text = I18n.Tr("解压密码库");
+        UnzipPwdHint.Text = I18n.Tr("一行一个密码，解压加密压缩包时按顺序尝试");
         LanguageLabel.Text = I18n.Tr("语言");
         LogLevelLabel.Text = I18n.Tr("日志级别");
         EncodingLabel.Text = I18n.Tr("解压编码");
@@ -254,6 +256,7 @@ public partial class SettingsPage : UserControl
         DownProcBox.Text = AppConfig.DownloadProcesses.ToString();
         MinSpeedBox.Text = AppConfig.MinSpeedKb.ToString();
         SpeedLimitBox.Text = AppConfig.SpeedLimitKb.ToString();
+        UnzipPwdBox.Text = AppConfig.UnzipPasswordsText;
         LogLevelCombo.SelectedIndex = AppConfig.Read("loglevel", "level") switch
         {
             "error" => 1,
@@ -452,6 +455,14 @@ public partial class SettingsPage : UserControl
             return;
         var value = SpeedLimitBox.Text.Trim();
         AppConfig.Write("down_list", "speed_limit", int.TryParse(value, out _) ? value : "0");
+    }
+
+    private void UnzipPwdBox_LostFocus(object sender, RoutedEventArgs e)
+    {
+        if (_loading)
+            return;
+        // 原样存（一行一个），取用时再拆行去空去重
+        AppConfig.Write("unzip", "passwords", UnzipPwdBox.Text);
     }
 
     private void LanguageCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)

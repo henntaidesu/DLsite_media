@@ -13,3 +13,6 @@ images/
 log/
 *.log
 DLsiteMedia.zip
+
+# ---- WPF 临时工程（构建中断时的残留，会导致 CS2001）----
+*_wpftmp.csproj

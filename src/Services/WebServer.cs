@@ -83,6 +83,7 @@ public static class WebServer
         "down_list/min_speed", "down_list/speed_limit",
         "proxy/openproxy", "proxy/host", "proxy/port", "proxy/type",
         "debrid/api_key", "language/lang", "loglevel/level", "encoding/encoding",
+        "unzip/passwords",
         "image_host/enabled", "image_host/base_url", "image_host/project", "image_host/token",
     ];
 
@@ -749,13 +750,16 @@ public static class WebServer
             return;
         }
         var r = rows[0];
+        // fanbox 作品目录里摊着整篇投稿的图（动辄上百张），且没有 description.txt，
+        // 进详情一律不翻目录：左侧只挂封面，要看图走「查看作品」
+        var isFanbox = FanboxService.IsFanboxWorkId(id);
         var folder = ResolveAssetFolder(id, r[13] as string);
 
         // 正文：按 [img:文件名] 占位标记拆成 文本/图片 块
         var body = new List<object>();
         var bodyFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var txtPath = Path.Combine(folder, DlsitePage.DescriptionTxt);
-        if (File.Exists(txtPath))
+        if (!isFanbox && File.Exists(txtPath))
         {
             string raw;
             try { raw = File.ReadAllText(txtPath).Trim(); }
@@ -780,9 +784,10 @@ public static class WebServer
                 body.Add(new { kind = "text", value = string.Join('\n', buf) });
         }
 
-        // 轮播图：数据源中除正文图片外的图片，主图排最前
+        // 轮播图：数据源中除正文图片外的图片，主图排最前。
+        // fanbox 不给列表（前端据此回退到 /api/cover，只显示封面一张）
         var slider = new List<string>();
-        if (Directory.Exists(folder))
+        if (!isFanbox && Directory.Exists(folder))
         {
             slider = Directory.GetFiles(folder)
                 .Select(Path.GetFileName)
@@ -2189,6 +2194,7 @@ public static class WebServer
             downpath = AppConfig.DownloadPath,
             autoDownload = AppConfig.AutoDownload,
             autoUnzip = AppConfig.AutoUnzip,
+            unzipPasswords = AppConfig.UnzipPasswordsText,   // 压缩包密码而非账号凭据，可回传编辑
             proxy = new { open = proxyOpen == "True", host = proxyHost, port = proxyPort, type = proxyType },
             // 敏感值不回传明文，仅告知是否已设置（编辑时留空表示不修改）
             debridKeySet = AppConfig.DebridApiKey.Length > 0,

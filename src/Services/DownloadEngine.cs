@@ -1047,6 +1047,11 @@ public static class DownloadEngine
     {
         try
         {
+            // fanbox 的附件常常是压缩包（且多带密码）：开了自动解压就先在缓存目录里解开再入库。
+            // 解不开也照样往下走，只是压缩包原样留在作品目录里。
+            var folder = WorkFolderPath(workId);
+            if (AppConfig.AutoUnzip && UnzipService.GetAllArchiveFiles(folder).Count > 0)
+                ExtractWithProgress(workId, folder, () => UnzipService.ExtractArchivesInPlace(workId, folder));
             FanboxService.FinalizeIntoLibrary(workId);
         }
         catch (Exception e)
@@ -1089,7 +1094,21 @@ public static class DownloadEngine
     /// <summary>在后台解压一个作品，并用独立线程按解压产出量估算进度写入 UnzipProgress。</summary>
     private static void RunUnzip(string workId)
     {
-        var folder = WorkFolderPath(workId);
+        try
+        {
+            ExtractWithProgress(workId, WorkFolderPath(workId), () => UnzipService.Unzip(workId));
+        }
+        finally
+        {
+            UnzipProgress.TryRemove(workId, out _);
+            lock (UnzipLock)
+                Unzipping.Remove(workId);
+        }
+    }
+
+    /// <summary>跑一段解压逻辑，期间用独立线程按解压产出量估算进度写入 UnzipProgress。</summary>
+    private static void ExtractWithProgress(string workId, string folder, Action extract)
+    {
         long total = 0;
         foreach (var f in UnzipService.GetAllArchiveFiles(folder))
             try { total += new FileInfo(f).Length; } catch (IOException) { }
@@ -1118,15 +1137,12 @@ public static class DownloadEngine
         monitor.Start();
         try
         {
-            UnzipService.Unzip(workId);
+            extract();
         }
         finally
         {
             stop.Set();
             monitor.Join();  // 先等监控线程退出再弹出条目，避免条目被"复活"卡在解压中
-            UnzipProgress.TryRemove(workId, out _);
-            lock (UnzipLock)
-                Unzipping.Remove(workId);
         }
     }
 

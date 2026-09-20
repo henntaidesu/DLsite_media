@@ -270,7 +270,8 @@ public static class PawchiveApi
         // 站点的 file 字段是作者设定的帖子封面，多是从作品里裁出来的横幅（如 800x420），
         // 既不代表作品内容、也是 attachments 之外的另一份文件；attachments 才是作品本体。
         // 因此：下载清单只要 attachments，封面取其中第一张图片。
-        // 只有在没有任何附件时，file 才是内容本身，这时才把它纳入清单并用作封面。
+        // 但附件里一张图都没有时（纯压缩包/视频帖），file 是这篇唯一能当封面的图，
+        // 不下下来作品入库后卡片就是一片空白——这时把它补进清单。
         PawchiveFile? siteCover = null;
         if (item.TryGetProperty("file", out var file) && file.ValueKind == JsonValueKind.Object)
         {
@@ -288,7 +289,7 @@ public static class PawchiveApi
                 if (path.Length > 0 && seen.Add(path))
                     files.Add(new PawchiveFile { Name = DlsiteApi.JStr(att, "name"), Path = path });
             }
-        if (files.Count == 0 && siteCover != null)
+        if (siteCover != null && !files.Any(f => IsImageName(f.Name)))
             files.Add(siteCover);
 
         // 封面 = 清单里的第一张图片；清单里没有图片（纯压缩包/视频帖）时退回站点封面

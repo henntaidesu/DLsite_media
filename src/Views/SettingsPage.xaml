@@ -42,6 +42,17 @@
                                    MinWidth="0" Margin="24,0,12,0" />
                         <TextBox x:Name="SpeedLimitBox" Width="80" LostFocus="SpeedLimitBox_LostFocus" />
                     </StackPanel>
+                    <!-- 解压密码库：对齐 Web 设置页 下载 分区的同名多行输入（settings.js） -->
+                    <DockPanel Margin="0,4">
+                        <TextBlock x:Name="UnzipPwdLabel" Text="解压密码库" Style="{StaticResource FieldLabel}"
+                                   DockPanel.Dock="Left" VerticalAlignment="Top" Margin="0,6,12,0" />
+                        <StackPanel>
+                            <TextBox x:Name="UnzipPwdBox" AcceptsReturn="True" MinHeight="84" MaxHeight="160"
+                                     VerticalScrollBarVisibility="Auto" LostFocus="UnzipPwdBox_LostFocus" />
+                            <TextBlock x:Name="UnzipPwdHint" Text="一行一个密码，解压加密压缩包时按顺序尝试"
+                                       Style="{StaticResource CaptionText}" Margin="0,4,0,0" />
+                        </StackPanel>
+                    </DockPanel>
                 </StackPanel>
             </GroupBox>
 

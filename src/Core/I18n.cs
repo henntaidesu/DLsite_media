@@ -327,6 +327,16 @@ public static class I18n
         ["打开文件夹"] = new() { ["zh_TW"] = "開啟資料夾", ["ja"] = "フォルダを開く", ["en"] = "Open folder" },
         ["移动媒体库"] = new() { ["zh_TW"] = "移動媒體庫", ["ja"] = "ライブラリを移動", ["en"] = "Move library" },
         ["查看作品"] = new() { ["zh_TW"] = "查看作品", ["ja"] = "作品を見る", ["en"] = "Browse files" },
+        ["解压密码库"] = new()
+        {
+            ["zh_TW"] = "解壓密碼庫", ["ja"] = "解凍パスワード一覧", ["en"] = "Archive passwords",
+        },
+        ["一行一个密码，解压加密压缩包时按顺序尝试"] = new()
+        {
+            ["zh_TW"] = "一行一個密碼，解壓加密壓縮檔時依序嘗試",
+            ["ja"] = "1 行に 1 つ。暗号化書庫の解凍時に上から順に試します",
+            ["en"] = "One password per line, tried in order on encrypted archives",
+        },
         ["作品信息"] = new() { ["zh_TW"] = "作品資訊", ["ja"] = "作品情報", ["en"] = "Work info" },
         ["查看图片"] = new() { ["zh_TW"] = "查看圖片", ["ja"] = "画像を表示", ["en"] = "View image" },
         ["{count} 项"] = new() { ["zh_TW"] = "{count} 項", ["ja"] = "{count} 件", ["en"] = "{count} items" },

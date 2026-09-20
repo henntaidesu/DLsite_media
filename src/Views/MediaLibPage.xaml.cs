@@ -1130,7 +1130,7 @@ public partial class MediaLibPage : UserControl
             "SELECT \"work_id\", \"work_name\", \"maker_name\", \"sell_date\", \"series\", " +
             "\"scenario\", \"illust\", \"voice_actor\", \"age_category\", \"work_type\", " +
             "\"genre\", \"file_size\", \"intro_s\", \"folder\", \"read_flag\", \"favorite\", " +
-            "\"maker_id\" " +
+            "\"maker_id\", \"cover\" " +
             "FROM \"works\" WHERE \"work_id\" = @w",
             ("@w", _currentWork));
         if (rows is not { Count: > 0 })
@@ -1214,8 +1214,13 @@ public partial class MediaLibPage : UserControl
         ContentHost.Content = root;
         CardsScroll.ScrollToVerticalOffset(0);
 
-        // 正文文本与轮播图列表在后台线程读盘/解析
-        var detail = await Task.Run(() => LoadDetailContent(folder, loadBody: !isFanbox));
+        // 正文文本与轮播图列表在后台线程读盘/解析。
+        // fanbox 作品目录里是整篇投稿的图（动辄上百张），进详情只挂封面一张、不翻目录，
+        // 要看图走「查看作品」（对齐 Web：/api/detail 对 fanbox 不返回轮播图列表）
+        var coverPath = r[17] as string ?? "";
+        var detail = await Task.Run(() => isFanbox
+            ? new DetailContent([], File.Exists(coverPath) ? [coverPath] : [])
+            : LoadDetailContent(folder));
         if (_currentWork != workId || _level != "detail")
             return;   // 加载期间已导航离开，丢弃结果
 
@@ -1262,16 +1267,12 @@ public partial class MediaLibPage : UserControl
     }
 
     /// <summary>后台读取作品正文（拆成文本/图片块）与轮播图文件列表（除正文图外，主图排最前）。</summary>
-    /// <summary>
-    /// 读取详情的正文块与轮播图列表。
-    /// loadBody=false 时只取轮播图（fanbox 作品没有 description.txt，正文走「简介」字段）。
-    /// </summary>
-    private static DetailContent LoadDetailContent(string folder, bool loadBody = true)
+    private static DetailContent LoadDetailContent(string folder)
     {
         var bodyBlocks = new List<(string Kind, string Value)>();
         var bodyFiles = new HashSet<string>();
         var txtPath = Path.Combine(folder, DlsitePage.DescriptionTxt);
-        if (loadBody && File.Exists(txtPath))
+        if (File.Exists(txtPath))
         {
             string bodyText;
             try

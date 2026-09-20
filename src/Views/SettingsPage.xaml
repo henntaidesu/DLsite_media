@@ -1,4 +1,4 @@
-<UserControl x:Class="DLsiteMedia.Views.SettingsPage"
+﻿<UserControl x:Class="DLsiteMedia.Views.SettingsPage"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              IsVisibleChanged="Page_IsVisibleChanged">
@@ -137,6 +137,39 @@
                  桌面端以此取代原独立弹窗；区块由 MediaLibSettingDialog.BuildSection 在代码后台注入 -->
             <GroupBox x:Name="MediaLibGroup" Header="媒体库">
                 <ContentControl x:Name="MediaLibHost" />
+            </GroupBox>
+
+            <!-- 图床存储（对齐 Web 设置页：位于「媒体库」与「外部访问」之间，settings.js） -->
+            <GroupBox x:Name="ImageHostGroup" Header="图床存储">
+                <StackPanel>
+                    <StackPanel Orientation="Horizontal" Margin="0,4">
+                        <TextBlock x:Name="ImageHostEnableLabel" Text="启用" Style="{StaticResource FieldLabel}" />
+                        <ComboBox x:Name="ImageHostEnableCombo" Width="120"
+                                  SelectionChanged="ImageHostEnableCombo_SelectionChanged" />
+                        <TextBlock x:Name="ImageHostProjectLabel" Text="项目" Style="{StaticResource FieldLabel}"
+                                   MinWidth="0" Margin="24,0,12,0" />
+                        <TextBox x:Name="ImageHostProjectBox" Width="180" LostFocus="ImageHostProjectBox_LostFocus" />
+                    </StackPanel>
+                    <DockPanel Margin="0,8,0,4">
+                        <TextBlock x:Name="ImageHostUrlLabel" Text="服务地址" Style="{StaticResource FieldLabel}"
+                                   DockPanel.Dock="Left" />
+                        <TextBox x:Name="ImageHostUrlBox" LostFocus="ImageHostUrlBox_LostFocus" />
+                    </DockPanel>
+                    <DockPanel Margin="0,4">
+                        <TextBlock x:Name="ImageHostTokenLabel" Text="API Token" Style="{StaticResource FieldLabel}"
+                                   DockPanel.Dock="Left" />
+                        <Button x:Name="ImageHostMigrateButton" Content="迁移封面" Margin="8,0,0,0"
+                                DockPanel.Dock="Right" Click="ImageHostMigrateButton_Click" />
+                        <Button x:Name="ImageHostTestButton" Content="测试连接" Margin="8,0,0,0"
+                                DockPanel.Dock="Right" Click="ImageHostTestButton_Click" />
+                        <TextBox x:Name="ImageHostTokenBox" LostFocus="ImageHostTokenBox_LostFocus" />
+                    </DockPanel>
+                    <TextBlock x:Name="ImageHostStatusLabel" Margin="0,6,0,0"
+                               Foreground="{StaticResource CaptionBrush}" TextWrapping="Wrap" />
+                    <TextBlock x:Name="ImageHostHint" Style="{StaticResource CaptionText}" Margin="0,6,0,0"
+                               TextWrapping="Wrap"
+                               Text="开启后作品卡封面由图床提供，未迁移的封面自动回退本地硬盘。迁移只复制不删除本地原图（它也是详情页的第一张图）；同一个作品重复迁移会被跳过，中断后再点一次即可续传。手机要看到图，服务地址须填电脑的局域网地址（不能是 127.0.0.1），并在图床「系统设置 → 附加访问主机名」里放行该地址。" />
+                </StackPanel>
             </GroupBox>
 
             <!-- 外部访问 -->

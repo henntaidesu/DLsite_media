@@ -17,7 +17,9 @@ public delegate void BackfillProgress(int index, int total, string rj, bool ok);
 /// </summary>
 public static class MediaLibraryService
 {
-    private static readonly Regex RjPattern = new(@"RJ\d{6,}", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    // 作品文件夹名：DLsite 的 RJ 号，或 fanbox 的 FB+作品号（两者都以作品号命名，扫描才能认出来）
+    private static readonly Regex RjPattern =
+        new(@"(?:RJ\d{6,}|FB\d+)", RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     /// <summary>只读取目录下的全部一级文件夹，返回 {RJ号: 文件夹绝对路径}。</summary>
     public static Dictionary<string, string> ScanTopRjFolders(string root)
@@ -369,6 +371,9 @@ public static class MediaLibraryService
                 await Task.Delay(TimeSpan.FromSeconds(delaySeconds));
         }
         Logger.Info($"作品页元数据补全完成: 补全 {filled} 个，失败 {missed} 个，共 {rows.Count} 个");
+        // 封面就是在这一步落的盘：开了图床就顺手把新封面补传上去（未开启为空操作）
+        if (filled > 0)
+            ImageHostService.Kick();
         return (filled, missed, rows.Count);
     }
 }

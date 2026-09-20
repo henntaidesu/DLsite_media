@@ -292,6 +292,9 @@ public partial class SearchPage : UserControl
     // 切到 FANBOX 再切回来时按它原样恢复
     private string _dlsiteLevel = "";
 
+    // FANBOX 结果区：在代码里创建并塞进 XAML 的 FanboxHost（见该处注释）
+    private readonly FanboxSearchView FanboxView = new();
+
     // 社团卡片与下载页状态同步：每秒把下载列表的聚合状态写回对应卡片角标
     private readonly DispatcherTimer _downSyncTimer = new() { Interval = TimeSpan.FromSeconds(1) };
     // AS·无 倒计时：每秒刷新命中 7 天缓存作品卡片上的可再扫剩余时间
@@ -304,6 +307,8 @@ public partial class SearchPage : UserControl
         MakerList.ItemsSource = _makerWorks;
         _downSyncTimer.Tick += (_, _) => SyncMakerDownloadStates();
         _asCdTimer.Tick += (_, _) => TickAsCountdown();
+
+        FanboxHost.Content = FanboxView;
 
         // FANBOX 结果区的计数与「返回作家列表」按钮由本页的搜索栏统一呈现
         FanboxView.StatusChanged += text =>
@@ -353,7 +358,7 @@ public partial class SearchPage : UserControl
         // 全部收起
         ResultList.Visibility = Visibility.Collapsed;
         MakerList.Visibility = Visibility.Collapsed;
-        FanboxView.Visibility = Visibility.Collapsed;
+        FanboxHost.Visibility = Visibility.Collapsed;
         AsmrBanner.Visibility = Visibility.Collapsed;
         AutoDownloadButton.Visibility = Visibility.Collapsed;
         BackButton.Visibility = Visibility.Collapsed;
@@ -370,7 +375,7 @@ public partial class SearchPage : UserControl
             return;
         }
 
-        FanboxView.Visibility = Visibility.Visible;
+        FanboxHost.Visibility = Visibility.Visible;
         CountText.Text = FanboxView.CurrentStatus;
         CountText.Visibility = CountText.Text.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
         FanboxBackButton.Visibility = FanboxView.CanGoBack ? Visibility.Visible : Visibility.Collapsed;

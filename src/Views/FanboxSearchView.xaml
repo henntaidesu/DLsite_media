@@ -40,51 +40,63 @@
                      SelectionChanged="CardList_SelectionChanged">
                 <ListBox.ItemsPanel>
                     <ItemsPanelTemplate>
-                        <ctrl:VirtualizingWrapPanel ItemWidth="168" ItemHeight="236" />
+                        <!-- 单元格尺寸与媒体库作品卡一致：卡片 210x248 + CardGap 10 -->
+                        <ctrl:VirtualizingWrapPanel ItemWidth="220" ItemHeight="258" />
                     </ItemsPanelTemplate>
                 </ListBox.ItemsPanel>
                 <ListBox.ItemContainerStyle>
                     <Style TargetType="ListBoxItem" BasedOn="{StaticResource {x:Type ListBoxItem}}">
                         <Setter Property="Padding" Value="0" />
-                        <Setter Property="Margin" Value="5" />
+                        <Setter Property="Margin" Value="0,0,10,10" />
                         <Setter Property="HorizontalContentAlignment" Value="Left" />
                     </Style>
                 </ListBox.ItemContainerStyle>
                 <ListBox.ItemTemplate>
                     <DataTemplate>
-                        <Border Width="158" CornerRadius="8" Background="{StaticResource CardBrush}"
+                        <!-- 结构与 MediaLibPage 的作品卡同构：封面 186x140 + 标题 + （FANBOX 特有的）操作按钮行 -->
+                        <Border Style="{StaticResource Card}" Width="210" Height="248"
                                 BorderThickness="1" BorderBrush="{Binding PickBorderBrush}"
-                                Opacity="{Binding CardOpacity}">
-                            <StackPanel>
-                                <Grid>
-                                    <Border Height="118" CornerRadius="8,8,0,0" ClipToBounds="True"
-                                            Background="{StaticResource WindowBrush}">
-                                        <Image Source="{Binding Thumb}" Stretch="UniformToFill" />
-                                    </Border>
-                                    <!-- 左上角小标：作家的 public_id -->
-                                    <Border HorizontalAlignment="Left" VerticalAlignment="Top" Margin="6"
-                                            Background="#9E000000" CornerRadius="4" Padding="6,1"
+                                Opacity="{Binding CardOpacity}" ToolTip="{Binding Title}">
+                            <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="140" />
+                                    <RowDefinition Height="*" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+
+                                <!-- 封面：宽度固定 186、按比例铺满裁切，无图时显示纯色底 -->
+                                <Grid Width="186" Height="140" ClipToBounds="True">
+                                    <Border Background="#0CFFFFFF" CornerRadius="4" />
+                                    <Image Source="{Binding Thumb}" Stretch="UniformToFill" />
+                                    <!-- 左上角：作家的 public_id -->
+                                    <Border HorizontalAlignment="Left" VerticalAlignment="Top" Margin="4"
+                                            Background="#AA000000" CornerRadius="4" Padding="6,1"
                                             Visibility="{Binding TagVisibility}">
-                                        <TextBlock Text="{Binding TagText}" Foreground="#F3F3F3" FontSize="11" />
+                                        <TextBlock Text="{Binding TagText}" Foreground="WhiteSmoke" FontSize="11"
+                                                   TextTrimming="CharacterEllipsis" MaxWidth="106" />
                                     </Border>
-                                    <!-- 右上角小标：文件数 / 被收藏数 -->
-                                    <Border HorizontalAlignment="Right" VerticalAlignment="Top" Margin="6"
-                                            Background="#9E000000" CornerRadius="4" Padding="6,1"
+                                    <!-- 右上角：文件数 / 被收藏数 -->
+                                    <Border HorizontalAlignment="Right" VerticalAlignment="Top" Margin="4"
+                                            Background="#AA000000" CornerRadius="4" Padding="6,1"
                                             Visibility="{Binding MetaVisibility}">
-                                        <TextBlock Text="{Binding MetaText}" Foreground="#F3F3F3" FontSize="11" />
+                                        <TextBlock Text="{Binding MetaText}" Foreground="WhiteSmoke" FontSize="11" />
                                     </Border>
-                                    <!-- 底部状态角标：已下载 / 下载中 -->
-                                    <Border VerticalAlignment="Bottom" Margin="6" Background="#E66E6E7A"
-                                            CornerRadius="4" Padding="6,1" Visibility="{Binding StateVisibility}">
-                                        <TextBlock Text="{Binding StateText}" Foreground="#F3F3F3"
+                                    <!-- 底部：已下载 / 下载中 -->
+                                    <Border VerticalAlignment="Bottom" HorizontalAlignment="Stretch" Margin="4"
+                                            Background="#E66E6E7A" CornerRadius="4" Padding="6,1"
+                                            Visibility="{Binding StateVisibility}">
+                                        <TextBlock Text="{Binding StateText}" Foreground="WhiteSmoke"
                                                    FontSize="11" HorizontalAlignment="Center" />
                                     </Border>
                                 </Grid>
-                                <TextBlock Text="{Binding Title}" FontSize="12.5" FontWeight="Medium"
-                                           TextWrapping="Wrap" MaxHeight="40" Margin="9,7,9,6" />
+
+                                <TextBlock Grid.Row="1" Text="{Binding Title}" FontWeight="SemiBold"
+                                           TextWrapping="Wrap" TextTrimming="CharacterEllipsis"
+                                           Margin="0,6,0,0" />
+
                                 <!-- 卡内常驻操作按钮行：对齐 Web 的 .mcard-actions（DLsite 作品卡同款）。
                                      未下载 [选择/已选][下载]，已下载/下载中为禁用的状态按钮，作家卡无按钮。 -->
-                                <Grid Margin="8,0,8,8" Height="26">
+                                <Grid Grid.Row="2" Height="26" Margin="0,6,0,0">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="*" />
                                         <ColumnDefinition Width="*" />
@@ -106,7 +118,7 @@
                                             Visibility="{Binding BusyVisibility}" IsEnabled="False"
                                             Content="{Binding StateText}" />
                                 </Grid>
-                            </StackPanel>
+                            </Grid>
                         </Border>
                     </DataTemplate>
                 </ListBox.ItemTemplate>

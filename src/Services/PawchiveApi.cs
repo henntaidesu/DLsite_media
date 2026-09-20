@@ -267,21 +267,20 @@ public static class PawchiveApi
 
     private static PawchivePost ParsePost(JsonElement item, string service)
     {
-        var files = new List<PawchiveFile>();
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-        // 封面（file）与附件（attachments）常指向同一份文件，按站上哈希路径去重
-        var coverPath = "";
+        // 站点的 file 字段是作者设定的帖子封面，多是从作品里裁出来的横幅（如 800x420），
+        // 既不代表作品内容、也是 attachments 之外的另一份文件；attachments 才是作品本体。
+        // 因此：下载清单只要 attachments，封面取其中第一张图片。
+        // 只有在没有任何附件时，file 才是内容本身，这时才把它纳入清单并用作封面。
+        PawchiveFile? siteCover = null;
         if (item.TryGetProperty("file", out var file) && file.ValueKind == JsonValueKind.Object)
         {
             var path = DlsiteApi.JStr(file, "path");
             if (path.Length > 0)
-            {
-                coverPath = path;
-                if (seen.Add(path))
-                    files.Add(new PawchiveFile { Name = DlsiteApi.JStr(file, "name"), Path = path });
-            }
+                siteCover = new PawchiveFile { Name = DlsiteApi.JStr(file, "name"), Path = path };
         }
+
+        var files = new List<PawchiveFile>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         if (item.TryGetProperty("attachments", out var atts) && atts.ValueKind == JsonValueKind.Array)
             foreach (var att in atts.EnumerateArray())
             {
@@ -289,8 +288,13 @@ public static class PawchiveApi
                 if (path.Length > 0 && seen.Add(path))
                     files.Add(new PawchiveFile { Name = DlsiteApi.JStr(att, "name"), Path = path });
             }
-        if (coverPath.Length == 0 && files.Count > 0)
-            coverPath = files[0].Path;
+        if (files.Count == 0 && siteCover != null)
+            files.Add(siteCover);
+
+        // 封面 = 清单里的第一张图片；清单里没有图片（纯压缩包/视频帖）时退回站点封面
+        var coverPath = files.FirstOrDefault(f => IsImageName(f.Name))?.Path
+                        ?? siteCover?.Path
+                        ?? (files.Count > 0 ? files[0].Path : "");
 
         return new PawchivePost
         {
@@ -305,6 +309,13 @@ public static class PawchiveApi
             Files = files,
         };
     }
+
+    /// <summary>按图片看待的扩展名（决定卡片封面取哪一张）。</summary>
+    private static readonly string[] ImageExts =
+        [".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".avif", ".jfif"];
+
+    private static bool IsImageName(string name) =>
+        ImageExts.Contains(Path.GetExtension(name).ToLowerInvariant());
 
     /// <summary>tags 字段可能是 Postgres 数组字面量字符串（形如 {a,b}）或 JSON 数组，两种都解析。</summary>
     private static List<string> ParseTags(JsonElement item)

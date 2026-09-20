@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Net.Http;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Media.Imaging;
 
@@ -16,6 +18,7 @@ public static class ThumbnailCache
     private static readonly object Lock = new();
     private static readonly Dictionary<string, BitmapSource> Cache = new();
     private static readonly LinkedList<string> Lru = new();   // 头=最近使用，尾=最久未用
+    private static readonly SemaphoreSlim Net = new(6);       // 图床取图并发上限
 
     private static string? KeyFor(string path, int decodePixelWidth)
     {
@@ -81,6 +84,64 @@ public static class ThumbnailCache
         if (bmp != null)
             Store(key, bmp);
         return bmp;
+    }
+
+    /// <summary>
+    /// 取得（或下载解码）图床上的封面。图床侧已按 <c>?w=</c> 出好缩略图，这里只按 URL 缓存，
+    /// 不用文件指纹做键——换过封面时 URL 会随图床存储名一起变。
+    /// 失败返回 null，由调用方回退本地原图（图床宕机时媒体库仍能看图）。
+    /// </summary>
+    public static async Task<BitmapSource?> LoadUrlAsync(string url, int decodePixelWidth)
+    {
+        if (string.IsNullOrEmpty(url))
+            return null;
+        var key = $"{url}|{decodePixelWidth}";
+        var cached = Get(key);
+        if (cached != null)
+            return cached;
+        byte[] bytes;
+        try
+        {
+            // 限流：一屏卡片会同时要几十张图，放任并发既拖慢首屏也压垮图床
+            await Net.WaitAsync().ConfigureAwait(false);
+            try
+            {
+                bytes = await ImageHostClient.Shared.GetByteArrayAsync(url).ConfigureAwait(false);
+            }
+            finally
+            {
+                Net.Release();
+            }
+        }
+        catch (Exception e) when (e is HttpRequestException or TaskCanceledException or UriFormatException)
+        {
+            return null;
+        }
+        var bmp = await Task.Run(() => DecodeBytes(bytes, decodePixelWidth)).ConfigureAwait(true);
+        if (bmp != null)
+            Store(key, bmp);
+        return bmp;
+    }
+
+    private static BitmapSource? DecodeBytes(byte[] bytes, int decodePixelWidth)
+    {
+        try
+        {
+            var bmp = new BitmapImage();
+            using var ms = new MemoryStream(bytes);
+            bmp.BeginInit();
+            bmp.CacheOption = BitmapCacheOption.OnLoad;
+            bmp.StreamSource = ms;
+            if (decodePixelWidth > 0)
+                bmp.DecodePixelWidth = decodePixelWidth;
+            bmp.EndInit();
+            bmp.Freeze();
+            return bmp;
+        }
+        catch (Exception)
+        {
+            return null;   // 单张损坏不影响整页
+        }
     }
 
     private static BitmapSource? Decode(string path, int decodePixelWidth)

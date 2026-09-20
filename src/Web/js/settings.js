@@ -52,6 +52,43 @@ async function renderSettings() {
   // 媒体库（可管理：新建/删除、加/移除文件夹、扫描导入）
   await renderMediaLibSection(host);
 
+  // 图床存储：作品卡封面改由图床直供。媒体库多放在 HDD 上，翻一页卡片要逐张唤醒磁盘随机读，
+  // 封面搬到图床后浏览器直接向图床要 ?w= 缩略图，本机硬盘只在真正播放作品时才转。
+  s = el('div', 'sec'); s.appendChild(el('h3', null, '图床存储')); f = el('div', 'frm');
+  f.append(el('label', null, '启用'), mkSelect(boolOpts, d.imageHost.enabled ? 'True' : 'False', v => write('image_host', 'enabled', v)));
+  const ihUrl = mkInput(d.imageHost.baseUrl, v => write('image_host', 'base_url', v));
+  ihUrl.placeholder = 'http://192.168.1.5:9990';
+  f.append(el('label', null, '服务地址'), ihUrl);
+  const ihProj = mkInput(d.imageHost.project, v => write('image_host', 'project', v));
+  ihProj.placeholder = '图床里的项目标识（slug）';
+  f.append(el('label', null, '项目'), ihProj);
+  // Token 同 debrid：不回传明文，留空表示不修改
+  const ihToken = mkInput('', v => { if (v) write('image_host', 'token', v); });
+  ihToken.type = 'password';
+  ihToken.placeholder = d.imageHost.tokenSet ? '已设置（留空则不修改）' : '未设置';
+  f.append(el('label', null, 'API Token'), ihToken);
+  const ihRow = el('div');
+  const ihTest = el('button', 'icon-btn', '测试连接');
+  const ihSync = el('button', 'icon-btn', '迁移封面'); ihSync.style.marginLeft = '8px';
+  const ihRes = el('span'); ihRes.style.marginLeft = '10px';
+  // 三个值都从输入框现取：设置页是失焦即存的，刚输入的值可能还没写完库
+  ihTest.onclick = async () => {
+    ihRes.style.color = ''; ihRes.textContent = '测试中…';
+    const r = await apiPost('/api/imagehost/test', { baseUrl: ihUrl.value.trim(), project: ihProj.value.trim(), token: ihToken.value.trim() });
+    ihRes.textContent = r.ok ? `✓ 已连接（图床现有 ${r.count} 张）` : `✗ ${r.error || '连接失败'}`;
+    ihRes.style.color = r.ok ? '#4ade80' : '#f87171';
+  };
+  // 重复点不会跑两轮（服务端单实例串行），同一个作品也不会被迁移两次
+  ihSync.onclick = async () => { await apiPost('/api/imagehost/migrate', {}); pollImageHost(); };
+  ihRow.append(ihTest, ihSync, ihRes);
+  f.append(el('label', null, ''), ihRow);
+  s.appendChild(f);
+  const ihStatus = el('div', 'note'); ihStatus.id = 'imgHostStatus';
+  s.appendChild(ihStatus);
+  s.appendChild(el('div', 'note', '开启后作品卡封面由图床提供，未迁移的封面自动回退本地硬盘。迁移只复制不删除本地原图（它也是详情页的第一张图）；同一个作品重复迁移会被跳过，中断后再点一次即可续传。手机要看到图，服务地址须填电脑的局域网地址（不能是 127.0.0.1），并在图床「系统设置 → 附加访问主机名」里放行该地址。'));
+  host.appendChild(s);
+  pollImageHost();
+
   // 外部访问（只读）
   s = el('div', 'sec'); s.appendChild(el('h3', null, '外部访问')); f = el('div', 'frm');
   f.append(el('label', null, '状态'), el('div', 'ro', d.web.enabled ? '已开启' : '已关闭'));
@@ -60,6 +97,22 @@ async function renderSettings() {
   s.appendChild(f);
   s.appendChild(el('div', 'note', '外部访问的开关 / 端口 / 密码请在桌面端修改（避免从外部改动后断开连接）。'));
   host.appendChild(s);
+}
+
+// 图床迁移状态轮询：迁移中每 1.5s 刷新，结束或离开设置页即停（同扫描状态的做法）
+let _imgHostPoll = null;
+function pollImageHost() {
+  const tick = async () => {
+    const box = $('imgHostStatus');
+    if (!box || !document.body.contains(box)) { if (_imgHostPoll) { clearInterval(_imgHostPoll); _imgHostPoll = null; } return; }
+    let s; try { s = await api('/api/imagehost/status'); } catch (e) { return; }
+    // 常驻提示（已迁移/待迁移）由服务端给，桌面端共用同一句文案
+    box.textContent = s.running ? '⏳ 迁移中 ' + s.status : (s.status ? '✓ ' + s.status : s.idle);
+    if (!s.running && _imgHostPoll) { clearInterval(_imgHostPoll); _imgHostPoll = null; }
+  };
+  if (_imgHostPoll) clearInterval(_imgHostPoll);
+  tick();
+  _imgHostPoll = setInterval(tick, 1500);
 }
 
 // ---------- 媒体库管理（设置页内）----------

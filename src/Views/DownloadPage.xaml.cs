@@ -474,8 +474,7 @@ public partial class DownloadPage : UserControl
                 group = new DownloadGroupItem
                 {
                     WorkId = workId,
-                    DisplayName = FanboxService.IsFanboxWorkId(workId)
-                        ? FanboxService.DisplayName(workId) : workId,
+                    DisplayName = workId,
                 };
                 _groups.Add(group);
             }
@@ -823,18 +822,10 @@ public partial class DownloadPage : UserControl
             "SELECT DISTINCT \"work_id\" FROM \"download_list\" WHERE \"status\" != '1'");
         if (rows != null)
             foreach (var row in rows)
-            {
-                // fanbox 的占位作品行在 fanbox_posts，不在 works
-                var wid = row[0] as string ?? "";
-                if (FanboxService.IsFanboxWorkId(wid))
-                    Db.Execute(
-                        "DELETE FROM \"fanbox_posts\" WHERE \"post_id\" = @p AND \"state\" = '下载中'",
-                        ("@p", FanboxService.PostIdOf(wid)));
-                else
-                    Db.Execute(
-                        "DELETE FROM \"works\" WHERE \"work_id\" = @w AND \"state\" = '下载中'",
-                        ("@w", wid));
-            }
+                // 只清尚未入库的占位行；已品悦的作品留在媒体库里
+                Db.Execute(
+                    "DELETE FROM \"works\" WHERE \"work_id\" = @w AND \"state\" = '下载中'",
+                    ("@w", row[0] as string ?? ""));
         Db.Execute("DELETE FROM \"download_list\"");
         Refresh();
     }

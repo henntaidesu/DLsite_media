@@ -47,6 +47,11 @@ public static class AppConfig
         },
         // fanbox 数据源（pawchive 站点）：域名可换镜像，附件/缩略图子域由主域推导
         ["pawchive"] = new() { ["host"] = "pawchive.pw" },
+        // 图床存储（自建 Image_hosting 服务）：开启后作品卡封面由图床直供，不再逐张唤醒 HDD
+        ["image_host"] = new()
+        {
+            ["enabled"] = "False", ["base_url"] = "", ["project"] = "", ["token"] = "",
+        },
         // asmr.one 下载的文件类型过滤（仅勾选的类型会入队下载）
         ["asmr_filetype"] = new()
         {
@@ -310,4 +315,38 @@ public static class AppConfig
         }
         set => Write("pawchive", "host", value.Trim());
     }
+
+    // ---------- 图床存储（自建 Image_hosting）----------
+
+    /// <summary>是否启用图床存储（作品卡封面改由图床直供，媒体库翻页不再读 HDD 原图）。</summary>
+    public static bool ImageHostEnabled => Read("image_host", "enabled") == "True";
+
+    /// <summary>
+    /// 图床服务地址，如 http://192.168.1.5:9990。桌面端与手机浏览器共用这一个地址——
+    /// 填 127.0.0.1 手机就取不到图，故局域网场景要填本机局域网 IP，
+    /// 并在图床「系统设置 → 附加访问主机名」里放行该地址（否则图床按非法主机 400）。
+    /// </summary>
+    public static string ImageHostBaseUrl
+    {
+        get
+        {
+            var url = (Read("image_host", "base_url", "") ?? "").Trim().TrimEnd('/');
+            // 只填了 IP:端口时补上 http://，省得每个调用点自己判
+            if (url.Length > 0 && !url.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
+                               && !url.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+                url = "http://" + url;
+            return url;
+        }
+        set => Write("image_host", "base_url", value.Trim());
+    }
+
+    /// <summary>图床上的项目标识（图床管理端创建项目时的 slug）。</summary>
+    public static string ImageHostProject => (Read("image_host", "project", "") ?? "").Trim();
+
+    /// <summary>图床项目的 API Token（图床项目详情页复制）。</summary>
+    public static string ImageHostToken => (Read("image_host", "token", "") ?? "").Trim();
+
+    /// <summary>配置是否齐全（地址/项目/Token 缺一不可），与"是否启用"分开判断。</summary>
+    public static bool ImageHostConfigured =>
+        ImageHostBaseUrl.Length > 0 && ImageHostProject.Length > 0 && ImageHostToken.Length > 0;
 }

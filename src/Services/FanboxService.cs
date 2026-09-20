@@ -20,58 +20,27 @@ public class FanboxEnqueueResult
     public bool Ok => Error is null && PostCount > 0;
 }
 
-/// <summary>媒体库里的一位 fanbox 作家（按已下载作品聚合）。</summary>
-public class FanboxArtistRow
-{
-    public string Id { get; init; } = "";
-    public string Service { get; init; } = PawchiveApi.FanboxService;
-    public string Name { get; init; } = "";
-    public string PublicId { get; init; } = "";
-    /// <summary>本地已入库（已品悦）的作品数。</summary>
-    public int Downloaded { get; init; }
-    /// <summary>本地记录的作品总数（含下载中）。</summary>
-    public int Total { get; init; }
-}
-
-/// <summary>媒体库里的一篇 fanbox 作品。</summary>
-public class FanboxPostRow
-{
-    public string PostId { get; init; } = "";
-    public string Service { get; init; } = PawchiveApi.FanboxService;
-    public string ArtistId { get; init; } = "";
-    public string ArtistName { get; init; } = "";
-    public string Title { get; init; } = "";
-    public string Content { get; init; } = "";
-    public string Tags { get; init; } = "";
-    public string Published { get; init; } = "";
-    public string State { get; init; } = "";
-    public string Folder { get; init; } = "";
-    public string Library { get; init; } = "";
-    public string Cover { get; init; } = "";
-    public string CoverUrl { get; init; } = "";
-    public int FileCount { get; init; }
-    public bool Read { get; init; }
-    public bool Favorite { get; init; }
-
-    public string WorkId => FanboxService.WorkIdOf(PostId);
-}
-
 /// <summary>
-/// fanbox（pawchive）下载编排与本地库访问层。
+/// fanbox（pawchive）下载编排。
 ///
-/// 与 DLsite 作品不同，fanbox 数据不进 works 表，而是独立的 fanbox_artists / fanbox_posts 两张表
-/// （来源不同、字段语义不同，混进 works 会污染 DLsite 的元数据补全与媒体库聚合）。
-/// 下载队列仍复用 download_list（source='fanbox'，url 即直链），沿用同一套断点续传/限速/暂停设施：
-/// download_list.work_id 用 <see cref="WorkIdPrefix"/> + post_id 表示一篇 fanbox 作品，
-/// DownloadEngine 据此前缀把"作品目录/目标库/状态"等读写切到 fanbox_posts 表。
+/// fanbox 作品和 DLsite 作品一样存在 works 表里，用 <c>works.source = 'fanbox'</c> 区分来源
+/// （与 asmr 的做法一致）。这样媒体库的所有层级、扫描导入、移动媒体库、已读/收藏都不需要任何特例，
+/// 删掉下载记录后也能像 DLsite 作品那样靠「扫描媒体库」重新导回来。
+///
+/// 作品号用 <see cref="WorkIdPrefix"/> + 站上的作品号（如 FB12506673），作品文件夹即以此命名——
+/// 不用标题命名，避免改标题/重名导致目录对不上，也让顶层扫描能认出它们。
+/// 下载队列复用 download_list（source='fanbox'，url 即直链），沿用同一套断点续传/限速/暂停设施。
 /// </summary>
 public static class FanboxService
 {
-    /// <summary>download_list.work_id 的 fanbox 前缀（RJ 号不会以此开头，故可安全区分来源）。</summary>
-    public const string WorkIdPrefix = "fb_";
+    /// <summary>作品号前缀：FB + 站上作品号。RJ/BJ/VJ 不会以此开头，故可安全区分。</summary>
+    public const string WorkIdPrefix = "FB";
 
-    /// <summary>缓存目录与媒体库目录下的 fanbox 一级目录名。</summary>
-    public const string RootFolderName = "FANBOX";
+    /// <summary>works.source 的取值，标记该作品来自 fanbox。</summary>
+    public const string SourceName = "fanbox";
+
+    /// <summary>作品形式（works.work_type），媒体库「作品形式」分区据此归类。</summary>
+    public const string WorkTypeName = "FANBOX";
 
     /// <summary>作品目录内保存正文的文本文件名。</summary>
     public const string PostTextFile = "post.txt";
@@ -79,16 +48,19 @@ public static class FanboxService
     public static string WorkIdOf(string postId) => WorkIdPrefix + postId;
 
     public static string PostIdOf(string workId) =>
-        workId.StartsWith(WorkIdPrefix, StringComparison.Ordinal) ? workId[WorkIdPrefix.Length..] : workId;
+        workId.StartsWith(WorkIdPrefix, StringComparison.OrdinalIgnoreCase)
+            ? workId[WorkIdPrefix.Length..] : workId;
 
     public static bool IsFanboxWorkId(string workId) =>
-        workId.StartsWith(WorkIdPrefix, StringComparison.Ordinal);
+        workId.StartsWith(WorkIdPrefix, StringComparison.OrdinalIgnoreCase) &&
+        workId.Length > WorkIdPrefix.Length &&
+        workId[WorkIdPrefix.Length..].All(char.IsAsciiDigit);
 
     // ---------- 入队 ----------
 
     /// <summary>
-    /// 把选中的作品加入下载队列：写 fanbox_artists / fanbox_posts，再按文件逐条写 download_list，
-    /// 最后启动下载引擎。已入库（已品悦）或已在队列中的作品会跳过。
+    /// 把选中的作品加入下载队列：逐篇 UPSERT works 行，再按文件逐条写 download_list，最后启动下载引擎。
+    /// 已入库（已品悦）或已在队列中的作品会跳过。
     /// </summary>
     public static Task<FanboxEnqueueResult> EnqueuePostsAsync(
         PawchiveArtist artist, IReadOnlyList<PawchivePost> posts,
@@ -104,10 +76,6 @@ public static class FanboxService
         if (string.IsNullOrEmpty(AppConfig.DownloadPath))
             return new FanboxEnqueueResult { Error = "尚未设置下载缓存目录（请在系统设置中填写）" };
 
-        UpsertArtist(artist);
-
-        var artistFolder = SanitizeSegment(
-            artist.Name.Length > 0 ? artist.Name : artist.PublicId.Length > 0 ? artist.PublicId : artist.Id);
         var now = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.ffffff");
         int postCount = 0, fileCount = 0, skipped = 0;
 
@@ -116,39 +84,40 @@ public static class FanboxService
             if (post.Files.Count == 0)
             {
                 skipped++;
-                continue;   // 纯文字作品无附件可下载
+                continue;   // 纯文字/外链作品无附件可下载
             }
             var workId = WorkIdOf(post.Id);
-            if (IsBusy(post.Id))
+            if (IsBusy(workId))
             {
                 skipped++;
                 continue;   // 已入库或队列里还有未完成的文件
             }
 
-            var leaf = UniquePostFolderName(post, artist.Id);
-            var cacheFolder = Path.Combine(
-                AppConfig.DownloadPath, RootFolderName, artistFolder, leaf);
-
+            // meta_scanned='1'：元数据已从 pawchive 取到，别让 DL API 的两级元数据补全去动它
             Db.Execute(
-                "INSERT INTO \"fanbox_posts\" (\"service\", \"post_id\", \"artist_id\", \"artist_name\", " +
-                "\"title\", \"content\", \"tags\", \"published\", \"cover_url\", \"file_count\", " +
-                "\"state\", \"folder\", \"target\", \"target_lib\", \"down_time\") VALUES " +
-                "(@sv, @p, @a, @an, @t, @c, @tag, @pub, @cu, @fc, '下载中', @f, @tf, @tl, @now) " +
-                "ON CONFLICT(\"service\", \"post_id\") DO UPDATE SET " +
-                "\"artist_id\" = excluded.\"artist_id\", \"artist_name\" = excluded.\"artist_name\", " +
-                "\"title\" = excluded.\"title\", \"content\" = excluded.\"content\", " +
-                "\"tags\" = excluded.\"tags\", \"published\" = excluded.\"published\", " +
-                "\"cover_url\" = excluded.\"cover_url\", \"file_count\" = excluded.\"file_count\", " +
-                "\"state\" = excluded.\"state\", \"folder\" = excluded.\"folder\", " +
-                "\"target\" = excluded.\"target\", \"target_lib\" = excluded.\"target_lib\", " +
-                "\"down_time\" = excluded.\"down_time\", \"cover\" = NULL, \"library\" = NULL",
-                ("@sv", post.Service), ("@p", post.Id), ("@a", post.ArtistId.Length > 0 ? post.ArtistId : artist.Id),
-                ("@an", artist.Name), ("@t", post.Title), ("@c", post.Content),
-                ("@tag", string.Join(", ", post.Tags)), ("@pub", post.Published),
-                ("@cu", post.CoverPath), ("@fc", post.Files.Count), ("@f", cacheFolder),
-                ("@tf", (object?)targetFolder ?? ""), ("@tl", (object?)targetLib ?? ""), ("@now", now));
+                "INSERT INTO \"works\" (\"work_id\", \"work_name\", \"maker_id\", \"maker_name\", " +
+                "\"work_type\", \"intro_s\", \"genre\", \"sell_date\", \"state\", \"source\", " +
+                "\"meta_scanned\", \"down_time\") VALUES " +
+                "(@w, @n, @mi, @mn, @t, @s, @g, @d, '下载中', @src, '1', @time) " +
+                "ON CONFLICT(\"work_id\") DO UPDATE SET " +
+                "\"work_name\" = excluded.\"work_name\", \"maker_id\" = excluded.\"maker_id\", " +
+                "\"maker_name\" = excluded.\"maker_name\", \"work_type\" = excluded.\"work_type\", " +
+                "\"intro_s\" = excluded.\"intro_s\", \"genre\" = excluded.\"genre\", " +
+                "\"sell_date\" = excluded.\"sell_date\", \"state\" = excluded.\"state\", " +
+                "\"source\" = excluded.\"source\", \"meta_scanned\" = '1', " +
+                "\"down_time\" = excluded.\"down_time\", " +
+                "\"folder\" = NULL, \"target\" = NULL, \"target_lib\" = NULL, \"cover\" = NULL",
+                ("@w", workId), ("@n", post.Title), ("@mi", artist.Id), ("@mn", artist.Name),
+                ("@t", WorkTypeName), ("@s", post.Content), ("@g", string.Join(", ", post.Tags)),
+                ("@d", FormatPublished(post.Published)), ("@src", SourceName), ("@time", now));
 
-            // 重新入队前先清掉该作品的旧队列记录，避免残留文件行导致永远"未完成"
+            SyncGenres(workId, post.Tags);
+
+            // 入队目标媒体库目录（重启后仍可恢复）
+            if (!string.IsNullOrEmpty(targetFolder))
+                DownloadEngine.SetWorkTargetPath(workId, targetFolder, targetLib);
+
+            // 重新入队前清掉旧队列记录，避免残留文件行导致永远"未完成"
             Db.Execute("DELETE FROM \"download_list\" WHERE \"work_id\" = @w", ("@w", workId));
 
             var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -160,9 +129,9 @@ public static class FanboxService
                 Db.Execute(
                     "INSERT OR REPLACE INTO \"download_list\" " +
                     "(\"UUID\", \"work_id\", \"url\", \"status\", \"long\", \"delete\", \"source\", \"sub_path\") " +
-                    "VALUES (@uuid, @w, @url, '0', '0', '1', 'fanbox', @sub)",
+                    "VALUES (@uuid, @w, @url, '0', '0', '1', @src, @sub)",
                     ("@uuid", Guid.NewGuid().ToString()), ("@w", workId),
-                    ("@url", DownloadUrl(file, post.Id)), ("@sub", subPath));
+                    ("@url", DownloadUrl(file, post.Id)), ("@src", SourceName), ("@sub", subPath));
                 fileCount++;
             }
             postCount++;
@@ -180,6 +149,14 @@ public static class FanboxService
         return new FanboxEnqueueResult { PostCount = postCount, FileCount = fileCount, Skipped = skipped };
     }
 
+    /// <summary>发布时间 ISO（2026-08-29T23:53:10）转成 DLsite 的「年月日」写法，两种来源才能混排。</summary>
+    private static string FormatPublished(string published)
+    {
+        if (published.Length < 10)
+            return published;
+        return $"{published[..4]}年{published.Substring(5, 2)}月{published.Substring(8, 2)}日";
+    }
+
     /// <summary>
     /// 文件下载直链。站点按内容哈希存文件，同一张图可能同时出现在多篇作品里（路径相同 → URL 相同），
     /// 而 download_list 以 url 为主键，直接复用会让后入队的作品顶掉前一篇的记录；
@@ -192,55 +169,51 @@ public static class FanboxService
     }
 
     /// <summary>该作品是否已入库或仍有未完成的下载任务（据此跳过重复入队）。</summary>
-    private static bool IsBusy(string postId)
+    private static bool IsBusy(string workId)
     {
         var state = Db.Scalar(
-            "SELECT \"state\" FROM \"fanbox_posts\" WHERE \"service\" = @sv AND \"post_id\" = @p",
-            ("@sv", PawchiveApi.FanboxService), ("@p", postId)) as string;
+            "SELECT \"state\" FROM \"works\" WHERE \"work_id\" = @w", ("@w", workId)) as string;
         if (state == "已品悦")
             return true;
         var pending = Db.Scalar(
             "SELECT COUNT(*) FROM \"download_list\" WHERE \"work_id\" = @w AND \"status\" != '1'",
-            ("@w", WorkIdOf(postId)));
+            ("@w", workId));
         return pending != null && Convert.ToInt64(pending) > 0;
     }
 
     /// <summary>
-    /// 作品目录名：作品标题净化后截断；标题为空用作品号。
-    /// 同一作家下已有别的作品占用同名目录时追加作品号，避免互相覆盖。
-    /// </summary>
-    private static string UniquePostFolderName(PawchivePost post, string artistId)
-    {
-        var title = SanitizeSegment(post.Title);
-        if (title.Length == 0 || title == "_")
-            return post.Id;
-        if (title.Length > 80)
-            title = title[..80].TrimEnd('.', ' ');
-        var taken = Db.Scalar(
-            "SELECT COUNT(*) FROM \"fanbox_posts\" WHERE \"artist_id\" = @a AND \"post_id\" != @p " +
-            "AND (\"folder\" LIKE @like1 OR \"folder\" LIKE @like2)",
-            ("@a", artistId), ("@p", post.Id),
-            ("@like1", "%\\" + title), ("@like2", "%/" + title));
-        return taken != null && Convert.ToInt64(taken) > 0 ? $"{title} [{post.Id}]" : title;
-    }
-
-    /// <summary>
-    /// 作品内的文件名：站点的附件名多为随机串且不保证有序，统一加三位序号前缀保持展示顺序，
-    /// 同时保留原名便于识别；重名时再追加序号。
+    /// 作品内的文件名。
+    ///
+    /// 图片一律命名为「三位序号 + 扩展名」（001.jpg）：站点的图片附件名是随机串（形如
+    /// cl6TGSqZd0AopE9lk6EbWM8n.png），留着没有任何意义，序号才是浏览时需要的顺序信息。
+    /// 其余附件（压缩包 / 视频 / PSD 等）的文件名通常有含义，保留原名并加同样的序号前缀。
+    /// 序号在整篇作品内连续递增、图片与非图片共用一个计数器，以保持站上的原始顺序。
     /// </summary>
     private static string FileLeafName(int index, string name, string path, HashSet<string> seen)
     {
-        var clean = SanitizeSegment(name);
-        if (clean.Length == 0 || clean == "_")
-            clean = SanitizeSegment(Path.GetFileName(path));
-        var leaf = $"{index:D3}_{clean}";
-        if (leaf.Length > 120)
+        // 附件名偶尔不带扩展名，退回用站上哈希路径的扩展名
+        var ext = NormalizeExtension(Path.GetExtension(name));
+        if (ext.Length == 0)
+            ext = NormalizeExtension(Path.GetExtension(path));
+
+        string leaf;
+        if (ImageExts.Contains(ext))
         {
-            var ext = Path.GetExtension(leaf);
-            leaf = leaf[..(120 - ext.Length)] + ext;
+            leaf = $"{index:D3}{ext}";
         }
+        else
+        {
+            var clean = SanitizeSegment(name);
+            if (clean.Length == 0 || clean == "_")
+                clean = SanitizeSegment(Path.GetFileName(path));
+            leaf = $"{index:D3}_{clean}";
+            if (leaf.Length > 120)
+                leaf = leaf[..(120 - ext.Length)] + ext;
+        }
+
         if (seen.Add(leaf))
             return leaf;
+        // 同一作品内序号唯一，正常不会撞名；异常数据兜底追加序号
         var e = Path.GetExtension(leaf);
         var stem = leaf[..^e.Length];
         for (var i = 2; ; i++)
@@ -251,17 +224,17 @@ public static class FanboxService
         }
     }
 
-    private static void UpsertArtist(PawchiveArtist artist)
+    /// <summary>扩展名规范化为小写的 ".xxx"；不像扩展名（为空/过长/含非字母数字）时返回空串。</summary>
+    private static string NormalizeExtension(string? ext)
     {
-        Db.Execute(
-            "INSERT INTO \"fanbox_artists\" (\"service\", \"artist_id\", \"name\", \"public_id\", \"add_time\") " +
-            "VALUES (@sv, @a, @n, @pid, @now) " +
-            "ON CONFLICT(\"service\", \"artist_id\") DO UPDATE SET " +
-            "\"name\" = excluded.\"name\", \"public_id\" = excluded.\"public_id\"",
-            ("@sv", artist.Service.Length > 0 ? artist.Service : PawchiveApi.FanboxService),
-            ("@a", artist.Id), ("@n", artist.Name), ("@pid", artist.PublicId),
-            ("@now", DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.ffffff")));
+        ext = (ext ?? "").ToLowerInvariant();
+        return ext.Length is > 1 and <= 6 && ext[0] == '.' && ext[1..].All(char.IsAsciiLetterOrDigit)
+            ? ext : "";
     }
+
+    /// <summary>按图片处理的扩展名（命名规则与封面定位共用）。</summary>
+    private static readonly string[] ImageExts =
+        [".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".avif", ".jfif"];
 
     /// <summary>净化成合法的 Windows 目录/文件名片段。</summary>
     public static string SanitizeSegment(string name)
@@ -274,95 +247,51 @@ public static class FanboxService
         return name.Length == 0 ? "_" : name;
     }
 
-    // ---------- DownloadEngine 用的作品行读写（对应 works 表的同名操作）----------
-
-    /// <summary>作品的缓存/最终目录（入队时即写入，重启后续传与收尾都用同一目录）。</summary>
-    public static string ReadFolder(string workId) =>
-        Db.Scalar("SELECT \"folder\" FROM \"fanbox_posts\" WHERE \"post_id\" = @p", ("@p", PostIdOf(workId)))
-            as string ?? "";
-
-    public static void PersistFolder(string workId, string path) =>
-        Db.Execute(
-            "UPDATE \"fanbox_posts\" SET \"folder\" = @f WHERE \"post_id\" = @p " +
-            "AND (\"folder\" IS NULL OR \"folder\" = '')",
-            ("@f", path), ("@p", PostIdOf(workId)));
-
-    public static void SetTarget(string workId, string path, string? libName) =>
-        Db.Execute(
-            "UPDATE \"fanbox_posts\" SET \"target\" = @t, \"target_lib\" = @l WHERE \"post_id\" = @p",
-            ("@t", path), ("@l", libName ?? ""), ("@p", PostIdOf(workId)));
-
-    public static string? ReadTarget(string workId)
+    /// <summary>
+    /// 标签写进 work_genres（与 DLsite 作品同一张表），「作品标签」分区因此能一起统计。
+    /// 标签原文同时留在 works.genre 里供详情页显示。
+    /// </summary>
+    public static void SyncGenres(string workId, IEnumerable<string> tags)
     {
-        var v = Db.Scalar("SELECT \"target\" FROM \"fanbox_posts\" WHERE \"post_id\" = @p",
-            ("@p", PostIdOf(workId))) as string;
-        return string.IsNullOrEmpty(v) ? null : v;
+        Db.Execute("DELETE FROM \"work_genres\" WHERE \"work_id\" = @w", ("@w", workId));
+        foreach (var tag in tags)
+        {
+            var one = (tag ?? "").Trim();
+            if (one.Length > 0)
+                Db.Execute(
+                    "INSERT OR IGNORE INTO \"work_genres\" (\"work_id\", \"genre\") VALUES (@w, @g)",
+                    ("@w", workId), ("@g", one));
+        }
     }
 
-    public static string? ReadTargetLib(string workId)
-    {
-        var v = Db.Scalar("SELECT \"target_lib\" FROM \"fanbox_posts\" WHERE \"post_id\" = @p",
-            ("@p", PostIdOf(workId))) as string;
-        return string.IsNullOrEmpty(v) ? null : v;
-    }
-
-    /// <summary>全部文件下载完成后把状态从 下载中 改为 已下载。</summary>
-    public static void MarkDownloaded(string workId) =>
-        Db.Execute(
-            "UPDATE \"fanbox_posts\" SET \"state\" = '已下载' WHERE \"post_id\" = @p AND \"state\" = '下载中'",
-            ("@p", PostIdOf(workId)));
-
-    /// <summary>移动到媒体库后改写目录（及随目录一起移动的封面路径）。</summary>
-    public static void UpdateFolderAfterMove(string workId, string oldFolder, string newFolder) =>
-        Db.Execute(
-            "UPDATE \"fanbox_posts\" SET \"folder\" = @d, \"cover\" = REPLACE(\"cover\", @s, @d) " +
-            "WHERE \"post_id\" = @p",
-            ("@d", newFolder), ("@s", oldFolder), ("@p", PostIdOf(workId)));
-
-    /// <summary>入队时选定的媒体库目标目录：fanbox 统一落在 目标库/FANBOX/作家/作品 下。</summary>
-    public static string? TargetFolderFor(string workId)
-    {
-        var root = ReadTarget(workId);
-        if (string.IsNullOrEmpty(root))
-            return null;
-        var cache = ReadFolder(workId);
-        if (cache.Length == 0)
-            return null;
-        var leaf = Path.GetFileName(Path.TrimEndingDirectorySeparator(cache));
-        var artist = Path.GetFileName(Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(cache)) ?? "");
-        return artist.Length > 0
-            ? Path.Combine(root, RootFolderName, artist, leaf)
-            : Path.Combine(root, RootFolderName, leaf);
-    }
+    // ---------- 下载完成后的收尾 ----------
 
     /// <summary>
-    /// 下载完成后的收尾：移动到媒体库目录、写入正文文本、定位封面并标记为已品悦。
-    /// （fanbox 作品无压缩包，也不做 DLsite 元数据补全——元数据在入队时就已从 pawchive 取到。）
+    /// 下载完成后的收尾：复用 DLsite 那套入库流程（移动到媒体库 + 标记已品悦 + 关联媒体库），
+    /// 再补上 fanbox 特有的两件事——把正文写成文本文件、把封面指向目录内第一张图。
+    /// 元数据在入队时已从 pawchive 取到并置了 meta_scanned='1'，故不会触发 DL API 补全。
     /// </summary>
     internal static void FinalizeIntoLibrary(string workId)
     {
-        var postId = PostIdOf(workId);
-        var cacheFolder = ReadFolder(workId);
-        var folder = DownloadEngine.MoveToTargetFolder(workId, cacheFolder, TargetFolderFor(workId));
-        WritePostText(postId, folder);
+        var folderBefore = DownloadEngine.WorkFolderPath(workId);
+        UnzipService.FinalizeIntoLibrary(workId, folderBefore);
 
-        var cover = FindCover(folder);
-        var lib = DownloadEngine.ReadWorkTargetLib(workId);
-        Db.Execute(
-            "UPDATE \"fanbox_posts\" SET \"state\" = '已品悦', \"folder\" = @f, \"cover\" = @c, " +
-            "\"library\" = @l WHERE \"post_id\" = @p",
-            ("@f", folder), ("@c", cover ?? ""), ("@l", (object?)lib ?? ""), ("@p", postId));
-        Logger.Info($"fanbox 作品 {postId} 已入库，媒体库: {lib ?? "未关联"}");
+        var folder = Db.Scalar(
+            "SELECT \"folder\" FROM \"works\" WHERE \"work_id\" = @w", ("@w", workId)) as string ?? folderBefore;
+        WritePostText(workId, folder);
+        if (FindCover(folder) is { } cover)
+            Db.Execute("UPDATE \"works\" SET \"cover\" = @c WHERE \"work_id\" = @w",
+                ("@c", cover), ("@w", workId));
     }
 
-    /// <summary>把标题/发布时间/标签/正文写成作品目录下的文本文件，便于离线查看。</summary>
-    private static void WritePostText(string postId, string folder)
+    /// <summary>把标题/作家/发布时间/标签/正文写成作品目录下的文本文件，便于离线查看。</summary>
+    private static void WritePostText(string workId, string folder)
     {
         if (!Directory.Exists(folder))
             return;
         var rows = Db.Select(
-            "SELECT \"title\", \"published\", \"tags\", \"content\", \"artist_name\" " +
-            "FROM \"fanbox_posts\" WHERE \"post_id\" = @p", ("@p", postId));
+            "SELECT \"work_name\", \"sell_date\", \"genre\", \"intro_s\", \"maker_name\" " +
+            "FROM \"works\" WHERE \"work_id\" = @w", ("@w", workId));
         if (rows is not { Count: > 0 })
             return;
         var r = rows[0];
@@ -385,13 +314,11 @@ public static class FanboxService
         }
         catch (IOException e)
         {
-            Logger.Error($"fanbox 写入作品正文失败 {postId}: {e.Message}");
+            Logger.Error($"fanbox 写入作品正文失败 {workId}: {e.Message}");
         }
     }
 
-    private static readonly string[] ImageExts = [".jpg", ".jpeg", ".png", ".gif", ".webp"];
-
-    /// <summary>作品封面：目录内按名称排序的第一张图片（文件名的三位序号前缀保证与站上顺序一致）。</summary>
+    /// <summary>作品封面：目录内按名称排序的第一张图片（文件名的三位序号保证与站上顺序一致）。</summary>
     private static string? FindCover(string folder)
     {
         if (!Directory.Exists(folder))
@@ -409,121 +336,17 @@ public static class FanboxService
         }
     }
 
-    /// <summary>彻底删除一篇作品的记录（下载列表 + 作品行），供"删除"操作使用。</summary>
-    public static void PurgePost(string workId)
-    {
-        var postId = PostIdOf(workId);
-        Db.Execute("DELETE FROM \"download_list\" WHERE \"work_id\" = @w", ("@w", workId));
-        Db.Execute("DELETE FROM \"fanbox_posts\" WHERE \"post_id\" = @p", ("@p", postId));
-    }
-
-    /// <summary>下载页显示用的作品标题（取不到时回退作品号）。</summary>
-    public static string DisplayName(string workId)
-    {
-        var postId = PostIdOf(workId);
-        var rows = Db.Select(
-            "SELECT \"artist_name\", \"title\" FROM \"fanbox_posts\" WHERE \"post_id\" = @p", ("@p", postId));
-        if (rows is not { Count: > 0 })
-            return workId;
-        var artist = rows[0][0] as string ?? "";
-        var title = rows[0][1] as string ?? "";
-        if (title.Length == 0)
-            return workId;
-        return artist.Length > 0 ? $"{artist} · {title}" : title;
-    }
-
-    // ---------- 本地库查询（FANBOX 页与 Web 端共用）----------
-
-    /// <summary>本地已记录的作家列表（按已入库作品数降序）。</summary>
-    public static List<FanboxArtistRow> ListArtists()
-    {
-        var rows = Db.Select("""
-            SELECT a."artist_id", a."service", a."name", a."public_id",
-                   SUM(CASE WHEN p."state" = '已品悦' THEN 1 ELSE 0 END), COUNT(p."post_id")
-            FROM "fanbox_artists" a
-            LEFT JOIN "fanbox_posts" p ON p."artist_id" = a."artist_id"
-            GROUP BY a."service", a."artist_id"
-            HAVING COUNT(p."post_id") > 0
-            ORDER BY 5 DESC, a."name"
-            """);
-        return (rows ?? []).Select(r => new FanboxArtistRow
-        {
-            Id = r[0] as string ?? "",
-            Service = r[1] as string ?? PawchiveApi.FanboxService,
-            Name = r[2] as string ?? "",
-            PublicId = r[3] as string ?? "",
-            Downloaded = r[4] is null ? 0 : Convert.ToInt32(r[4]),
-            Total = r[5] is null ? 0 : Convert.ToInt32(r[5]),
-        }).ToList();
-    }
-
-    private const string PostColumns =
-        "\"post_id\", \"service\", \"artist_id\", \"artist_name\", \"title\", \"content\", \"tags\", " +
-        "\"published\", \"state\", \"folder\", \"library\", \"cover\", \"cover_url\", \"file_count\", " +
-        "\"read_flag\", \"favorite\"";
-
-    private static FanboxPostRow MapPost(object?[] r) => new()
-    {
-        PostId = r[0] as string ?? "",
-        Service = r[1] as string ?? PawchiveApi.FanboxService,
-        ArtistId = r[2] as string ?? "",
-        ArtistName = r[3] as string ?? "",
-        Title = r[4] as string ?? "",
-        Content = r[5] as string ?? "",
-        Tags = r[6] as string ?? "",
-        Published = r[7] as string ?? "",
-        State = r[8] as string ?? "",
-        Folder = r[9] as string ?? "",
-        Library = r[10] as string ?? "",
-        Cover = r[11] as string ?? "",
-        CoverUrl = r[12] as string ?? "",
-        FileCount = r[13] is null ? 0 : Convert.ToInt32(r[13]),
-        Read = r[14] as string == "1",
-        Favorite = r[15] as string == "1",
-    };
-
-    /// <summary>某作家本地已记录的作品（按发布时间倒序）。</summary>
-    public static List<FanboxPostRow> ListPosts(string artistId)
-    {
-        var rows = Db.Select(
-            $"SELECT {PostColumns} FROM \"fanbox_posts\" WHERE \"artist_id\" = @a " +
-            "ORDER BY \"published\" DESC, \"post_id\" DESC", ("@a", artistId));
-        return (rows ?? []).Select(MapPost).ToList();
-    }
-
-    /// <summary>全部已收藏的 fanbox 作品。</summary>
-    public static List<FanboxPostRow> ListFavorites()
-    {
-        var rows = Db.Select(
-            $"SELECT {PostColumns} FROM \"fanbox_posts\" WHERE \"favorite\" = '1' " +
-            "ORDER BY \"published\" DESC, \"post_id\" DESC");
-        return (rows ?? []).Select(MapPost).ToList();
-    }
-
-    public static FanboxPostRow? GetPost(string postId)
-    {
-        var rows = Db.Select(
-            $"SELECT {PostColumns} FROM \"fanbox_posts\" WHERE \"post_id\" = @p", ("@p", postId));
-        return rows is { Count: > 0 } ? MapPost(rows[0]) : null;
-    }
+    // ---------- 供搜索页用的查询 ----------
 
     /// <summary>该作家下已入库或已在队列中的作品号集合（作家主页据此标记"已下载/下载中"）。</summary>
     public static Dictionary<string, string> PostStates(string artistId)
     {
         var map = new Dictionary<string, string>();
         var rows = Db.Select(
-            "SELECT \"post_id\", \"state\" FROM \"fanbox_posts\" WHERE \"artist_id\" = @a", ("@a", artistId));
+            "SELECT \"work_id\", \"state\" FROM \"works\" WHERE \"source\" = @src AND \"maker_id\" = @a",
+            ("@src", SourceName), ("@a", artistId));
         foreach (var r in rows ?? [])
-            map[r[0] as string ?? ""] = r[1] as string ?? "";
+            map[PostIdOf(r[0] as string ?? "")] = r[1] as string ?? "";
         return map;
-    }
-
-    /// <summary>切换已读/收藏标记，返回切换后的值。</summary>
-    public static bool ToggleFlag(string postId, string field, bool value)
-    {
-        var column = field == "read" ? "read_flag" : "favorite";
-        Db.Execute($"UPDATE \"fanbox_posts\" SET \"{column}\" = @v WHERE \"post_id\" = @p",
-            ("@v", value ? "1" : "0"), ("@p", postId));
-        return value;
     }
 }

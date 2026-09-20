@@ -310,7 +310,14 @@ function drawGroups(items, mapFn, unit) {
 function makeWorkCard(w) {
   const c = el('div', 'card');
   const cov = el('div', 'cover');
-  if (w.cover) { const img = el('img'); img.loading = 'lazy'; img.src = `/api/cover?id=${enc(w.id)}&thumb=1`; cov.appendChild(img); }
+  if (w.cover) {
+    const img = el('img'); img.loading = 'lazy';
+    const local = `/api/cover?id=${enc(w.id)}&thumb=1`;
+    // 图床接管该封面时直取图床（不经本服务、不读本机 HDD）；图床取不到再回退本地
+    img.src = w.coverUrl || local;
+    if (w.coverUrl) img.onerror = () => { img.onerror = null; img.src = local; };
+    cov.appendChild(img);
+  }
   cov.appendChild(el('div', 'badge rj', w.id));
   if (w.type) cov.appendChild(el('div', 'badge type', w.type));
   c.appendChild(cov); c.appendChild(el('div', 'wt', w.name || w.id));

@@ -221,6 +221,13 @@
                                     </DataTemplate>
                                 </ItemsControl.ItemTemplate>
                             </ItemsControl>
+
+                            <!-- 网盘链接（作品本体放在谷歌网盘上时）：行由代码生成，每行一个可点的链接 -->
+                            <TextBlock x:Name="DetailLinksHeader" FontSize="17" FontWeight="Medium"
+                                       Margin="0,22,0,10" Visibility="Collapsed" />
+                            <StackPanel x:Name="DetailLinks" />
+                            <TextBlock x:Name="DetailLinksNote" TextWrapping="Wrap" Margin="0,8,0,0"
+                                       Visibility="Collapsed" Style="{StaticResource CaptionText}" />
                         </StackPanel>
                     </Border>
                 </StackPanel>

@@ -2049,6 +2049,10 @@ public static class WebServer
                 => "该网盘需要会员或已停用",
             "fileNotFound" or "fileUnavailable" or "notFound" or "fileError"
                 => "文件已失效或被删除",
+            // fanbox 投稿正文里的谷歌网盘链接（见 GoogleDriveClient）
+            GoogleDriveClient.QuotaError => "该文件的谷歌网盘下载配额已用尽，通常 24 小时后恢复",
+            GoogleDriveClient.GoneError => "谷歌网盘文件已失效、被删除或未公开分享",
+            GoogleDriveClient.FetchError => "连不上谷歌网盘（检查代理设置）",
             "floodDetected" => "请求过于频繁，请稍后再试",
             "badFileType" => "不支持的文件类型",
             _ => $"解析失败（{raw}）",
@@ -2064,6 +2068,9 @@ public static class WebServer
         "skipped" => "源站无此文件",
         "maxData" or "maxDataHost" => "流量用尽",
         "fileNotFound" or "fileUnavailable" or "notFound" or "fileError" => "文件失效",
+        GoogleDriveClient.QuotaError => "云盘限额",
+        GoogleDriveClient.GoneError => "云盘文件失效",
+        GoogleDriveClient.FetchError => "云盘连不上",
         "hostUnsupported" or "notDebrid" or "hostNotValid" or "noServer" => "网盘不支持",
         "notFreeHost" or "hostNotFree" or "disabledHost" or "disabledServerHost" => "需会员",
         "badToken" => "Key 无效",
@@ -2519,6 +2526,8 @@ public static class WebServer
             {
                 id = p.Id, title = p.Title, published = p.Published, tags = p.Tags,
                 files = p.Files.Count,
+                // 正文里的谷歌网盘链接数：作品本体常常只在网盘上，卡片要标出来
+                drive = GoogleDriveClient.LinksIn(p.Links).Count,
                 cover = p.CoverPath.Length > 0 ? PawchiveApi.ThumbUrl(p.CoverPath) : "",
                 state = states.GetValueOrDefault(p.Id, ""),
             }),
@@ -2563,6 +2572,11 @@ public static class WebServer
             }),
             // 压缩包 / PDF / 视频等：只报名字，下载走入队
             others = post.Files.Where(f => !PawchiveApi.IsImageName(f.Name)).Select(f => new { name = f.Name }),
+            // 正文里的谷歌网盘链接：入队时会一并下载（文件夹展开成逐个文件），下完照常解压
+            links = GoogleDriveClient.LinksIn(post.Links).Select(l => new
+            {
+                url = l.Url, folder = l.Kind == DriveLinkKind.Folder,
+            }),
         });
     }
 

@@ -387,16 +387,19 @@ public partial class FanboxSearchView : UserControl
             foreach (var p in batch)
             {
                 var state = states.GetValueOrDefault(p.Id, "");
+                // 作品本体常常只放在网盘上（站上只归档一张封面图）：这类作品照样可选可下
+                var drive = GoogleDriveClient.LinksIn(p.Links).Count;
                 _cards.Add(new FanboxCardItem
                 {
                     Kind = "post",
                     Id = p.Id,
                     Title = p.Title.Length > 0 ? p.Title : p.Id,
                     ThumbUrl = p.CoverPath.Length > 0 ? PawchiveApi.ThumbUrl(p.CoverPath) : "",
+                    TagText = drive > 0 ? I18n.Tr("☁ 网盘") : "",
                     MetaText = p.Files.Count > 0
                         ? I18n.Format(I18n.Tr("{n} 文件"), ("n", p.Files.Count)) : "",
                     State = state,
-                    Selectable = state.Length == 0 && p.Files.Count > 0,
+                    Selectable = state.Length == 0 && (p.Files.Count > 0 || drive > 0),
                 });
             }
             SetStatus(PostCountText());
@@ -465,8 +468,10 @@ public partial class FanboxSearchView : UserControl
         DetailThumbs.ItemsSource = _detailImages;
         DetailFields.Children.Clear();
         DetailOthers.ItemsSource = null;
+        DetailLinks.Children.Clear();
         DetailBodyHeader.Visibility = DetailBody.Visibility = Visibility.Collapsed;
         DetailOthersHeader.Visibility = Visibility.Collapsed;
+        DetailLinksHeader.Visibility = DetailLinksNote.Visibility = Visibility.Collapsed;
         DetailNoImage.Visibility = Visibility.Collapsed;
         DetailPane.ScrollToTop();
         LoadingOverlay.Visibility = Visibility.Visible;
@@ -498,13 +503,15 @@ public partial class FanboxSearchView : UserControl
 
         var images = post.Files.Where(f => PawchiveApi.IsImageName(f.Name)).ToList();
         var others = post.Files.Where(f => !PawchiveApi.IsImageName(f.Name)).ToList();
+        var links = GoogleDriveClient.LinksIn(post.Links);
 
         AddDetailField(I18n.Tr("作家"), _artistName.Length > 0 ? _artistName : _artistId);
         AddDetailField(I18n.Tr("发布"), FormatPublished(post.Published));
         if (post.Tags.Count > 0)
             AddDetailField(I18n.Tr("标签"), string.Join(" / ", post.Tags));
         AddDetailField(I18n.Tr("文件"),
-            I18n.Format(I18n.Tr("{n} 个（图片 {m}）"), ("n", post.Files.Count), ("m", images.Count)));
+            I18n.Format(I18n.Tr("{n} 个（图片 {m}）"), ("n", post.Files.Count), ("m", images.Count)) +
+            (links.Count > 0 ? "　" + I18n.Format(I18n.Tr("网盘 {n} 条"), ("n", links.Count)) : ""));
         AddDetailField(I18n.Tr("状态"), done ? I18n.Tr("已下载")
             : _detailState.Length > 0 ? _detailState : I18n.Tr("未下载"));
 
@@ -520,6 +527,7 @@ public partial class FanboxSearchView : UserControl
             DetailOthersHeader.Text = I18n.Format(I18n.Tr("其他附件（{n}）"), ("n", others.Count));
             DetailOthersHeader.Visibility = Visibility.Visible;
         }
+        RenderDriveLinks(links);
 
         foreach (var f in images)
             _detailImages.Add(new FanboxImageItem
@@ -533,6 +541,52 @@ public partial class FanboxSearchView : UserControl
             DetailNoImage.Text = I18n.Tr("这篇没有图片");
             DetailNoImage.Visibility = Visibility.Visible;
         }
+    }
+
+    /// <summary>
+    /// 渲染「网盘链接」区块（对齐 Web 的同名清单）：一行一条，可点开浏览器看原页面。
+    ///
+    /// 作者把作品本体（多为压缩包）放在谷歌网盘、站上只归档一张封面图时才有内容；
+    /// 下载本篇会把这些文件一并入队（共享文件夹先展开成逐个文件），下完按设置自动解压。
+    /// </summary>
+    private void RenderDriveLinks(List<DriveLink> links)
+    {
+        DetailLinks.Children.Clear();
+        if (links.Count == 0)
+        {
+            DetailLinksHeader.Visibility = DetailLinksNote.Visibility = Visibility.Collapsed;
+            return;
+        }
+        DetailLinksHeader.Text = I18n.Format(I18n.Tr("网盘链接（{n}）"), ("n", links.Count));
+        DetailLinksHeader.Visibility = Visibility.Visible;
+        foreach (var link in links)
+        {
+            var url = link.Url;
+            var text = new TextBlock { TextWrapping = TextWrapping.Wrap, FontSize = 13 };
+            text.Inlines.Add(new System.Windows.Documents.Run(
+                link.Kind == DriveLinkKind.Folder ? "📁 " : "📦 "));
+            var hyperlink = new System.Windows.Documents.Hyperlink(
+                new System.Windows.Documents.Run(url))
+            {
+                Foreground = (Brush)FindResource("AccentLightBrush"),
+                TextDecorations = null,
+            };
+            hyperlink.Click += (_, _) => System.Diagnostics.Process.Start(
+                new System.Diagnostics.ProcessStartInfo(url) { UseShellExecute = true });
+            text.Inlines.Add(hyperlink);
+            DetailLinks.Children.Add(new Border
+            {
+                Background = new SolidColorBrush(Color.FromRgb(0x1B, 0x1B, 0x22)),
+                BorderThickness = new Thickness(1),
+                BorderBrush = (Brush)FindResource("BorderBrush"),
+                CornerRadius = new CornerRadius(6),
+                Padding = new Thickness(9, 6, 9, 6),
+                Margin = new Thickness(0, 0, 0, 6),
+                Child = text,
+            });
+        }
+        DetailLinksNote.Text = I18n.Tr("下载本篇时会一并下载网盘里的文件，完成后按设置自动解压");
+        DetailLinksNote.Visibility = Visibility.Visible;
     }
 
     private void AddDetailField(string key, string value)

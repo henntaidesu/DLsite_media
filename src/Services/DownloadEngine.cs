@@ -447,6 +447,39 @@ public static class DownloadEngine
     }
 
     /// <summary>
+    /// 下载完成后按实际内容纠正 E-Hentai 图片的扩展名，连同磁盘上的文件一起改名。
+    ///
+    /// 入队与解析阶段的扩展名都来自站点登记的原始文件名，但站点投递显示图时会重新编码
+    /// （实测 .png 原图常变成 WebP），于是磁盘上会出现「001.jpg 里装着 WebP」——
+    /// 媒体库按扩展名判定与呈现图片，对不上就会显示异常。故以 magic bytes 为准再核一次。
+    /// 认不出格式时保持原样，不瞎改；.jpeg 与 .jpg 视为同一种，不做无谓改名。
+    /// </summary>
+    private static void FixEhentaiRealFormat(string key, string filePath, string subPath)
+    {
+        var real = EhentaiApi.SniffImageExtension(filePath);
+        if (real.Length == 0)
+            return;
+        var current = Path.GetExtension(filePath).ToLowerInvariant();
+        if (current == real || (real == ".jpg" && current == ".jpeg"))
+            return;
+
+        var fixedPath = Path.ChangeExtension(filePath, real);
+        try
+        {
+            File.Move(filePath, fixedPath, overwrite: true);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            Logger.Warning($"{Path.GetFileName(filePath)} 按实际格式改名失败: {e.Message}");
+            return;
+        }
+        Logger.Info($"{Path.GetFileName(filePath)} 实际为 {real}，已改名");
+        if (!string.IsNullOrEmpty(subPath))
+            Db.Execute("UPDATE \"download_list\" SET \"sub_path\" = @s WHERE \"UUID\" = @k",
+                ("@s", Path.ChangeExtension(subPath, real)), ("@k", key));
+    }
+
+    /// <summary>
     /// 用解析出的真实文件名纠正 E-Hentai 图片的扩展名。
     ///
     /// 入队时扩展名是从画廊页缩略图的 title 里猜的（那里偶尔没写，就按 .jpg 算），
@@ -462,6 +495,33 @@ public static class DownloadEngine
         if (string.Equals(Path.GetExtension(subPath), ext, StringComparison.OrdinalIgnoreCase))
             return subPath;
         var fixedPath = Path.ChangeExtension(subPath, ext);
+        Db.Execute("UPDATE \"download_list\" SET \"sub_path\" = @s WHERE \"UUID\" = @k",
+            ("@s", fixedPath), ("@k", key));
+        return fixedPath;
+    }
+
+    /// <summary>
+    /// 用解析出的真实文件名替换谷歌网盘文件的占位名。
+    ///
+    /// 入队时只知道网盘文件号（要现请求一次网盘才拿得到文件名），故先写成
+    /// 「序号_谷歌网盘_文件号」；这里拿到真名后连同磁盘落点一起改成「序号_真名」。
+    /// 三位序号前缀保持不动——它是作品内的排序依据，也保证同名文件不会互相顶掉。
+    /// 第二次解析同一文件时算出的名字与库里一致，不会反复改写。
+    /// </summary>
+    private static string FixDriveFileName(string key, string subPath, string resolvedName)
+    {
+        if (string.IsNullOrEmpty(subPath) || string.IsNullOrEmpty(resolvedName))
+            return subPath;
+        var slash = subPath.LastIndexOf('/');
+        var dir = slash >= 0 ? subPath[..(slash + 1)] : "";
+        var leaf = slash >= 0 ? subPath[(slash + 1)..] : subPath;
+        var prefix = leaf.Length > 4 && leaf[3] == '_' &&
+                     char.IsAsciiDigit(leaf[0]) && char.IsAsciiDigit(leaf[1]) && char.IsAsciiDigit(leaf[2])
+            ? leaf[..4] : "";
+        var fixedLeaf = prefix + FanboxService.SanitizeSegment(resolvedName);
+        if (fixedLeaf == leaf)
+            return subPath;
+        var fixedPath = dir + fixedLeaf;
         Db.Execute("UPDATE \"download_list\" SET \"sub_path\" = @s WHERE \"UUID\" = @k",
             ("@s", fixedPath), ("@k", key));
         return fixedPath;
@@ -652,7 +712,8 @@ public static class DownloadEngine
 
     /// <summary>单连接下载（断点续传 + 暂停 + 低速重试），返回 done/paused/slow/failed/throttled/missing。</summary>
     private static string DownloadSingle(HttpClient client, string url, string filePath,
-        string filename, string key, string workId, string? userAgent, string? cookie)
+        string filename, string key, string workId, string? userAgent, string? cookie,
+        bool expectImage = false)
     {
         long downloaded = 0;
         using var request = new HttpRequestMessage(HttpMethod.Get, url);
@@ -692,6 +753,16 @@ public static class DownloadEngine
                 return response.StatusCode is HttpStatusCode.Forbidden or HttpStatusCode.TooManyRequests
                     or HttpStatusCode.ServiceUnavailable ? "throttled" : "failed";
             }
+            // E-Hentai 会把「需要登录」当正常页面回（HTTP 200 + text/html 的登录页），
+            // 不认出来就会把登录页当图片存下并标记完成，整本画廊看着成功、实则全是 1.3KB 的 HTML。
+            // 这里在建文件之前拦下，磁盘上不会留下半个字节。
+            if (expectImage && response.Content.Headers.ContentType?.MediaType is { } mediaType &&
+                !mediaType.StartsWith("image/", StringComparison.OrdinalIgnoreCase))
+            {
+                Logger.Error($"{filename} 站点返回的不是图片（Content-Type: {mediaType}），多半是登录态失效");
+                return "notimage";
+            }
+
             var append = response.StatusCode == HttpStatusCode.PartialContent;
             if (!append)
                 downloaded = 0;  // 服务器不支持续传，从头下载
@@ -790,7 +861,8 @@ public static class DownloadEngine
 
     /// <summary>下载单个文件：清理旧版分段下载元数据后单连接下载，返回 done/paused/slow/failed/throttled/missing。</summary>
     private static string DownloadFile(HttpClient client, string directUrl, string filePath,
-        string filename, string key, string workId, string? userAgent = null, string? cookie = null)
+        string filename, string key, string workId, string? userAgent = null, string? cookie = null,
+        bool expectImage = false)
     {
         var (totalSize, _) = ProbeSize(client, directUrl, userAgent, cookie);
 
@@ -806,7 +878,8 @@ public static class DownloadEngine
         if (totalSize > 0 && File.Exists(filePath) && new FileInfo(filePath).Length == totalSize)
             return "done";
 
-        return DownloadSingle(client, directUrl, filePath, filename, key, workId, userAgent, cookie);
+        return DownloadSingle(client, directUrl, filePath, filename, key, workId, userAgent, cookie,
+            expectImage);
     }
 
     /// <summary>
@@ -861,6 +934,10 @@ public static class DownloadEngine
                 // E-Hentai：url 是图片页地址，直链在页面里、与 IP 绑定又会过期，必须临下载前现解析；
                 // 但和直链源一样带 sub_path（作品内的三位页码文件名）
                 var isEhentai = source == EhentaiApi.SourceName;
+                // fanbox 投稿正文里的谷歌网盘链接：队列里存的是分享页地址，直链同样要现解析
+                // （大文件还要先过一道「无法病毒扫描」确认页），故不能当直链直接下
+                var drive = source == FanboxService.SourceName ? GoogleDriveClient.Parse(url) : null;
+                var isDrive = drive is { Kind: DriveLinkKind.File };
                 var keepsSubPath = isDirect || isEhentai;
 
                 string directUrl;
@@ -888,6 +965,22 @@ public static class DownloadEngine
                     // 入队时的扩展名是按画廊页缩略图猜的，这里拿到了真名就以它为准，
                     // 并把 sub_path 一并改掉，免得磁盘上的文件名与下载列表显示的对不上
                     subPath = FixEhentaiExtension(key, subPath, link.FileName);
+                    filename = Path.GetFileName(subPath);
+                }
+                else if (isDrive)
+                {
+                    var link = GoogleDriveClient.ResolveFile(drive!.Value.Id);
+                    if (!link.Ok)
+                    {
+                        // 配额用尽要等一整天才恢复，热重试只是空转：一律标记解析失败停在这里，
+                        // 用户回头用「全部重新解析」再试（与 debrid 解析失败同一处理）
+                        Logger.Error($"{workId} 谷歌网盘解析失败: {url} ({link.Error})");
+                        SetParseFailed(key, link.Error);
+                        continue;
+                    }
+                    directUrl = link.Url;
+                    // 入队时只有占位名，这里拿到真名就改掉 sub_path，免得磁盘上的文件名与列表显示的对不上
+                    subPath = FixDriveFileName(key, subPath, link.FileName);
                     filename = Path.GetFileName(subPath);
                 }
                 else if (isDirect)
@@ -930,16 +1023,19 @@ public static class DownloadEngine
                     : Path.Combine(downloadPath, filename);
                 Directory.CreateDirectory(Path.GetDirectoryName(filePath) ?? downloadPath);
 
-                // pawchive 的防护网关会拦截浏览器 UA 的请求，取附件须换成中性 UA（见 PawchiveApi.UserAgent）
-                var userAgent = source == FanboxService.SourceName ? PawchiveApi.UserAgent : null;
+                // pawchive 的防护网关会拦截浏览器 UA 的请求，取附件须换成中性 UA（见 PawchiveApi.UserAgent）；
+                // 同属 fanbox 作品但托管在谷歌网盘的文件不在此列，照常用默认 UA
+                var userAgent = source == FanboxService.SourceName && !isDrive ? PawchiveApi.UserAgent : null;
                 // E-Hentai 的原图走站点自己的 fullimg 接口，要带登录 cookie（里站更是整站都要）
                 var cookie = isEhentai ? EhentaiApi.CookieHeader : null;
-                var result = DownloadFile(client, directUrl, filePath, filename, key, workId, userAgent, cookie);
+                // E-Hentai 的每一条都是图片，响应不是图片就说明站点回了错误页（见 notimage 分支）
+                var result = DownloadFile(client, directUrl, filePath, filename, key, workId, userAgent, cookie,
+                    expectImage: isEhentai);
                 DownloadProgress.TryRemove(key, out _);
                 // pawchive 对只归档了预览的投稿（has_full=false）原图一律 404，但 img.<host> 上
                 // 800px 的预览图是有的。原图没有就存预览图，总好过整篇空手而归；
                 // 只对 fanbox 的图片附件生效（压缩包/PDF 没有预览图，asmr 也没有这套机制）。
-                if (result == "missing" && source == FanboxService.SourceName &&
+                if (result == "missing" && source == FanboxService.SourceName && !isDrive &&
                     PawchiveApi.IsImageName(filename))
                 {
                     var thumbUrl = PawchiveApi.ThumbUrlFromFileUrl(directUrl);
@@ -966,14 +1062,23 @@ public static class DownloadEngine
                         Thread.Sleep(1000);
                     continue;
                 }
+                if (result == "notimage")
+                {
+                    // 站点回了错误页（最常见的是原图接口要求登录）。重试没有意义：
+                    // 要么去设置里补 cookie，要么把「图片画质」改成站点显示图，改完用
+                    // 「全部重新解析」把这些行放回队列。
+                    Logger.Error($"{workId} 站点未返回图片，已跳过该文件：{filename}");
+                    SetParseFailed(key, NotImageError);
+                    continue;
+                }
                 if (result == "missing")
                 {
                     // 直链源（asmr / fanbox）的 url 就是源站地址，文件之间也彼此独立：404 说明
                     // 源站没有这个文件（如 pawchive 只导入了投稿元数据、未归档文件本体），
                     // 再怎么重试都不会变，只会让整条队列原地打转。标记跳过、继续下能下的。
-                    // E-Hentai 不在此列：它的直链是刚解析出来的临时地址，404 多半是这一台图片
-                    // 服务器掉线，重新领取会重新解析（还会换一台机器），故按普通失败重试。
-                    if (isDirect)
+                    // E-Hentai 与谷歌网盘不在此列：它们的直链都是刚解析出来的临时地址，404 多半是
+                    // 那一台服务器掉线，重新领取会重新解析，故按普通失败重试。
+                    if (isDirect && !isDrive)
                     {
                         Logger.Warning($"{filename} 源站不存在（HTTP 404/410），跳过该文件");
                         SetParseFailed(key, SkippedError);
@@ -992,6 +1097,11 @@ public static class DownloadEngine
                     Thread.Sleep(5000);
                     continue;
                 }
+
+                // E-Hentai：站点投递的格式与它登记的原始文件名常常对不上（.png 原图被转成
+                // WebP 等），扩展名以刚下下来的内容为准再核一次
+                if (isEhentai)
+                    FixEhentaiRealFormat(key, filePath, subPath);
 
                 Logger.Info($"{workId}已完成下载");
                 SetStatus(key, "1", 100);
@@ -1069,6 +1179,13 @@ public static class DownloadEngine
 
     /// <summary>该失败原因是否为"源站无此文件"的跳过标记（区别于可重试的解析失败）。</summary>
     internal static bool IsSkipped(string? error) => error == SkippedError;
+
+    /// <summary>
+    /// 分卷"站点没返回图片"标记：响应是 HTML 错误页而非图片，最常见的是 E-Hentai 的原图接口
+    /// 要求登录（它回 HTTP 200 + 登录页，不认出来就会把登录页当图片存下来）。
+    /// 补上 cookie 或改用站点显示图后，「全部重新解析」即可重来。
+    /// </summary>
+    internal const string NotImageError = "notimage";
 
     /// <summary>
     /// 分卷"存的是预览图"标记：源站没有原图，改存了 800px 预览图（见 WorkerLoop 的 missing 分支）。

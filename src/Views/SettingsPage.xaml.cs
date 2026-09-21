@@ -145,7 +145,7 @@ public partial class SettingsPage : UserControl
         EhHashLabel.Text = "pass_hash";
         EhIgneousLabel.Text = "igneous";
         EhTestButton.Content = I18n.Tr("连接测试");
-        EhHint.Text = I18n.Tr("从浏览器登录后的 Cookie 中复制；exhentai(里站) 三项缺一不可，e-hentai(表站) 可匿名浏览");
+        EhHint.Text = I18n.Tr("从浏览器登录后的 Cookie 中复制；exhentai(里站) 三项缺一不可，e-hentai(表站) 可匿名浏览。原图需登录，未登录会自动改下站点显示图");
         BuildEhOriginalCombo();
         SystemGroup.Header = I18n.Tr("系统");
         MediaLibGroup.Header = I18n.Tr("媒体库");

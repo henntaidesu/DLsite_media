@@ -547,6 +547,11 @@ public static class EhentaiApi
     /// （页面上的「Download original」链接，即 fullimg.php）。要原图时优先取后者，
     /// 没有这个链接说明显示的就是原图本身。见 <see cref="AppConfig.EhentaiOriginal"/>。
     ///
+    /// **fullimg 必须登录**：未登录时它不报错，而是回 HTTP 200 + 登录页 HTML（约 1.3KB）。
+    /// 照着存就会把登录页当图片写进作品目录并标记完成——整本画廊全是 1.3KB 的 HTML，
+    /// 却一路"成功"入库。故没有 cookie 时一律退回显示图（它匿名可取，实测 image/webp 正常）。
+    /// 下载端另有一道 Content-Type 兜底，防的是 cookie 中途失效，见 DownloadEngine 的 notimage 分支。
+    ///
     /// 直链所在的图片服务器有时会临时掉线（页面上会给一个 nl 令牌用来换一台机器），
     /// 也可能因为本 IP 的看图额度用尽而只给出 509 占位图——后者重试无益，直接报 limit。
     /// </summary>
@@ -583,7 +588,7 @@ public static class EhentaiApi
                 ? System.Net.WebUtility.HtmlDecode(om.Groups[1].Value).Trim()
                 : "";
 
-            if (original && FullImgPattern.Match(html) is { Success: true } fm)
+            if (original && HasCookie && FullImgPattern.Match(html) is { Success: true } fm)
             {
                 var full = System.Net.WebUtility.HtmlDecode(fm.Groups[1].Value);
                 if (full.StartsWith('/'))
@@ -622,6 +627,38 @@ public static class EhentaiApi
     /// <summary>按图片看待的扩展名（命名与封面定位共用）。</summary>
     internal static readonly string[] ImageExts =
         [".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".avif"];
+
+    /// <summary>
+    /// 按 magic bytes 判断已下载图片的真实格式，返回 ".jpg"/".png"/".webp"/".gif"；认不出返回空串。
+    ///
+    /// 站点的显示图是重新编码过的，实测 .png 原图常被投递成 WebP、部分 .jpg 也是，
+    /// 而页面上登记的原始文件名仍写着原格式（且请求带什么 Accept 都不改变投递格式）。
+    /// 所以落盘扩展名只能以内容为准，否则会出现「001.jpg 里装着 WebP」。
+    /// 认不出时返回空串而不是瞎猜一个，调用方据此保持原名不动。
+    /// </summary>
+    internal static string SniffImageExtension(string filePath)
+    {
+        byte[] head;
+        try
+        {
+            using var fs = File.OpenRead(filePath);
+            head = new byte[12];
+            if (fs.Read(head, 0, head.Length) < head.Length)
+                return "";
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            return "";
+        }
+        return head switch
+        {
+            [0xFF, 0xD8, ..] => ".jpg",
+            [0x89, 0x50, 0x4E, 0x47, ..] => ".png",
+            [0x52, 0x49, 0x46, 0x46, _, _, _, _, 0x57, 0x45, 0x42, 0x50, ..] => ".webp",
+            [0x47, 0x49, 0x46, ..] => ".gif",
+            _ => "",
+        };
+    }
 
     /// <summary>从文件名/URL 猜扩展名，猜不出按 .jpg 算（站上绝大多数是 jpg）。</summary>
     internal static string ExtensionOf(string nameOrUrl)

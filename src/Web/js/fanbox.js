@@ -222,6 +222,8 @@ function fbMakePostCard(p) {
   const cov = el('div', 'cover');
   if (p.cover) { const img = el('img'); img.loading = 'lazy'; img.src = fbImg(p.cover); cov.appendChild(img); }
   if (p.files) cov.appendChild(el('div', 'badge type', p.files + ' 文件'));
+  // 作品本体在网盘上（站上只归档了一张封面图）：入队时会连网盘文件一起下
+  if (p.drive) cov.appendChild(el('div', 'badge rj', '☁ 网盘'));
   if (done || busy) cov.appendChild(el('div', 'badge lib', done ? '已下载' : p.state));
   c.appendChild(cov);
 
@@ -384,7 +386,9 @@ function fbRenderPost(box, d) {
     d.tags.forEach(t => wrap.appendChild(el('a', 'tag', t)));
     addF('标签', wrap);
   }
-  addF('文件', `${d.files} 个（图片 ${imgs.length}）`);
+  const links = d.links || [];
+  addF('文件', `${d.files} 个（图片 ${imgs.length}）` +
+    (links.length ? `　网盘 ${links.length} 条` : ''));
   addF('状态', done ? '已下载' : (d.state || '未下载'));
   top.appendChild(fields);
   root.appendChild(top);
@@ -399,6 +403,21 @@ function fbRenderPost(box, d) {
     const list = el('div', 'fb-files');
     others.forEach(f => list.appendChild(el('div', 'fb-file', f.name)));
     root.appendChild(list);
+  }
+  // 网盘链接：作者把作品本体（多为压缩包）放在网盘上时，站上只归档一张封面图。
+  // 下载本篇会连这些文件一起下（共享文件夹展开成逐个文件），下完按设置自动解压。
+  if (links.length) {
+    root.appendChild(el('h1', 'fb-subtitle', `网盘链接（${links.length}）`));
+    const list = el('div', 'fb-files');
+    links.forEach(l => {
+      const row = el('div', 'fb-file');
+      const a = el('a', null, (l.folder ? '📁 ' : '📦 ') + l.url);
+      a.href = l.url; a.target = '_blank'; a.rel = 'noreferrer';
+      row.appendChild(a);
+      list.appendChild(row);
+    });
+    root.appendChild(list);
+    root.appendChild(el('div', 'fb-note', '下载本篇时会一并下载网盘里的文件，完成后按设置自动解压'));
   }
   box.appendChild(root);
 }

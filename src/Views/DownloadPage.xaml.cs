@@ -657,6 +657,10 @@ public partial class DownloadPage : UserControl
                 => I18n.Tr("该网盘需要会员或已停用"),
             "fileNotFound" or "fileUnavailable" or "notFound" or "fileError"
                 => I18n.Tr("文件已失效或被删除"),
+            // fanbox 投稿正文里的谷歌网盘链接（见 GoogleDriveClient）
+            GoogleDriveClient.QuotaError => I18n.Tr("该文件的谷歌网盘下载配额已用尽，通常 24 小时后恢复"),
+            GoogleDriveClient.GoneError => I18n.Tr("谷歌网盘文件已失效、被删除或未公开分享"),
+            GoogleDriveClient.FetchError => I18n.Tr("连不上谷歌网盘（检查代理设置）"),
             "floodDetected" => I18n.Tr("请求过于频繁，请稍后再试"),
             "badFileType" => I18n.Tr("不支持的文件类型"),
             _ => I18n.Format(I18n.Tr("解析失败（{code}）"), ("code", raw)),
@@ -672,6 +676,9 @@ public partial class DownloadPage : UserControl
         "skipped" => I18n.Tr("源站无此文件"),
         "maxData" or "maxDataHost" => I18n.Tr("流量用尽"),
         "fileNotFound" or "fileUnavailable" or "notFound" or "fileError" => I18n.Tr("文件失效"),
+        GoogleDriveClient.QuotaError => I18n.Tr("云盘限额"),
+        GoogleDriveClient.GoneError => I18n.Tr("云盘文件失效"),
+        GoogleDriveClient.FetchError => I18n.Tr("云盘连不上"),
         "hostUnsupported" or "notDebrid" or "hostNotValid" or "noServer" => I18n.Tr("网盘不支持"),
         "notFreeHost" or "hostNotFree" or "disabledHost" or "disabledServerHost" => I18n.Tr("需会员"),
         "badToken" => I18n.Tr("Key 无效"),

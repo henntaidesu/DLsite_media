@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net;
@@ -365,6 +365,9 @@ public static class AppConfig
     /// <summary>
     /// 是否下载原图。关闭时下站点显示用的缩放图（默认 1280px 宽）——画质略低，
     /// 但每张只算一次看图额度，大批量下载不容易触发站点的限额封锁。
+    ///
+    /// 注意：原图走站点的 fullimg 接口，**必须登录**（填了 member_id / pass_hash）。
+    /// 未登录时 EhentaiApi 会自动退回显示图，不会因此下载失败。
     /// </summary>
     public static bool EhentaiOriginal => Read("ehentai", "original", "True") != "False";
 

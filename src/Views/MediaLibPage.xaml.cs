@@ -12,6 +12,7 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
+using R18MediaLibrary.Controls;
 using R18MediaLibrary.Core;
 using R18MediaLibrary.Services;
 
@@ -39,33 +40,62 @@ public enum MediaLibRoot
 public partial class MediaLibPage : UserControl
 {
     private const string UnknownMaker = ""; // maker_name 为空的作品归到"未知社团"
-    private const double WorkCardW = 210, WorkCardH = 248;   // WorkCardW 作为卡片最小宽度
-    private const double WorkCoverW = 186, WorkCoverH = 140;
-    private const double CardGap = 10;                       // 卡片右/下外边距
-    private const double CoverWidthDelta = WorkCardW - WorkCoverW; // 封面宽 = 卡片宽 - 内边距
-    private const double _cardWidth = WorkCardW;             // 卡片固定宽度（虚拟化网格按此列宽排布）
 
-    // 虚拟化卡片网格的单元格尺寸（含卡片外边距 CardGap）；作品卡与分组卡高度不同，按层级切换。
-    public static readonly DependencyProperty CardCellWidthProperty = DependencyProperty.Register(
-        nameof(CardCellWidth), typeof(double), typeof(MediaLibPage),
-        new PropertyMetadata(WorkCardW + CardGap));
+    // 卡片尺寸不再写死：列数/列宽由 CardGrid 按可用宽度算出（规则同 Web app.css，见 CLAUDE.md「UI 对齐基准」），
+    // 卡片拉伸填满单元格、高度按 2:3 比例随宽度走。这里只留封面取图宽度与分组卡的固定高度。
+    //
+    // 封面解码宽度取图床档位 400（Web 也固定按这一档取图）：卡片宽在 150~310 之间浮动，
+    // 逐宽度解码会让 ThumbnailCache 的键（含解码宽）散开、白白重复读盘。
+    private const int CoverDecodeWidth = ImageHostClient.CardWidth;
+
+    // 作品卡标题行高：字号 13.5 配 18px 行高，卡住两行（Web .wt 的 line-clamp: 2）
+    private const double TitleLineHeight = 18;
+
+    // 分组卡（媒体库/社团/标签/形式）固定高：Web 是内容高度（.group-card min-height 92），
+    // 桌面这套等高网格只能取一个值，110 兼顾两行社团名。
+    private const double ClickCardH = 110;
+
+    // 虚拟化卡片网格的排布参数；作品卡（.grid.cards）与分组卡（.grid.groups）不同，按层级切换。
+    public static readonly DependencyProperty CardMinWidthProperty = DependencyProperty.Register(
+        nameof(CardMinWidth), typeof(double), typeof(MediaLibPage),
+        new PropertyMetadata(CardGrid.MinWidth));
+    public static readonly DependencyProperty CardMaxColumnsProperty = DependencyProperty.Register(
+        nameof(CardMaxColumns), typeof(int), typeof(MediaLibPage),
+        new PropertyMetadata(CardGrid.MaxColumns));
+    public static readonly DependencyProperty CardAspectProperty = DependencyProperty.Register(
+        nameof(CardAspect), typeof(double), typeof(MediaLibPage),
+        new PropertyMetadata(CardGrid.Aspect));
     public static readonly DependencyProperty CardCellHeightProperty = DependencyProperty.Register(
         nameof(CardCellHeight), typeof(double), typeof(MediaLibPage),
-        new PropertyMetadata(WorkCardH + CardGap));
+        new PropertyMetadata(ClickCardH));
 
-    public double CardCellWidth
+    /// <summary>列宽下限（作品卡 150 / 分组卡 220）。</summary>
+    public double CardMinWidth
     {
-        get => (double)GetValue(CardCellWidthProperty);
-        set => SetValue(CardCellWidthProperty, value);
+        get => (double)GetValue(CardMinWidthProperty);
+        set => SetValue(CardMinWidthProperty, value);
     }
 
+    /// <summary>单行最多列数（作品卡 8；分组卡不限）。</summary>
+    public int CardMaxColumns
+    {
+        get => (int)GetValue(CardMaxColumnsProperty);
+        set => SetValue(CardMaxColumnsProperty, value);
+    }
+
+    /// <summary>卡片高宽比（作品卡 1.5；分组卡 0 = 用 CardCellHeight 的固定高）。</summary>
+    public double CardAspect
+    {
+        get => (double)GetValue(CardAspectProperty);
+        set => SetValue(CardAspectProperty, value);
+    }
+
+    /// <summary>分组卡的固定行高（CardAspect = 0 时生效）。</summary>
     public double CardCellHeight
     {
         get => (double)GetValue(CardCellHeightProperty);
         set => SetValue(CardCellHeightProperty, value);
     }
-
-    private const double ClickCardH = 110;   // 分组卡（媒体库/社团/标签/形式）固定高
 
     private static readonly string[] VideoExts =
         [".mp4", ".mkv", ".avi", ".wmv", ".mov", ".flv", ".webm", ".m4v", ".ts", ".mpg", ".mpeg"];
@@ -471,9 +501,12 @@ public partial class MediaLibPage : UserControl
     /// <summary>切到卡片视图：显示虚拟化卡片列表、隐藏详情/文件树容器，并绑定当前层级的卡片数据源。</summary>
     private void ShowCardList()
     {
-        // 分组卡与作品卡高度不同：切换单元格高度（含 CardGap 外边距）
-        CardCellWidth = _cardWidth + CardGap;
-        CardCellHeight = (_workLevelCount ? WorkCardH : ClickCardH) + CardGap;
+        // 作品卡 = Web 的 .grid.cards（列宽下限 150、单行最多 8 列、高宽比 1.5）；
+        // 分组卡 = Web 的 .grid.groups（列宽下限 220、不限列数、内容高度）
+        CardMinWidth = _workLevelCount ? CardGrid.MinWidth : CardGrid.GroupMinWidth;
+        CardMaxColumns = _workLevelCount ? CardGrid.MaxColumns : 0;
+        CardAspect = _workLevelCount ? CardGrid.Aspect : 0;
+        CardCellHeight = ClickCardH;
         CardList.ItemsSource = null;   // 强制重建容器，避免复用旧层级容器造成错位
         CardList.ItemsSource = _shownCards;
         CardList.Visibility = Visibility.Visible;
@@ -503,12 +536,14 @@ public partial class MediaLibPage : UserControl
 
     private Border MakeClickCard(string title, string caption, Action onClick)
     {
+        // 尺寸交给网格：卡片拉伸填满单元格（宽由 CardGrid 算、高为 ClickCardH），间距也由网格排
         var card = new Border
         {
             Style = (Style)FindResource("Card"),
-            Width = _cardWidth,
-            Height = 110,
-            Margin = new Thickness(0, 0, CardGap, CardGap),
+            Padding = new Thickness(14),   // Web .group-card { padding: 14px }
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            VerticalAlignment = VerticalAlignment.Stretch,
+            ClipToBounds = true,
             Cursor = Cursors.Hand,
             Tag = title.ToLowerInvariant(),  // 搜索过滤用
         };
@@ -516,10 +551,12 @@ public partial class MediaLibPage : UserControl
         panel.Children.Add(new TextBlock
         {
             Text = title, FontWeight = FontWeights.SemiBold, FontSize = 15, TextWrapping = TextWrapping.Wrap,
+            TextTrimming = TextTrimming.CharacterEllipsis,
         });
         panel.Children.Add(new TextBlock
         {
-            Text = caption, Style = (Style)FindResource("CaptionText"), Margin = new Thickness(0, 6, 0, 0),
+            Text = caption, Style = (Style)FindResource("CaptionText"), Margin = new Thickness(0, 8, 0, 0),
+            TextTrimming = TextTrimming.CharacterEllipsis,
         });
         card.Child = panel;
         card.MouseLeftButtonUp += (_, _) => onClick();
@@ -1035,6 +1072,24 @@ public partial class MediaLibPage : UserControl
             image.Source = bmp;
     }
 
+    /// <summary>
+    /// 同 <see cref="LoadImageAsync"/>，但把图贴成 Border 的背景画刷。
+    /// 卡片封面是满幅的（对齐 Web 的 .cover），用带 CornerRadius 的 Border 画才能被圆角裁掉——
+    /// Border 的 ClipToBounds 只按矩形裁，塞一个 Image 进去顶角会戳出圆角之外。
+    /// </summary>
+    private static async void LoadCoverAsync(Border target, string path, int decodePixelWidth, string? hostUrl = null)
+    {
+        BitmapSource? bmp = null;
+        if (hostUrl != null)
+            bmp = await ThumbnailCache.LoadUrlAsync(hostUrl, decodePixelWidth);
+        bmp ??= await ThumbnailCache.LoadAsync(path, decodePixelWidth);
+        if (bmp == null || !ReferenceEquals(target.Tag, path))
+            return;
+        var brush = new ImageBrush(bmp) { Stretch = Stretch.UniformToFill };
+        brush.Freeze();
+        target.Background = brush;
+    }
+
     /// <summary>单个作品卡片：封面 + 角标（RJ号/形式）+ 标题。</summary>
     private Border MakeWorkCard(object?[] row)
     {
@@ -1044,67 +1099,89 @@ public partial class MediaLibPage : UserControl
         var workType = row[3] as string ?? "";
         var cover = row[5] as string;
 
+        // 尺寸全交给网格：卡片拉伸填满单元格（宽由 CardGrid 算、高 = 宽 × 1.5），内部按 Web 的
+        // .cover(flex:2) / .wt(flex:1) 分成 2:1 两行；封面满幅无内边距（Web .card 也没有）
         var card = new Border
         {
             Style = (Style)FindResource("Card"),
-            Width = _cardWidth,
-            Height = WorkCardH,
-            Margin = new Thickness(0, 0, CardGap, CardGap),
+            Padding = new Thickness(0),
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            VerticalAlignment = VerticalAlignment.Stretch,
+            ClipToBounds = true,
             Cursor = Cursors.Hand,
             ToolTip = workName.Length > 0 ? workName : workId,
         };
-        var panel = new StackPanel();
+        var panel = new Grid();
+        panel.RowDefinitions.Add(new RowDefinition { Height = new GridLength(CardGrid.CoverFlex, GridUnitType.Star) });
+        panel.RowDefinitions.Add(new RowDefinition { Height = new GridLength(CardGrid.TextFlex, GridUnitType.Star) });
 
-        // 封面区：宽度随卡片动态变化、高度固定（图片按比例铺满裁切），无封面时显示纯色底
-        var coverGrid = new Grid { Width = _cardWidth - CoverWidthDelta, Height = WorkCoverH, ClipToBounds = true };
-        coverGrid.Children.Add(new Border
+        // 封面区：满幅拉伸、按比例铺满裁切（Web .cover img { object-fit: cover }），无封面时显示纯色底。
+        // 上两角随卡片圆角裁切，下两角为直角（下面紧接标题区）。
+        var coverGrid = new Grid { ClipToBounds = true };
+        var coverFill = new Border
         {
             Background = new SolidColorBrush(Color.FromArgb(12, 255, 255, 255)),
-            CornerRadius = new CornerRadius(4),
-        });
+            CornerRadius = new CornerRadius(8, 8, 0, 0),
+            Tag = cover,
+        };
+        coverGrid.Children.Add(coverFill);
         if (cover != null)
-        {
             // 封面后台解码：存在性检查也并入后台流程（LoadAsync→ThumbnailCache 内做 FileInfo）
-            var image = new Image { Stretch = Stretch.UniformToFill, Tag = cover };
-            coverGrid.Children.Add(image);
-            LoadImageAsync(image, cover, (int)WorkCoverW * 2, ImageHostService.CoverUrl(workId));
-        }
-        // RJ 号：封面左上角；作品形式：右上角
+            LoadCoverAsync(coverFill, cover, CoverDecodeWidth, ImageHostService.CoverUrl(workId));
+        // RJ 号：封面左上角；作品形式：右上角。RJ 号定长按需占位，作品形式吃剩下的宽度、超出省略——
+        // 等价 Web 的 .badge { max-width: 70% }，且窄卡片上两个角标不会叠在一起
+        var badgeBar = new Grid { VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(6) };
+        badgeBar.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        badgeBar.ColumnDefinitions.Add(new ColumnDefinition());
         var badgeStyleBg = new SolidColorBrush(Color.FromArgb(170, 0, 0, 0));
         var rjBadge = new Border
         {
             Background = badgeStyleBg, CornerRadius = new CornerRadius(4),
             Padding = new Thickness(6, 1, 6, 1),
-            HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Top,
-            Margin = new Thickness(4),
-            Child = new TextBlock { Text = workId, FontSize = 11, Foreground = Brushes.WhiteSmoke },
+            HorizontalAlignment = HorizontalAlignment.Left,
+            Child = new TextBlock
+            {
+                Text = workId, FontSize = 11, Foreground = Brushes.WhiteSmoke,
+                TextTrimming = TextTrimming.CharacterEllipsis,
+            },
         };
-        coverGrid.Children.Add(rjBadge);
+        badgeBar.Children.Add(rjBadge);
         if (workType.Length > 0)
-            coverGrid.Children.Add(new Border
+        {
+            var typeBadge = new Border
             {
                 Background = badgeStyleBg, CornerRadius = new CornerRadius(4),
                 Padding = new Thickness(6, 1, 6, 1),
-                HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Top,
-                Margin = new Thickness(4),
-                MaxWidth = _cardWidth - CoverWidthDelta - 80,
+                HorizontalAlignment = HorizontalAlignment.Right,
+                Margin = new Thickness(6, 0, 0, 0),
                 Child = new TextBlock
                 {
                     Text = workType, FontSize = 11, Foreground = Brushes.WhiteSmoke,
                     TextTrimming = TextTrimming.CharacterEllipsis,
                 },
-            });
+            };
+            Grid.SetColumn(typeBadge, 1);
+            badgeBar.Children.Add(typeBadge);
+        }
+        coverGrid.Children.Add(badgeBar);
         panel.Children.Add(coverGrid);
 
-        panel.Children.Add(new TextBlock
+        // 标题区：占卡片高度 1/3，最多两行、超出省略（Web .wt 的 -webkit-line-clamp: 2）
+        var title = new TextBlock
         {
             Text = workName.Length > 0 ? workName : workId,
-            FontWeight = FontWeights.SemiBold,
+            FontSize = 13.5,
+            FontWeight = FontWeights.Medium,
             TextWrapping = TextWrapping.Wrap,
             TextTrimming = TextTrimming.CharacterEllipsis,
-            MaxHeight = 80,
-            Margin = new Thickness(0, 6, 0, 0),
-        });
+            LineHeight = TitleLineHeight,
+            LineStackingStrategy = LineStackingStrategy.BlockLineHeight,
+            MaxHeight = TitleLineHeight * 2,
+            VerticalAlignment = VerticalAlignment.Top,
+            Margin = new Thickness(10, 8, 10, 10),   // Web .wt { padding: 8px 10px 10px }
+        };
+        Grid.SetRow(title, 1);
+        panel.Children.Add(title);
         card.Child = panel;
         card.MouseLeftButtonUp += (_, _) =>
         {
@@ -1527,7 +1604,10 @@ public partial class MediaLibPage : UserControl
         ShowFileTree();
     }
 
-    private const double ThumbTileW = 160, ThumbTileH = 160, ThumbGap = 10;
+    // 缩略图墙对齐 Web 的 .fgrid：列宽下限 150、单行最多 10 列、gap 10、缩略图 1:1，
+    // 文件名行 ThumbNameH 固定高（Web .fname 单行省略号）。解码宽仍取 2 倍档位，避免随列宽散开。
+    private const double ThumbNameH = 26;
+    private const int ThumbDecodeWidth = 320;
 
     /// <summary>后台线程：递归收集作品内所有图片（排除 DataSource）并排序（可能上千文件）。</summary>
     private static List<string> CollectThumbImages(string folder)
@@ -1564,7 +1644,15 @@ public partial class MediaLibPage : UserControl
                 Margin = new Thickness(TreeRowBaseIndent, 8, 0, 0),
             };
 
-        var wrap = new WrapPanel { Margin = new Thickness(0, 0, 0, 12) };
+        var wrap = new ResponsiveWrapPanel
+        {
+            Margin = new Thickness(0, 0, 0, 12),
+            MinItemWidth = CardGrid.FileMinWidth,
+            MaxColumns = CardGrid.FileMaxColumns,
+            ItemGap = CardGrid.FileGap,
+            ItemAspect = 1,              // 缩略图正方形（Web .fthumb { aspect-ratio: 1 / 1 }）
+            ExtraHeight = ThumbNameH,    // 再加文件名行
+        };
         foreach (var path in images)
             wrap.Children.Add(MakeThumbTile(path));
         return wrap;
@@ -1573,31 +1661,37 @@ public partial class MediaLibPage : UserControl
     /// <summary>单张缩略图：图片填充裁切 + 文件名，单击整页预览。</summary>
     private Border MakeThumbTile(string path)
     {
+        // 尺寸由 ResponsiveWrapPanel 给：整块拉伸填满单元格，缩略图占正方形那部分、文件名占固定一行
         var tile = new Border
         {
-            Width = ThumbTileW,
-            Margin = new Thickness(0, 0, ThumbGap, ThumbGap),
+            Style = (Style)FindResource("Card"),   // Web .fcard：面底色 + 圆角
+            Padding = new Thickness(0),
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            VerticalAlignment = VerticalAlignment.Stretch,
+            ClipToBounds = true,
             Cursor = Cursors.Hand,
             ToolTip = Path.GetFileName(path),
         };
-        var panel = new StackPanel();
-        var coverGrid = new Grid { Width = ThumbTileW, Height = ThumbTileH, ClipToBounds = true };
-        coverGrid.Children.Add(new Border
+        var panel = new Grid();
+        panel.RowDefinitions.Add(new RowDefinition());
+        panel.RowDefinitions.Add(new RowDefinition { Height = new GridLength(ThumbNameH) });
+        var thumb = new Border
         {
             Background = new SolidColorBrush(Color.FromArgb(12, 255, 255, 255)),
-            CornerRadius = new CornerRadius(4),
-        });
-        var thumb = new Image { Stretch = Stretch.UniformToFill, ClipToBounds = true, Tag = path };
-        coverGrid.Children.Add(thumb);
-        LoadImageAsync(thumb, path, (int)ThumbTileW * 2);   // 后台解码，避免整墙缩略图卡 UI
-        panel.Children.Add(coverGrid);
-        panel.Children.Add(new TextBlock
+            CornerRadius = new CornerRadius(8, 8, 0, 0),
+            Tag = path,
+        };
+        LoadCoverAsync(thumb, path, ThumbDecodeWidth);   // 后台解码，避免整墙缩略图卡 UI
+        panel.Children.Add(thumb);
+        var name = new TextBlock
         {
             Text = Path.GetFileName(path),
             Style = (Style)FindResource("CaptionText"),
-            Margin = new Thickness(2, 4, 2, 0),
+            Margin = new Thickness(8, 4, 8, 4),
             TextTrimming = TextTrimming.CharacterEllipsis,
-        });
+        };
+        Grid.SetRow(name, 1);
+        panel.Children.Add(name);
         tile.Child = panel;
         tile.MouseLeftButtonUp += (_, _) => ShowPreview(path);
         return tile;

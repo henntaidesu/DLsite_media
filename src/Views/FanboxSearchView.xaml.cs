@@ -504,7 +504,8 @@ public partial class FanboxSearchView : UserControl
                 {
                     image.BeginInit();
                     image.CacheOption = BitmapCacheOption.OnLoad;
-                    image.DecodePixelWidth = 372;   // 封面宽 186 的 2 倍，与媒体库作品卡一致
+                    // 卡片宽随窗口在 150~310 之间浮动，解码宽取固定一档 400（同媒体库作品卡的封面档位）
+                    image.DecodePixelWidth = 400;
                     image.StreamSource = ms;
                     image.EndInit();
                 }

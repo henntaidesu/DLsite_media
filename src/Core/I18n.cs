@@ -248,6 +248,23 @@ public static class I18n
         ["{n} 个解析失败"] = new() { ["zh_TW"] = "{n} 個解析失敗", ["ja"] = "{n} 件解析失敗", ["en"] = "{n} parse failed" },
         ["流量用尽"] = new() { ["zh_TW"] = "流量用盡", ["ja"] = "通信量超過", ["en"] = "Data limit reached" },
         ["文件失效"] = new() { ["zh_TW"] = "檔案失效", ["ja"] = "ファイル失効", ["en"] = "File dead" },
+        // 直链源（asmr / fanbox）源站 404：文件不存在，跳过后继续下别的文件
+        ["源站无此文件"] = new()
+            { ["zh_TW"] = "來源站無此檔案", ["ja"] = "配信元に無し", ["en"] = "Not on source" },
+        ["源站没有这个文件，已跳过"] = new()
+        {
+            ["zh_TW"] = "來源站沒有這個檔案，已略過",
+            ["ja"] = "配信元にこのファイルが存在しないためスキップしました",
+            ["en"] = "Not available on the source site, skipped",
+        },
+        ["源站无文件"] = new()
+            { ["zh_TW"] = "來源站無檔案", ["ja"] = "配信元にファイル無し", ["en"] = "No files on source" },
+        ["已完成（跳过 {n}）"] = new()
+        {
+            ["zh_TW"] = "已完成（略過 {n}）",
+            ["ja"] = "完了（{n} 件スキップ）",
+            ["en"] = "Completed ({n} skipped)",
+        },
         ["网盘不支持"] = new() { ["zh_TW"] = "網盤不支援", ["ja"] = "非対応ホスト", ["en"] = "Host unsupported" },
         ["需会员"] = new() { ["zh_TW"] = "需會員", ["ja"] = "会員限定", ["en"] = "Premium only" },
         ["Key 无效"] = new() { ["zh_TW"] = "Key 無效", ["ja"] = "Key 無効", ["en"] = "Bad API key" },

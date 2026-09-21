@@ -382,15 +382,20 @@ public partial class DownloadPage : UserControl
         if (statuses.Contains("4"))
             return (I18n.Format(I18n.Tr("已暂停 {done}/{total}"),
                 ("done", done), ("total", statuses.Count)), "#9aa4b2");
-        if (statuses.Contains("2"))
+        // 源站没有的文件（'2' + skipped）是已终结的跳过项，不是待处理的失败：
+        // 只要还有别的文件下成了，作品照常走完并入库，状态里只标注跳过了几个
+        var skipped = items.Count(i => i.Status == "2" && DownloadEngine.IsSkipped(i.Error));
+        var fails = items.Where(i => i.Status == "2" && !DownloadEngine.IsSkipped(i.Error)).ToList();
+        if (fails.Count > 0)
         {
-            var fails = items.Where(i => i.Status == "2").ToList();
             // 失败原因一致 → 直接显示该原因（如"文件失效"/"流量用尽"）；原因不一 → 显示失败数
             var labels = fails.Select(f => ParseErrorLabel(f.Error)).Distinct().ToList();
             if (labels.Count == 1)
                 return (labels[0], "#f87171");
             return (I18n.Format(I18n.Tr("{n} 个解析失败"), ("n", fails.Count)), "#f87171");
         }
+        if (skipped > 0 && done == 0)
+            return (I18n.Tr("源站无文件"), "#f87171");   // 整篇都没归档：没有任何文件可下，不会入库
         if (statuses.Contains("6"))
             return (I18n.Tr("无可用下载连接"), "#f87171");
         // 全部分卷已下载完成：解压前/解压中/移动中显示对应状态
@@ -404,7 +409,9 @@ public partial class DownloadPage : UserControl
                 return (I18n.Format(I18n.Tr("移动中 {pct}%"), ("pct", unzip.Pct)), "#a78bfa");
             return (I18n.Format(I18n.Tr("解压中 {pct}%"), ("pct", unzip.Pct)), "#60a5fa");
         }
-        return (I18n.Tr("已完成"), "#4ade80");
+        return (skipped > 0
+            ? I18n.Format(I18n.Tr("已完成（跳过 {n}）"), ("n", skipped))
+            : I18n.Tr("已完成"), "#4ade80");
     }
 
     // 状态颜色只有固定几种，冻结并按 hex 缓存复用，避免每秒每条目重复分配画刷；
@@ -632,6 +639,8 @@ public partial class DownloadPage : UserControl
             return I18n.Tr("解析失败（原因未知，可能是链接失效或网盘不支持）");
         return raw switch
         {
+            // 直链源（asmr / fanbox）源站 404：不是解析失败，是源站压根没有这个文件
+            "skipped" => I18n.Tr("源站没有这个文件，已跳过"),
             "badToken" => I18n.Tr("debrid-link API Key 无效或已过期"),
             "maxData" or "maxDataHost" => I18n.Tr("debrid-link 流量额度已用尽"),
             "maxLink" or "maxLinkHost" => I18n.Tr("链接数超过 debrid-link 限制"),
@@ -653,6 +662,7 @@ public partial class DownloadPage : UserControl
     /// <summary>把 debrid-link 解析失败错误码翻译成简短状态标签（用于状态列；完整说明见 MapParseError）。</summary>
     internal static string ParseErrorLabel(string? raw) => raw switch
     {
+        "skipped" => I18n.Tr("源站无此文件"),
         "maxData" or "maxDataHost" => I18n.Tr("流量用尽"),
         "fileNotFound" or "fileUnavailable" or "notFound" or "fileError" => I18n.Tr("文件失效"),
         "hostUnsupported" or "notDebrid" or "hostNotValid" or "noServer" => I18n.Tr("网盘不支持"),

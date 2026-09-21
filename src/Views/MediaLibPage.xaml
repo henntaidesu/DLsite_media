@@ -100,9 +100,14 @@
                 </ItemsControl.Template>
                 <ItemsControl.ItemsPanel>
                     <ItemsPanelTemplate>
+                        <!-- 列宽/列数随窗口自适应（规则同 Web app.css 的 CSS Grid，见 Controls/CardGrid.cs）：
+                             作品卡 min 150 / 最多 8 列 / 高宽比 1.5；分组卡 min 220 / 不限列 / 固定高 -->
                         <ctrl:VirtualizingWrapPanel
-                            ItemWidth="{Binding CardCellWidth, RelativeSource={RelativeSource AncestorType=UserControl}}"
-                            ItemHeight="{Binding CardCellHeight, RelativeSource={RelativeSource AncestorType=UserControl}}" />
+                            MinItemWidth="{Binding CardMinWidth, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                            MaxColumns="{Binding CardMaxColumns, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                            ItemAspect="{Binding CardAspect, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                            ItemHeight="{Binding CardCellHeight, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                            ItemGap="12" />
                     </ItemsPanelTemplate>
                 </ItemsControl.ItemsPanel>
                 <ItemsControl.ItemTemplate>

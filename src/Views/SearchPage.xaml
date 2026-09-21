@@ -169,25 +169,37 @@
                      SelectionChanged="MakerList_SelectionChanged">
                 <ListBox.ItemsPanel>
                     <ItemsPanelTemplate>
-                        <ctrl:VirtualizingWrapPanel ItemWidth="168" ItemHeight="196" />
+                        <!-- 排布同 Web .grid.cards：列宽下限 150、单行最多 8 列、gap 12、卡片高宽比 1.5 -->
+                        <ctrl:VirtualizingWrapPanel MinItemWidth="150" MaxColumns="8"
+                                                    ItemGap="12" ItemAspect="1.5" />
                     </ItemsPanelTemplate>
                 </ListBox.ItemsPanel>
                 <ListBox.ItemContainerStyle>
+                    <!-- 卡片拉伸填满单元格；间距由网格自己排，容器不再带外边距 -->
                     <Style TargetType="ListBoxItem" BasedOn="{StaticResource {x:Type ListBoxItem}}">
                         <Setter Property="Padding" Value="0" />
-                        <Setter Property="Margin" Value="5" />
-                        <Setter Property="HorizontalContentAlignment" Value="Left" />
+                        <Setter Property="Margin" Value="0" />
+                        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                        <Setter Property="VerticalContentAlignment" Value="Stretch" />
                     </Style>
                 </ListBox.ItemContainerStyle>
                 <ListBox.ItemTemplate>
                     <DataTemplate>
-                        <Border Width="158" CornerRadius="8" Background="{StaticResource CardBrush}"
+                        <!-- 尺寸由网格给（宽随窗口、高 = 宽 × 1.5）：封面占 2/3、标题占 1/3，同 Web .card.mk -->
+                        <Border CornerRadius="8" ClipToBounds="True" Background="{StaticResource CardBrush}"
                                 Opacity="{Binding CardOpacity}">
-                            <StackPanel>
+                            <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="2*" />
+                                    <RowDefinition Height="*" />
+                                </Grid.RowDefinitions>
                                 <Grid>
-                                    <Border Height="118" CornerRadius="8,8,0,0" ClipToBounds="True"
-                                            Background="{StaticResource WindowBrush}">
-                                        <Image Source="{Binding Thumb}" Stretch="UniformToFill" />
+                                    <!-- 封面：图用 ImageBrush 画在带圆角的 Border 上，顶角随卡片圆角裁切 -->
+                                    <Border CornerRadius="8,8,0,0" Background="{StaticResource WindowBrush}" />
+                                    <Border CornerRadius="8,8,0,0">
+                                        <Border.Background>
+                                            <ImageBrush ImageSource="{Binding Thumb}" Stretch="UniformToFill" />
+                                        </Border.Background>
                                     </Border>
                                     <!-- RJ 角标 -->
                                     <Border HorizontalAlignment="Left" VerticalAlignment="Top" Margin="6"
@@ -222,9 +234,12 @@
                                                    HorizontalAlignment="Center" VerticalAlignment="Center" />
                                     </Border>
                                 </Grid>
-                                <TextBlock Text="{Binding Title}" FontSize="12.5" FontWeight="Medium"
-                                           TextWrapping="Wrap" MaxHeight="40" Margin="9,7,9,10" />
-                            </StackPanel>
+                                <!-- 最多两行、超出省略（Web .card.mk .wt 的 line-clamp: 2） -->
+                                <TextBlock Grid.Row="1" Text="{Binding Title}" FontSize="13.5" FontWeight="Medium"
+                                           TextWrapping="Wrap" TextTrimming="CharacterEllipsis"
+                                           LineHeight="18" LineStackingStrategy="BlockLineHeight" MaxHeight="36"
+                                           VerticalAlignment="Top" Margin="10,8,10,10" />
+                            </Grid>
                         </Border>
                     </DataTemplate>
                 </ListBox.ItemTemplate>

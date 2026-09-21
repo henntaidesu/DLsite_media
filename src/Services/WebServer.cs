@@ -1721,15 +1721,20 @@ public static class WebServer
             return ($"等待下载 {done}/{statuses.Count}", "#facc15");
         if (statuses.Contains("4"))
             return ($"已暂停 {done}/{statuses.Count}", "#9aa4b2");
-        if (statuses.Contains("2"))
+        // 源站没有的文件（'2' + skipped）是已终结的跳过项，不是待处理的失败：
+        // 只要还有别的文件下成了，作品照常走完并入库，状态里只标注跳过了几个
+        var skipped = items.Count(i => i.Status == "2" && DownloadEngine.IsSkipped(i.Error));
+        var fails = items.Where(i => i.Status == "2" && !DownloadEngine.IsSkipped(i.Error)).ToList();
+        if (fails.Count > 0)
         {
-            var fails = items.Where(i => i.Status == "2").ToList();
             // 失败原因一致 → 显示该原因（如"文件失效"/"流量用尽"）；原因不一 → 显示失败数
             var labels = fails.Select(f => ParseErrorLabel(f.Error)).Distinct().ToList();
             if (labels.Count == 1)
                 return (labels[0], "#f87171");
             return ($"{fails.Count} 个解析失败", "#f87171");
         }
+        if (skipped > 0 && done == 0)
+            return ("源站无文件", "#f87171");   // 整篇都没归档：没有任何文件可下，不会入库
         if (statuses.Contains("6"))
             return ("无可用下载连接", "#f87171");
         if (DownloadEngine.UnzipProgress.TryGetValue(workId, out var unzip))
@@ -1739,7 +1744,7 @@ public static class WebServer
             if (unzip.State == "moving") return ($"移动中 {unzip.Pct}%", "#a78bfa");
             return ($"解压中 {unzip.Pct}%", "#60a5fa");
         }
-        return ("已完成", "#4ade80");
+        return (skipped > 0 ? $"已完成（跳过 {skipped}）" : "已完成", "#4ade80");
     }
 
     private static (int Pct, double? Speed) FileProgress(string uuid, string status, string dbLong)
@@ -1972,6 +1977,8 @@ public static class WebServer
             return "解析失败（原因未知，可能是链接失效或网盘不支持）";
         return raw switch
         {
+            // 直链源（asmr / fanbox）源站 404：不是解析失败，是源站压根没有这个文件
+            "skipped" => "源站没有这个文件，已跳过",
             "badToken" => "debrid-link API Key 无效或已过期",
             "maxData" or "maxDataHost" => "debrid-link 流量额度已用尽",
             "maxLink" or "maxLinkHost" => "链接数超过 debrid-link 限制",
@@ -1993,6 +2000,7 @@ public static class WebServer
     /// <summary>把 debrid-link 解析失败错误码翻译成简短状态标签（用于状态列；完整说明见 MapParseError，镜像 WPF）。</summary>
     private static string ParseErrorLabel(string? raw) => raw switch
     {
+        "skipped" => "源站无此文件",
         "maxData" or "maxDataHost" => "流量用尽",
         "fileNotFound" or "fileUnavailable" or "notFound" or "fileError" => "文件失效",
         "hostUnsupported" or "notDebrid" or "hostNotValid" or "noServer" => "网盘不支持",

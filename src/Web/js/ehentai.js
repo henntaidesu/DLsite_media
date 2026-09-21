@@ -31,6 +31,9 @@ function ehBuildPanes(host) {
 
 function ehResetState() {
   if (ehPaging && ehPaging.io) ehPaging.io.disconnect();
+  if (ehDetail && ehDetail.io) ehDetail.io.disconnect();
+  if (ehDetail && ehDetail.thumbIo) ehDetail.thumbIo.disconnect();
+  ehDetail = null;
   ehPaging = null;
   ehItems = []; ehSel = new Set();
   ehLevel = 'results'; ehKeyword = ''; ehGridScroll = 0;
@@ -214,9 +217,16 @@ function ehUpdateSelInfo() {
 
 // ---------- 画廊详情 ----------
 
-// 点画廊卡进入：拉取元数据与缩略图清单并渲染。
-// 这里只给缩略图：站点每张图的直链都要单独进它的图片页才拿得到，
-// 为看一眼详情解析几百页既慢又白耗看图额度——要原图就走下载。
+// 详情页当前这本的分页状态。缩略图来自画廊列表页（匿名访问是 20 张一拼的雪碧图），
+// 取它不消耗看图额度，所以整本都能列出来——但仍按列表页分批要，下拉到哪儿才要哪一页。
+let ehDetail = null;   // { gid, token, total, p, hasMore, loading, io, urls, thumbIo }
+
+// 灯箱用的地址数组：每个元素是「按页码现解析现取大图」的服务端地址。
+// 故意传同一个数组对象给 LB——数组随翻页增长，灯箱里按方向键也就能翻到后来加载的页。
+const ehPageUrl = (im) =>
+  `/api/eh/page?gid=${ehDetail.gid}&token=${enc(ehDetail.token)}&page=${im.index}&key=${enc(im.key)}`;
+
+// 点画廊卡进入：先要第一页（元数据 + 前 20 张缩略图），其余随下拉补齐
 async function ehOpenGallery(g) {
   const gen = ++ehDetailGen;
   ehGridScroll = window.scrollY || 0;
@@ -226,18 +236,22 @@ async function ehOpenGallery(g) {
   $('count').textContent = g.title || String(g.gid);
   window.scrollTo(0, 0);
 
-  const q = new URLSearchParams();
-  q.set('gid', g.gid); q.set('token', g.token);
+  if (ehDetail && ehDetail.io) ehDetail.io.disconnect();
+  if (ehDetail && ehDetail.thumbIo) ehDetail.thumbIo.disconnect();
+  ehDetail = { gid: g.gid, token: g.token, total: g.files || 0, p: 0, hasMore: true, loading: false,
+               io: null, thumbIo: null, urls: [] };
+
   let d;
-  try { d = await api('/api/eh/gallery?' + q); } catch (e) { return; }
+  try { d = await api(`/api/eh/gallery?gid=${g.gid}&token=${enc(g.token)}&p=0`); } catch (e) { return; }
   if (gen !== ehDetailGen || ehLevel !== 'detail') return;
   box.innerHTML = '';
   if (d.error) { box.appendChild(el('div', 'empty', d.error)); return; }
-  ehRenderGallery(box, d.gallery || g, d.images || []);
+  ehDetail.total = d.total || ehDetail.total;
+  ehRenderGallery(box, d.gallery || g, d.images || [], !!d.hasMore, gen);
 }
 
-// 详情结构对齐媒体库详情页（.detail > .dtop > .gallery + .fields），沿用同一套样式
-function ehRenderGallery(box, g, imgs) {
+// 详情结构对齐媒体库详情页（.detail > .dtop > .gallery + .fields），下面再接整本图片网格
+function ehRenderGallery(box, g, images, hasMore, gen) {
   const done = g.state === '已品悦';
   const busy = g.state === '下载中' || g.state === '已下载';
   const key = ehKey(g);
@@ -265,31 +279,15 @@ function ehRenderGallery(box, g, imgs) {
   const root = el('div', 'detail');
   root.appendChild(el('h1', null, g.title || String(g.gid)));
 
+  // 上半：封面 + 字段
   const top = el('div', 'dtop');
   const gallery = el('div', 'gallery');
-  const shots = imgs.length ? imgs.map(im => ehImg(im.thumb)) : (g.cover ? [ehImg(g.cover)] : []);
-  if (shots.length) {
+  if (g.cover) {
     const main = el('img', 'main');
-    main.src = shots[0];
-    main.onclick = () => LB.open(shots, 0);
+    main.src = ehImg(g.cover);
     gallery.appendChild(main);
-    if (shots.length > 1) {
-      const thumbs = el('div', 'thumbs');
-      shots.forEach((src, i) => {
-        const t = el('img'); t.src = src; t.loading = 'lazy';
-        if (i === 0) t.className = 'sel';
-        t.onclick = () => {
-          main.src = src;
-          main.onclick = () => LB.open(shots, i);
-          thumbs.querySelectorAll('img').forEach(x => x.classList.remove('sel'));
-          t.classList.add('sel');
-        };
-        thumbs.appendChild(t);
-      });
-      gallery.appendChild(thumbs);
-    }
   } else {
-    gallery.appendChild(el('div', 'empty', '取不到预览图'));
+    gallery.appendChild(el('div', 'empty', '取不到封面'));
   }
   top.appendChild(gallery);
 
@@ -318,13 +316,83 @@ function ehRenderGallery(box, g, imgs) {
   top.appendChild(fields);
   root.appendChild(top);
 
-  // 详情只抓前两页缩略图，页数更多时说明一句，免得看着像漏了；
-  // 匿名访问时站点只给雪碧图、没有逐页缩略图地址，这时退回封面并说明原因
-  if (!imgs.length)
-    root.appendChild(el('div', 'fb-body', '站点未提供逐页缩略图（登录后可在站点把画廊版式设为大缩略图），此处只显示封面。'));
-  else if (g.files > imgs.length)
-    root.appendChild(el('div', 'fb-body', `仅预览前 ${imgs.length} 页，共 ${g.files} 页；下载可取全本。`));
+  // 下半：整本图片
+  root.appendChild(el('h1', 'fb-subtitle', `全部图片（${ehDetail.total || g.files || '?'} 页）`));
+  const grid = el('div', 'ehgrid'); grid.id = 'ehPageGrid';
+  root.appendChild(grid);
+  const more = el('div', 'ehmore'); more.id = 'ehPageMore';
+  root.appendChild(more);
   box.appendChild(root);
+
+  // 缩略图本身也懒加载：滚到跟前才给它贴底图。
+  // 20 张共用一张雪碧图，露出一张就把这一批都带出来了，不会逐张发请求。
+  ehDetail.thumbIo = new IntersectionObserver(es => {
+    es.forEach(e => {
+      if (!e.isIntersecting) return;
+      const t = e.target;
+      if (t.dataset.bg) { t.style.backgroundImage = `url("${t.dataset.bg}")`; delete t.dataset.bg; }
+      ehDetail.thumbIo.unobserve(t);
+    });
+  }, { rootMargin: '300px' });
+
+  ehAppendThumbs(grid, images);
+  ehDetail.hasMore = hasMore;
+  ehSetupDetailPaging(gen, grid, more);
+}
+
+function ehAppendThumbs(grid, images) {
+  const frag = document.createDocumentFragment();
+  images.forEach(im => {
+    ehDetail.urls.push(ehPageUrl(im));
+    const idx = ehDetail.urls.length - 1;
+
+    const cell = el('div', 'ehcell');
+    const t = el('div', 'ehthumb');
+    // 站点两套版式：逐张缩略图直接铺满；雪碧图则按格宽定位裁出那一格
+    if (im.sprite) {
+      t.style.width = (im.w || 100) + 'px';
+      t.style.height = (im.h || 140) + 'px';
+      t.style.backgroundPosition = `-${im.x || 0}px 0`;
+      t.dataset.bg = ehImg(im.sprite);
+    } else if (im.thumb) {
+      t.style.width = (im.w || 100) + 'px';
+      t.style.height = (im.h || 140) + 'px';
+      t.style.backgroundSize = 'cover';
+      t.dataset.bg = ehImg(im.thumb);
+    }
+    t.title = im.name || ('Page ' + im.index);
+    // 点开即从这一页起翻；urls 是活数组，后面加载进来的页在灯箱里也能翻到
+    t.onclick = () => LB.open(ehDetail.urls, idx);
+    cell.appendChild(t);
+    cell.appendChild(el('div', 'ehnum', String(im.index)));
+    frag.appendChild(cell);
+    ehDetail.thumbIo.observe(t);
+  });
+  grid.appendChild(frag);
+}
+
+// 下拉到底自动加载下一列表页（每页 20 张）
+function ehSetupDetailPaging(gen, grid, sentinel) {
+  if (ehDetail.io) ehDetail.io.disconnect();
+  if (!ehDetail.hasMore) { sentinel.textContent = ''; return; }
+  ehDetail.io = new IntersectionObserver(async es => {
+    if (!es[0].isIntersecting || ehDetail.loading || !ehDetail.hasMore) return;
+    ehDetail.loading = true;
+    sentinel.innerHTML = '<span class="spin"></span> 正在加载更多…';
+    let d;
+    try {
+      d = await api(`/api/eh/gallery?gid=${ehDetail.gid}&token=${enc(ehDetail.token)}&p=${ehDetail.p + 1}`);
+    } catch (e) { ehDetail.loading = false; sentinel.textContent = ''; return; }
+    if (gen !== ehDetailGen || ehLevel !== 'detail') return;
+    if (d.error) { sentinel.textContent = d.error; ehDetail.hasMore = false; ehDetail.io.disconnect(); return; }
+    ehDetail.p += 1;
+    ehDetail.hasMore = !!d.hasMore;
+    ehAppendThumbs(grid, d.images || []);
+    ehDetail.loading = false;
+    sentinel.textContent = '';
+    if (!ehDetail.hasMore) { ehDetail.io.disconnect(); }
+  }, { rootMargin: '400px' });
+  ehDetail.io.observe(sentinel);
 }
 
 // ---------- 下载 ----------

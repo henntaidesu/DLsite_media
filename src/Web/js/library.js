@@ -172,6 +172,20 @@ async function renderDetail(id) {
     };
     actions.appendChild(mb);
   }
+  // 删除作品：磁盘上的作品文件夹连同数据库记录一并清除，不可恢复，故二次确认
+  // （文件夹不在了也要能删——正是清理这种孤儿记录的入口，所以不放进 hasFiles 分支）
+  const delb = el('button', 'toggle danger', '🗑 删除作品');
+  delb.onclick = async () => {
+    if (!await uiConfirm(
+      `确定删除《${d.name || d.id}》吗？\n作品文件夹内的全部文件与数据库记录都会被删除，且无法恢复。`,
+      { title: '删除作品', okText: '删除', danger: true })) return;
+    delb.disabled = true; delb.textContent = '删除中…';
+    const r = await apiPost('/api/delwork', { id: d.id });
+    if (r.ok) { history.back(); return; }   // 回上一级列表并重新拉取，被删的卡片随之消失
+    await uiAlert('删除失败：' + (r.message || ''));
+    delb.disabled = false; delb.textContent = '🗑 删除作品';
+  };
+  actions.appendChild(delb);
 
   if (d.body && d.body.length) {
     const body = el('div', 'body'); const bodyImgs = [];

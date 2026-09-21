@@ -469,6 +469,7 @@ public static class I18n
         ["打开文件夹"] = new() { ["zh_TW"] = "開啟資料夾", ["ja"] = "フォルダを開く", ["en"] = "Open folder" },
         ["移动媒体库"] = new() { ["zh_TW"] = "移動媒體庫", ["ja"] = "ライブラリを移動", ["en"] = "Move library" },
         ["查看作品"] = new() { ["zh_TW"] = "查看作品", ["ja"] = "作品を見る", ["en"] = "Browse files" },
+        ["删除作品"] = new() { ["zh_TW"] = "刪除作品", ["ja"] = "作品を削除", ["en"] = "Delete work" },
         ["解压密码库"] = new()
         {
             ["zh_TW"] = "解壓密碼庫", ["ja"] = "解凍パスワード一覧", ["en"] = "Archive passwords",
@@ -488,6 +489,13 @@ public static class I18n
         ["播放"] = new() { ["zh_TW"] = "播放", ["ja"] = "再生", ["en"] = "Play" },
         ["暂停"] = new() { ["zh_TW"] = "暫停", ["ja"] = "一時停止", ["en"] = "Pause" },
         ["移动中…"] = new() { ["zh_TW"] = "移動中…", ["ja"] = "移動中…", ["en"] = "Moving…" },
+        ["删除中…"] = new() { ["zh_TW"] = "刪除中…", ["ja"] = "削除中…", ["en"] = "Deleting…" },
+        ["确定删除《{name}》吗？\n作品文件夹内的全部文件与数据库记录都会被删除，且无法恢复。"] = new()
+        {
+            ["zh_TW"] = "確定刪除《{name}》嗎？\n作品資料夾內的全部檔案與資料庫記錄都會被刪除，且無法復原。",
+            ["ja"] = "《{name}》を削除しますか？\n作品フォルダ内の全ファイルとデータベース記録が削除され、元に戻せません。",
+            ["en"] = "Delete “{name}”?\nAll files in the work folder and its database records will be removed permanently."
+        },
         ["选择要移动到的媒体库"] = new()
         {
             ["zh_TW"] = "選擇要移動到的媒體庫",

@@ -77,10 +77,25 @@ public class EhImagePage
     /// <summary>站上登记的原始文件名（缩略图 title 属性里带着），可能为空。</summary>
     public string FileName { get; init; } = "";
     /// <summary>
-    /// 站上的逐张缩略图地址（详情页预览用）。
-    /// 匿名访问时站点只给雪碧图、没有逐张地址，此项为空——详情页据此退回只显示封面。
+    /// 站上的逐张缩略图地址（仅「大缩略图」版式有；匿名访问时为空，改用下面的雪碧图字段）。
     /// </summary>
     public string Thumb { get; init; } = "";
+
+    /// <summary>
+    /// 雪碧图地址。匿名访问时站点把 20 张缩略图拼成一张图投递，
+    /// 单张缩略图 = 从 (SpriteX, 0) 起、TileW×TileH 大小的那一格。
+    /// </summary>
+    public string SpriteUrl { get; init; } = "";
+
+    /// <summary>本页缩略图在雪碧图中的横向起点（站点给的是负的 background-position，这里存正值）。</summary>
+    public int SpriteX { get; init; }
+
+    /// <summary>单格宽高（同一本画廊内固定，站点按画廊内容给，实测 200×128 一类）。</summary>
+    public int TileW { get; init; }
+    public int TileH { get; init; }
+
+    /// <summary>有没有可用的缩略图（逐张的或雪碧图里的一格）。</summary>
+    public bool HasThumb => Thumb.Length > 0 || SpriteUrl.Length > 0;
 }
 
 /// <summary>一页搜索结果：画廊列表 + 下一页游标（站点已改为游标翻页，没有页号）。</summary>
@@ -128,6 +143,9 @@ public static class EhentaiApi
 
     /// <summary>gdata 单次请求的画廊数上限（站点规定）。</summary>
     public const int MetadataBatch = 25;
+
+    /// <summary>画廊列表页固定每页张数（站点默认 20，雪碧图也按 20 张一拼）。</summary>
+    public const int ListingPageSize = 20;
 
     /// <summary>看图额度用尽的失败标记（见 <see cref="EhImageLink.Throttled"/>）。</summary>
     public const string LimitError = "limit";
@@ -470,6 +488,78 @@ public static class EhentaiApi
     private static readonly Regex ThumbSrcPattern =
         new(@"src=""([^""]+)""", RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
+    // 雪碧图版式的 style，形如
+    //   width:200px;height:128px;background:transparent url(<雪碧图>) -400px 0 no-repeat
+    // 偏移按单格宽度递增，20 张拼一图。三项都取到才算数（缺一就没法定位那一格）。
+    private static readonly Regex TileSizePattern =
+        new(@"width:\s*(\d+)px;\s*height:\s*(\d+)px", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    private static readonly Regex SpriteUrlPattern =
+        new(@"background:[^""]*?url\(([^)]+)\)\s*(-?\d+)px", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    /// <summary>
+    /// 取画廊的**一个列表页**（站点每页固定 20 张），供详情页按需懒加载。
+    /// 返回该页的缩略图条目；请求失败返回 null，该页没有条目则返回空列表。
+    /// </summary>
+    public static async Task<List<EhImagePage>?> GetListingPageAsync(EhGalleryRef gref, int p)
+    {
+        var url = GalleryUrl(gref.Gid, gref.Token) + (p > 0 ? $"?p={p}" : "");
+        var html = await GetAsync(url);
+        return html is null ? null : ParseListing(html, gref);
+    }
+
+    /// <summary>
+    /// 解析一个画廊列表页里的全部缩略图条目。
+    ///
+    /// 站点有两套版式，这里一并吃下：匿名访问给雪碧图（title/style 挂在 &lt;div&gt; 上），
+    /// 登录并把画廊版式设成大缩略图则是逐张 &lt;img src&gt;。两者都带 title="Page N: 文件名"，
+    /// 故先按标签整块取出，再从块里挑 title / src / style。
+    /// </summary>
+    private static List<EhImagePage> ParseListing(string html, EhGalleryRef gref)
+    {
+        // 页码 -> 图片页 key（两套版式的链接形状一致）
+        var keys = new Dictionary<int, string>();
+        foreach (Match m in ImagePagePattern.Matches(html))
+        {
+            if (!long.TryParse(m.Groups[2].Value, out var gid) || gid != gref.Gid)
+                continue;   // 页面上还有「相关画廊」的链接，只认本画廊的
+            if (int.TryParse(m.Groups[3].Value, out var index))
+                keys.TryAdd(index, m.Groups[1].Value);
+        }
+
+        var list = new List<EhImagePage>();
+        foreach (Match tag in ThumbTagPattern.Matches(html))
+        {
+            var title = ThumbTitlePattern.Match(tag.Value);
+            if (!title.Success || !int.TryParse(title.Groups[1].Value, out var index))
+                continue;
+            if (!keys.TryGetValue(index, out var key))
+                continue;
+
+            var size = TileSizePattern.Match(tag.Value);
+            var sprite = SpriteUrlPattern.Match(tag.Value);
+            // 逐张缩略图的 <img src>；雪碧图版式下没有 src，此处为空
+            var src = tag.Value.Contains("<img", StringComparison.OrdinalIgnoreCase) &&
+                      ThumbSrcPattern.Match(tag.Value) is { Success: true } sm
+                ? System.Net.WebUtility.HtmlDecode(sm.Groups[1].Value)
+                : "";
+
+            list.Add(new EhImagePage
+            {
+                Index = index,
+                Url = $"{Origin}/s/{key}/{gref.Gid}-{index}",
+                FileName = System.Net.WebUtility.HtmlDecode(title.Groups[2].Value),
+                Thumb = src,
+                SpriteUrl = sprite.Success && src.Length == 0
+                    ? System.Net.WebUtility.HtmlDecode(sprite.Groups[1].Value) : "",
+                SpriteX = sprite.Success && int.TryParse(sprite.Groups[2].Value, out var x) ? Math.Abs(x) : 0,
+                TileW = size.Success && int.TryParse(size.Groups[1].Value, out var w) ? w : 0,
+                TileH = size.Success && int.TryParse(size.Groups[2].Value, out var h) ? h : 0,
+            });
+        }
+        return list.OrderBy(x => x.Index).ToList();
+    }
+
     /// <summary>
     /// 列出画廊内每张图的图片页地址（按页码升序）。
     ///
@@ -483,39 +573,13 @@ public static class EhentaiApi
         var pages = new Dictionary<int, EhImagePage>();
         for (var p = 0; p < maxPages; p++)
         {
-            var url = GalleryUrl(gref.Gid, gref.Token) + (p > 0 ? $"?p={p}" : "");
-            var html = await GetAsync(url);
-            if (html is null)
+            var batch = await GetListingPageAsync(gref, p);
+            if (batch is null)
                 break;
 
-            // 先从缩略图收「页码 → 原始文件名 / 缩略图地址」，再把图片页链接按页码配上去
-            var names = new Dictionary<int, string>();
-            var thumbs = new Dictionary<int, string>();
-            foreach (Match tag in ThumbTagPattern.Matches(html))
-            {
-                var title = ThumbTitlePattern.Match(tag.Value);
-                if (!title.Success || !int.TryParse(title.Groups[1].Value, out var n))
-                    continue;
-                names[n] = System.Net.WebUtility.HtmlDecode(title.Groups[2].Value);
-                if (ThumbSrcPattern.Match(tag.Value) is { Success: true } src)
-                    thumbs[n] = System.Net.WebUtility.HtmlDecode(src.Groups[1].Value);
-            }
-
             var before = pages.Count;
-            foreach (Match m in ImagePagePattern.Matches(html))
-            {
-                if (!long.TryParse(m.Groups[2].Value, out var gid) || gid != gref.Gid)
-                    continue;   // 页面上还有「相关画廊」的链接，只认本画廊的
-                if (!int.TryParse(m.Groups[3].Value, out var index) || pages.ContainsKey(index))
-                    continue;
-                pages[index] = new EhImagePage
-                {
-                    Index = index,
-                    Url = $"{Origin}/s/{m.Groups[1].Value}/{gid}-{index}",
-                    FileName = names.GetValueOrDefault(index, ""),
-                    Thumb = thumbs.GetValueOrDefault(index, ""),
-                };
-            }
+            foreach (var one in batch)
+                pages.TryAdd(one.Index, one);
             onProgress?.Invoke(pages.Count);
 
             if (pages.Count == before)

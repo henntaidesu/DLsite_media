@@ -333,6 +333,8 @@ public static class WebServer
                 case "/api/toggle": ApiToggle(stream, req); break;
                 case "/api/searchworks": ApiSearchWorks(stream, req); break;
                 case "/api/movework": await ApiMoveWorkAsync(stream, req); break;
+                // 媒体库里彻底删除作品（连文件一起）；/api/deletework 是下载列表那个，别混
+                case "/api/delwork": await ApiDeleteLibWorkAsync(stream, req); break;
                 case "/api/cover": ApiCover(stream, req); break;
                 case "/api/asset": ApiAsset(stream, req); break;
                 case "/api/files": ApiFiles(stream, req); break;
@@ -374,6 +376,7 @@ public static class WebServer
 
                 case "/api/eh/search": await ApiEhSearchAsync(stream, req); break;
                 case "/api/eh/gallery": await ApiEhGalleryAsync(stream, req); break;
+                case "/api/eh/page": await ApiEhPageImageAsync(stream, req); break;
                 case "/api/eh/enqueue": await ApiEhEnqueueAsync(stream, req); break;
                 case "/api/eh/image": await ApiEhImageAsync(stream, req); break;
                 // 设置
@@ -2127,6 +2130,19 @@ public static class WebServer
         WriteJson(stream, 200, new { ok, message });
     }
 
+    /// <summary>彻底删除作品：作品文件夹与数据库记录一并清除（镜像详情页"删除作品"，不可恢复）。</summary>
+    private static async Task ApiDeleteLibWorkAsync(NetworkStream stream, Request req)
+    {
+        var id = ReadStringField(req.Body, "id").ToUpperInvariant();
+        if (id.Length == 0)
+        {
+            WriteJson(stream, 400, new { ok = false, message = "参数缺失" });
+            return;
+        }
+        var (ok, message) = await MediaLibraryService.DeleteWorkAsync(id);
+        WriteJson(stream, 200, new { ok, message });
+    }
+
     /// <summary>媒体库作用域作品搜索（镜像 MediaLibPage.ShowScopedSearch）：
     /// 媒体库根搜全部库；指定 lib/genre/type 时限定该范围；按 RJ号/作品名 LIKE 匹配已品悦作品。</summary>
     private static void ApiSearchWorks(NetworkStream stream, Request req)
@@ -2700,11 +2716,12 @@ public static class WebServer
     }
 
     /// <summary>
-    /// 单本画廊详情（「查看内容」用）：元数据 + 缩略图清单。
+    /// 单本画廊详情（「查看内容」用）：元数据 + 该列表页的缩略图，按 p 分页。
     ///
-    /// 图片本体不在这里给：站点每张图的直链都要单独进它的图片页才拿得到，
-    /// 为看一眼详情就解析几百页既慢又白耗看图额度。缩略图在画廊页上现成就有，
-    /// 用它预览已经够了；要原图就走下载。
+    /// 缩略图在画廊页上现成就有（匿名访问是 20 张拼成的雪碧图），取它**不消耗看图额度**，
+    /// 所以整本的缩略图都能列出来；前端下拉到哪儿才要哪一页（p=0,1,2…）。
+    /// 图片本体不在这里给：每张的直链都要单独进它的图片页才拿得到，
+    /// 那是 /api/eh/page 的事，点开哪张才解析哪张。
     /// </summary>
     private static async Task ApiEhGalleryAsync(NetworkStream stream, Request req)
     {
@@ -2713,20 +2730,110 @@ public static class WebServer
             WriteJson(stream, 400, new { error = "bad request" });
             return;
         }
-        var gallery = await EhentaiApi.GetGalleryAsync(gref);
-        if (gallery is null)
+        var p = Math.Max(0, GetInt(req, "p"));
+
+        // 元数据只在第一页取；往后翻页前端已经有了，不必再多发一次 API 请求
+        object? gallery = null;
+        var total = 0;
+        if (p == 0)
         {
-            WriteJson(stream, 502, new { error = "获取画廊信息失败" });
+            var meta = await EhentaiApi.GetGalleryAsync(gref);
+            if (meta is null)
+            {
+                WriteJson(stream, 502, new { error = "获取画廊信息失败" });
+                return;
+            }
+            gallery = EhGalleryJson(meta);
+            total = meta.FileCount;
+        }
+
+        var pages = await EhentaiApi.GetListingPageAsync(gref, p);
+        if (pages is null)
+        {
+            WriteJson(stream, 502, new { error = "获取画廊图片列表失败" });
             return;
         }
-        // 详情只看头两页缩略图（约 40 张）：够翻阅了，又不必为此把整本画廊页翻一遍
-        var pages = await EhentaiApi.GetImagePagesAsync(gref, Math.Min(gallery.FileCount, 40), maxPages: 2);
         WriteJson(stream, 200, new
         {
-            gallery = EhGalleryJson(gallery),
-            images = pages.Where(x => x.Thumb.Length > 0)
-                          .Select(x => new { index = x.Index, name = x.FileName, thumb = x.Thumb }),
+            gallery,
+            total,
+            images = pages.Where(x => x.HasThumb).Select(x => new
+            {
+                index = x.Index,
+                name = x.FileName,
+                // 图片页的 key：前端拿它回请 /api/eh/page 看大图（省得服务端再翻一次列表页找）
+                key = EhKeyOf(x.Url),
+                // 逐张缩略图直接给地址；雪碧图则给「整张图 + 该格的位置与尺寸」，由前端用 CSS 裁出那一格
+                thumb = x.Thumb,
+                sprite = x.SpriteUrl,
+                x = x.SpriteX,
+                w = x.TileW,
+                h = x.TileH,
+            }),
+            hasMore = pages.Count >= EhentaiApi.ListingPageSize,
         });
+    }
+
+    /// <summary>从图片页地址 /s/&lt;key&gt;/&lt;gid&gt;-&lt;n&gt; 里取出 key。</summary>
+    private static string EhKeyOf(string imagePageUrl)
+    {
+        var parts = imagePageUrl.Split('/');
+        return parts.Length >= 2 ? parts[^2] : "";
+    }
+
+    /// <summary>
+    /// 按页码现解析、现取该页大图并直接回给浏览器。
+    ///
+    /// 站点每张图的直链都藏在它自己的图片页里、与访问者 IP 绑定又会过期，没法预先算好交给前端。
+    /// 做成「一个页码一个地址」之后，灯箱只要把页码排成数组就能前后翻，
+    /// 而浏览器显示到哪张才请求哪张——既是天然的懒加载，也不会为没看的图白耗看图额度。
+    /// </summary>
+    private static async Task ApiEhPageImageAsync(NetworkStream stream, Request req)
+    {
+        var page = GetInt(req, "page");
+        var key = (req.Query.GetValueOrDefault("key") ?? "").Trim();
+        if (ParseEhRef(req) is not { } gref || page <= 0 || !IsEhToken(key))
+        {
+            WriteBytes(stream, 400, "Bad Request", "text/plain", []);
+            return;
+        }
+
+        var pageUrl = $"{EhentaiApi.Origin}/s/{key.ToLowerInvariant()}/{gref.Gid}-{page}";
+        var link = await EhentaiApi.ResolveImageAsync(pageUrl, AppConfig.EhentaiOriginal);
+        if (!link.Ok || !IsEhentaiUrl(link.Url))
+        {
+            // 额度用尽单独回 429，前端好照实提示，不至于看着像图坏了
+            if (link.Throttled)
+                WriteBytes(stream, 429, "Too Many Requests", "text/plain",
+                    Encoding.UTF8.GetBytes("image quota exceeded"));
+            else
+                WriteBytes(stream, 502, "Bad Gateway", "text/plain",
+                    Encoding.UTF8.GetBytes("resolve failed"));
+            return;
+        }
+
+        try
+        {
+            using var client = Http.CreateClient(TimeSpan.FromSeconds(60));
+            using var request = new HttpRequestMessage(HttpMethod.Get, link.Url);
+            EhentaiApi.ApplyHeaders(request);
+            using var resp = await client.SendAsync(request);
+            resp.EnsureSuccessStatusCode();
+            var bytes = await resp.Content.ReadAsByteArrayAsync();
+            var type = resp.Content.Headers.ContentType?.MediaType ?? "";
+            // 站点会把「需要登录」当正常页面回（HTTP 200 + 登录页 HTML），别把它当图片送给浏览器
+            if (!type.StartsWith("image/", StringComparison.OrdinalIgnoreCase))
+            {
+                WriteBytes(stream, 502, "Bad Gateway", "text/plain",
+                    Encoding.UTF8.GetBytes("not an image"));
+                return;
+            }
+            WriteBytes(stream, 200, "OK", type, bytes, ("Cache-Control", "max-age=3600"));
+        }
+        catch (Exception)
+        {
+            WriteBytes(stream, 404, "Not Found", "text/plain", []);
+        }
     }
 
     /// <summary>

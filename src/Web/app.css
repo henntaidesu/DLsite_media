@@ -187,6 +187,9 @@
   .toggle { background: var(--surface2); border: 1px solid var(--line); color: var(--text);
             border-radius: 8px; padding: 7px 14px; cursor: pointer; font-size: 14px; }
   .toggle.on { background: var(--accent-dim); border-color: var(--accent-dim); color: #fff; }
+  /* 破坏性操作（删除作品）：与 .icon-btn.danger 同一套红，不填充底色，避免比"已读/收藏"更抢眼 */
+  .toggle.danger { color: #f87171; border-color: #6b3030; }
+  .toggle.danger:hover { border-color: #f87171; }
   .topbar-actions .toggle { padding: 5px 12px; font-size: 13px; }
   /* 作品详情页：顶栏不显示作品名（正文已有 h1），仅留按钮 —— 操作按钮靠左成组，返回键靠右 */
   #topbar.detail-mode #title { display: none; }
@@ -428,3 +431,17 @@
   .modal-btns { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
   .icon-btn.danger { color: #f87171; border-color: #6b3030; }
   .icon-btn.danger:hover { border-color: #f87171; }
+
+/* E-Hentai 详情页的整本图片网格：缩略图多为站点的雪碧图，按格宽定位裁出单张 */
+.ehgrid { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.ehcell { position: relative; line-height: 0; }
+.ehthumb {
+  background-repeat: no-repeat; background-color: var(--card);
+  border-radius: 4px; cursor: pointer; display: block;
+}
+.ehthumb:hover { outline: 2px solid var(--accent); outline-offset: 1px; }
+.ehnum {
+  position: absolute; left: 3px; bottom: 3px; padding: 0 5px;
+  background: rgba(0,0,0,.66); color: #fff; font-size: 11px; line-height: 16px; border-radius: 3px;
+}
+.ehmore { min-height: 24px; padding: 12px 0; text-align: center; color: var(--muted); font-size: 13px; }

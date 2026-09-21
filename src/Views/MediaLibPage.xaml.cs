@@ -125,6 +125,7 @@ public partial class MediaLibPage : UserControl
     private string? _currentGenre;
     private string? _currentType;    // 当前选中的作品形式（work_type）
     private string? _currentWork;
+    private string? _currentWorkName;   // 当前详情作品名（删除确认文案用）
     private string? _currentWorkFolder;
     private bool _currentRead;   // 当前详情作品的"已读"状态
     private bool _currentFav;    // 当前详情作品的"收藏"状态
@@ -215,6 +216,7 @@ public partial class MediaLibPage : UserControl
         // 图标对齐 Web library.js（查看作品 📂 / 移动媒体库 📦）
         ViewFilesButton.Content = "📂 " + I18n.Tr("查看作品");
         MoveLibButton.Content = "📦 " + I18n.Tr("移动媒体库");
+        DeleteWorkButton.Content = "🗑 " + I18n.Tr("删除作品");
         SearchBox.ToolTip = I18n.Tr("搜索 RJ号 / 作品名");
         PreviewCloseButton.Content = I18n.Tr("← 返回");
         PreviewPrevButton.Content = "‹ " + I18n.Tr("上一张");
@@ -417,6 +419,48 @@ public partial class MediaLibPage : UserControl
         }
     }
 
+    /// <summary>
+    /// 删除作品（对齐 Web library.js 的「🗑 删除作品」）：二次确认后删除作品文件夹内的
+    /// 全部文件与数据库记录，不可恢复。作品文件夹已不在时同样可删——正是清理孤儿记录的入口。
+    /// </summary>
+    private void DeleteWorkButton_Click(object sender, RoutedEventArgs e)
+    {
+        var workId = _currentWork;
+        if (workId == null)
+            return;
+        var name = string.IsNullOrEmpty(_currentWorkName) ? workId : _currentWorkName;
+        if (!InAppDialog.Confirm(this,
+                I18n.Format(
+                    I18n.Tr("确定删除《{name}》吗？\n作品文件夹内的全部文件与数据库记录都会被删除，且无法恢复。"),
+                    ("name", name)),
+                I18n.Tr("删除作品")))
+            return;
+        AudioBar.Stop();   // 正在播放本作品的音频会占着文件句柄，删之前先松手
+        DeleteWorkButton.IsEnabled = false;
+        DeleteWorkButton.Content = I18n.Tr("删除中…");
+        _ = DeleteWorkAsync(workId);
+    }
+
+    private async Task DeleteWorkAsync(string workId)
+    {
+        // 整个作品目录的递归删除可能很慢（上百张图/网络盘），放后台线程，别冻界面
+        var (ok, message) = await Task.Run(() => MediaLibraryService.DeleteWorkAsync(workId));
+        DeleteWorkButton.IsEnabled = true;
+        DeleteWorkButton.Content = "🗑 " + I18n.Tr("删除作品");
+        if (!ok)
+        {
+            InAppDialog.Warn(this, message, I18n.Tr("删除作品"));
+            return;
+        }
+        if (_level != "detail" || _currentWork != workId)
+        {
+            Refresh();   // 删除期间已导航去别处：只刷新当前视图，别把用户从新页面弹回去
+            return;
+        }
+        // 退回进入详情前的列表层级并重新查库，被删的作品卡随之消失
+        BackButton_Click(this, new RoutedEventArgs());
+    }
+
     private void ViewFilesButton_Click(object sender, RoutedEventArgs e)
     {
         // "查看作品"：从详情页再跳转到独立的文件树页面（等同卡片跳详情的二次页面跳转）
@@ -487,6 +531,7 @@ public partial class MediaLibPage : UserControl
         ViewFilesButton.Visibility = Visibility.Collapsed;
         ViewFilesButton.Content = I18n.Tr("查看作品");
         MoveLibButton.Visibility = Visibility.Collapsed;
+        DeleteWorkButton.Visibility = Visibility.Collapsed;
         ReadButton.Visibility = Visibility.Collapsed;
         FavButton.Visibility = Visibility.Collapsed;
         LibToggleButton.Visibility = Visibility.Collapsed;   // 仅媒体库内作品/社团视图显示
@@ -495,6 +540,7 @@ public partial class MediaLibPage : UserControl
         RjLabel.Visibility = Visibility.Collapsed;           // RJ 号仅详情页显示
         RjLabel.Inlines.Clear();
         _currentWorkFolder = null;
+        _currentWorkName = null;
         ClosePreview();
     }
 
@@ -1349,6 +1395,7 @@ public partial class MediaLibPage : UserControl
         var workId = r[0] as string ?? "";
         var workName = r[1] as string ?? "";
         var workFolder = r[13] as string;
+        _currentWorkName = workName;
 
         _level = "detail";
         BackButton.Visibility = Visibility.Visible;
@@ -1387,6 +1434,8 @@ public partial class MediaLibPage : UserControl
             ViewFilesButton.Visibility = Visibility.Visible;
             MoveLibButton.Visibility = Visibility.Visible;
         }
+        // 删除作品：文件夹不在了也要能删（清理孤儿记录），故不放进上面的文件夹分支
+        DeleteWorkButton.Visibility = Visibility.Visible;
         // 已读 / 收藏 切换按钮
         _currentRead = r[14] as string == "1";
         _currentFav = r[15] as string == "1";

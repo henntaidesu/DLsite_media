@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
@@ -371,6 +371,11 @@ public static class WebServer
                 case "/api/fanbox/post": await ApiFanboxPostAsync(stream, req); break;
                 case "/api/fanbox/enqueue": await ApiFanboxEnqueueAsync(stream, req); break;
                 case "/api/fanbox/image": await ApiFanboxImageAsync(stream, req); break;
+
+                case "/api/eh/search": await ApiEhSearchAsync(stream, req); break;
+                case "/api/eh/gallery": await ApiEhGalleryAsync(stream, req); break;
+                case "/api/eh/enqueue": await ApiEhEnqueueAsync(stream, req); break;
+                case "/api/eh/image": await ApiEhImageAsync(stream, req); break;
                 // 设置
                 case "/api/settings": if (req.Method == "POST") ApiSettingsWrite(stream, req); else ApiSettings(stream); break;
                 case "/api/debridtest": await ApiDebridTestAsync(stream, req); break;
@@ -795,16 +800,16 @@ public static class WebServer
             return;
         }
         var r = rows[0];
-        // fanbox 作品目录里摊着整篇投稿的图（动辄上百张），且没有 description.txt，
+        // fanbox 投稿 / E-Hentai 画廊的目录里摊着整篇的图（动辄上百张），且没有 description.txt，
         // 进详情一律不翻目录：左侧只挂封面，要看图走「查看作品」
-        var isFanbox = FanboxService.IsFanboxWorkId(id);
+        var isFlat = MediaLibraryService.IsFlatImageWork(id);
         var folder = ResolveAssetFolder(id, r[13] as string);
 
         // 正文：按 [img:文件名] 占位标记拆成 文本/图片 块
         var body = new List<object>();
         var bodyFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var txtPath = Path.Combine(folder, DlsitePage.DescriptionTxt);
-        if (!isFanbox && File.Exists(txtPath))
+        if (!isFlat && File.Exists(txtPath))
         {
             string raw;
             try { raw = File.ReadAllText(txtPath).Trim(); }
@@ -830,9 +835,9 @@ public static class WebServer
         }
 
         // 轮播图：数据源中除正文图片外的图片，主图排最前。
-        // fanbox 不给列表（前端据此回退到 /api/cover，只显示封面一张）
+        // fanbox / E-Hentai 不给列表（前端据此回退到 /api/cover，只显示封面一张）
         var slider = new List<string>();
-        if (!isFanbox && Directory.Exists(folder))
+        if (!isFlat && Directory.Exists(folder))
         {
             slider = Directory.GetFiles(folder)
                 .Select(Path.GetFileName)
@@ -958,8 +963,8 @@ public static class WebServer
     /// <summary>详情资源文件夹：作品文件夹/DataSource 优先，否则回退 images/&lt;RJ&gt;。</summary>
     private static string ResolveAssetFolder(string id, string? workFolder)
     {
-        // fanbox 作品的图片直接摊在作品目录里，没有 DLsite 那套 DataSource 子目录
-        if (FanboxService.IsFanboxWorkId(id))
+        // fanbox / E-Hentai 作品的图片直接摊在作品目录里，没有 DLsite 那套 DataSource 子目录
+        if (MediaLibraryService.IsFlatImageWork(id))
             return workFolder ?? "";
         if (workFolder != null)
         {
@@ -1748,7 +1753,8 @@ public static class WebServer
             };
         });
         // 工具栏按钮的可用性：与桌面端同源（DownloadListActions.FlagsOf），避免两端灰显规则漂移
-        var flags = DownloadListActions.FlagsOf(grouped.Values.SelectMany(v => v).Select(it => it.Status));
+        var flags = DownloadListActions.FlagsOf(
+            grouped.Values.SelectMany(v => v).Select(it => (it.Status, it.Error)));
         WriteJson(stream, 200, new
         {
             engine = new { running = DownloadEngine.IsRunning, stopRequested = DownloadEngine.StopRequested },
@@ -2639,6 +2645,191 @@ public static class WebServer
         {
             WriteBytes(stream, 404, "Not Found", "text/plain", []);
         }
+    }
+
+    // ---------- E-Hentai 数据源 ----------
+
+    /// <summary>
+    /// 搜索画廊。贴画廊链接时直接认出那一本并只返回它（等价于站内直达），
+    /// 否则按关键字搜；next 为上一页返回的游标（站点是游标翻页，没有页号）。
+    /// </summary>
+    private static async Task ApiEhSearchAsync(NetworkStream stream, Request req)
+    {
+        var keyword = (req.Query.GetValueOrDefault("q") ?? "").Trim();
+        var next = (req.Query.GetValueOrDefault("next") ?? "").Trim();
+        if (keyword.Length == 0 && next.Length == 0)
+        {
+            WriteJson(stream, 400, new { error = "bad request" });
+            return;
+        }
+
+        // 贴的是画廊链接：跳过搜索，直接取这一本的元数据
+        if (next.Length == 0 && EhentaiApi.ParseGalleryInput(keyword) is { } direct)
+        {
+            var one = await EhentaiApi.GetGalleryAsync(direct);
+            WriteJson(stream, 200, new
+            {
+                items = one is null ? Array.Empty<object>() : [EhGalleryJson(one)],
+                next = "",
+                error = one is null ? "未找到该画廊（可能已下架，或里站需要登录 cookie）" : null,
+            });
+            return;
+        }
+
+        var result = await EhentaiApi.SearchAsync(keyword, next);
+        WriteJson(stream, 200, new
+        {
+            items = result.Items.Select(EhGalleryJson),
+            next = result.Next,
+            error = result.Error,
+        });
+    }
+
+    /// <summary>
+    /// 单本画廊详情（「查看内容」用）：元数据 + 缩略图清单。
+    ///
+    /// 图片本体不在这里给：站点每张图的直链都要单独进它的图片页才拿得到，
+    /// 为看一眼详情就解析几百页既慢又白耗看图额度。缩略图在画廊页上现成就有，
+    /// 用它预览已经够了；要原图就走下载。
+    /// </summary>
+    private static async Task ApiEhGalleryAsync(NetworkStream stream, Request req)
+    {
+        if (ParseEhRef(req) is not { } gref)
+        {
+            WriteJson(stream, 400, new { error = "bad request" });
+            return;
+        }
+        var gallery = await EhentaiApi.GetGalleryAsync(gref);
+        if (gallery is null)
+        {
+            WriteJson(stream, 502, new { error = "获取画廊信息失败" });
+            return;
+        }
+        // 详情只看头两页缩略图（约 40 张）：够翻阅了，又不必为此把整本画廊页翻一遍
+        var pages = await EhentaiApi.GetImagePagesAsync(gref, Math.Min(gallery.FileCount, 40), maxPages: 2);
+        WriteJson(stream, 200, new
+        {
+            gallery = EhGalleryJson(gallery),
+            images = pages.Where(x => x.Thumb.Length > 0)
+                          .Select(x => new { index = x.Index, name = x.FileName, thumb = x.Thumb }),
+        });
+    }
+
+    /// <summary>
+    /// 把选中的画廊加入下载队列。请求只带 gid/token，元数据与图片清单由服务端重新拉取，
+    /// 不信任前端提交的内容（与 fanbox 入队同理）。
+    /// </summary>
+    private static async Task ApiEhEnqueueAsync(NetworkStream stream, Request req)
+    {
+        var refs = new List<EhGalleryRef>();
+        foreach (var item in ReadStringArray(req.Body, "items"))
+        {
+            // 前端提交的每一项形如 "gid:token"
+            var parts = item.Split(':', 2);
+            if (parts.Length == 2 && long.TryParse(parts[0], out var gid) && IsEhToken(parts[1]))
+                refs.Add(new EhGalleryRef(gid, parts[1].ToLowerInvariant()));
+        }
+        var lib = ReadStringField(req.Body, "lib");
+        var folder = ReadStringField(req.Body, "folder");
+        if (refs.Count == 0)
+        {
+            WriteJson(stream, 400, new { error = "bad request" });
+            return;
+        }
+
+        var galleries = await EhentaiApi.GetMetadataAsync(refs);
+        if (galleries.Count == 0)
+        {
+            WriteJson(stream, 404, new { error = "未找到选中的画廊" });
+            return;
+        }
+        var result = await EhentaiService.EnqueueGalleriesAsync(
+            galleries, folder.Length > 0 ? folder : null, lib.Length > 0 ? lib : null);
+        if (!result.Ok)
+        {
+            WriteJson(stream, 200, new { ok = false, error = result.Error ?? "入队失败" });
+            return;
+        }
+        WriteJson(stream, 200, new
+        {
+            ok = true, galleries = result.GalleryCount, files = result.FileCount, skipped = result.Skipped,
+        });
+    }
+
+    /// <summary>
+    /// 站上图片（封面/缩略图）代理：浏览器直连站点受跨域与代理设置影响，统一由本服务按配置的代理取回，
+    /// 顺带带上登录 cookie（里站的图也要）。只放行站点自身域与其图片 CDN。
+    /// </summary>
+    private static async Task ApiEhImageAsync(NetworkStream stream, Request req)
+    {
+        var url = req.Query.GetValueOrDefault("url") ?? "";
+        if (!IsEhentaiUrl(url) || !IsSafeFetchUrl(url))
+        {
+            WriteBytes(stream, 400, "Bad Request", "text/plain", []);
+            return;
+        }
+        try
+        {
+            using var client = Http.CreateClient(TimeSpan.FromSeconds(20));
+            using var request = new HttpRequestMessage(HttpMethod.Get, url);
+            EhentaiApi.ApplyHeaders(request);
+            using var resp = await client.SendAsync(request);
+            resp.EnsureSuccessStatusCode();
+            var bytes = await resp.Content.ReadAsByteArrayAsync();
+            var type = resp.Content.Headers.ContentType?.MediaType ?? "";
+            if (!type.StartsWith("image/", StringComparison.OrdinalIgnoreCase))
+                type = ContentType(url);
+            WriteBytes(stream, 200, "OK", type, bytes, ("Cache-Control", "max-age=86400"));
+        }
+        catch (Exception)
+        {
+            WriteBytes(stream, 404, "Not Found", "text/plain", []);
+        }
+    }
+
+    /// <summary>画廊元数据转成前端要的字段（两处搜索/详情共用，保证卡片与详情同源）。</summary>
+    private static object EhGalleryJson(EhGallery g) => new
+    {
+        gid = g.Gid,
+        token = g.Token,
+        title = g.DisplayTitle,
+        titleEn = g.Title,
+        category = g.Category,
+        uploader = g.Uploader,
+        posted = g.PostedUnix > 0 ? g.Posted.ToString("yyyy-MM-dd") : "",
+        files = g.FileCount,
+        rating = g.Rating,
+        expunged = g.Expunged,
+        maker = EhentaiService.MakerNameOf(g),
+        tags = g.Tags,
+        cover = g.Thumb,
+        state = EhentaiService.GalleryStates([g.Gid]).GetValueOrDefault(g.Gid.ToString(), ""),
+    };
+
+    /// <summary>从查询串里取 gid/token 并校验；不合法返回 null。</summary>
+    private static EhGalleryRef? ParseEhRef(Request req)
+    {
+        var token = (req.Query.GetValueOrDefault("token") ?? "").Trim();
+        return long.TryParse(req.Query.GetValueOrDefault("gid"), out var gid) && gid > 0 && IsEhToken(token)
+            ? new EhGalleryRef(gid, token.ToLowerInvariant())
+            : null;
+    }
+
+    /// <summary>画廊令牌固定是 10 位十六进制；用作 URL 参数前先校验。</summary>
+    private static bool IsEhToken(string token) =>
+        token.Length == 10 && token.All(char.IsAsciiHexDigit);
+
+    /// <summary>
+    /// URL 是否指向 E-Hentai 体系内的主机：站点自身（表/里站）、元数据 API，
+    /// 以及站点的图片 CDN（ehgt.org 与 H@H 网络的 hath.network）。
+    /// </summary>
+    private static bool IsEhentaiUrl(string url)
+    {
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) || uri.Scheme != Uri.UriSchemeHttps)
+            return false;
+        var host = uri.Host.ToLowerInvariant();
+        string[] roots = ["e-hentai.org", "exhentai.org", "ehgt.org", "hath.network"];
+        return roots.Any(r => host == r || host.EndsWith("." + r, StringComparison.Ordinal));
     }
 
     /// <summary>URL 是否指向当前配置的 pawchive 站点（主域或其 file./img. 子域）。</summary>

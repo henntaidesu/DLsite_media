@@ -73,6 +73,98 @@ public static class I18n
     // 简体中文原文 -> {语言代码: 译文}
     private static readonly Dictionary<string, Dictionary<string, string>> Translations = new()
     {
+        // ---------- E-Hentai 数据源 ----------
+        ["站点未提供逐页缩略图（登录后可在站点把画廊版式设为大缩略图），此处只显示封面。"] = new()
+        {
+            ["zh_TW"] = "站點未提供逐頁縮圖（登入後可在站點把畫廊版式設為大縮圖），此處只顯示封面。",
+            ["ja"] = "サイトがページごとのサムネイルを返しません（ログイン後、ギャラリー表示を大サムネイルに設定すると取得できます）。ここでは表紙のみ表示します。",
+            ["en"] = "The site returns no per-page thumbnails (sign in and set the gallery layout to large thumbnails); showing the cover only.",
+        },
+        ["关键字 / 标签（如 artist:xxx），或粘贴 E-Hentai 画廊链接"] = new()
+        {
+            ["zh_TW"] = "關鍵字 / 標籤（如 artist:xxx），或貼上 E-Hentai 畫廊連結",
+            ["ja"] = "キーワード / タグ（artist:xxx など）、または E-Hentai のギャラリー URL",
+            ["en"] = "Keyword / tag (e.g. artist:xxx), or paste an E-Hentai gallery link",
+        },
+        ["← 返回搜索结果"] = new() { ["zh_TW"] = "← 返回搜尋結果", ["ja"] = "← 検索結果に戻る", ["en"] = "← Back to results" },
+        ["正在搜索画廊…"] = new() { ["zh_TW"] = "正在搜尋畫廊…", ["ja"] = "ギャラリーを検索中…", ["en"] = "Searching galleries…" },
+        ["未找到该画廊（可能已下架，或里站需要登录 cookie）"] = new()
+        {
+            ["zh_TW"] = "找不到該畫廊（可能已下架，或裏站需要登入 cookie）",
+            ["ja"] = "ギャラリーが見つかりません（削除済み、または ExHentai のログイン Cookie が必要）",
+            ["en"] = "Gallery not found (removed, or ExHentai needs login cookies)",
+        },
+        ["没有匹配的画廊"] = new() { ["zh_TW"] = "沒有符合的畫廊", ["ja"] = "一致するギャラリーがありません", ["en"] = "No matching galleries" },
+        ["已加载 {n} 本画廊"] = new()
+        {
+            ["zh_TW"] = "已載入 {n} 本畫廊",
+            ["ja"] = "{n} 件のギャラリーを読み込み済み",
+            ["en"] = "{n} galleries loaded",
+        },
+        ["{n} 页"] = new() { ["zh_TW"] = "{n} 頁", ["ja"] = "{n} ページ", ["en"] = "{n} pages" },
+        ["已选 {n} 本"] = new() { ["zh_TW"] = "已選 {n} 本", ["ja"] = "{n} 件選択中", ["en"] = "{n} selected" },
+        ["正在获取画廊内容…"] = new()
+        {
+            ["zh_TW"] = "正在取得畫廊內容…",
+            ["ja"] = "ギャラリーの内容を取得中…",
+            ["en"] = "Loading gallery contents…",
+        },
+        ["获取画廊信息失败"] = new()
+        {
+            ["zh_TW"] = "取得畫廊資訊失敗",
+            ["ja"] = "ギャラリー情報の取得に失敗しました",
+            ["en"] = "Failed to load gallery info",
+        },
+        ["取不到预览图"] = new() { ["zh_TW"] = "取不到預覽圖", ["ja"] = "プレビュー画像を取得できません", ["en"] = "No preview available" },
+        ["原名"] = new() { ["zh_TW"] = "原名", ["ja"] = "原題", ["en"] = "Original title" },
+        ["社团/作者"] = new() { ["zh_TW"] = "社團/作者", ["ja"] = "サークル/作者", ["en"] = "Circle / artist" },
+        ["分类"] = new() { ["zh_TW"] = "分類", ["ja"] = "カテゴリ", ["en"] = "Category" },
+        ["投稿者"] = new() { ["zh_TW"] = "投稿者", ["ja"] = "投稿者", ["en"] = "Uploader" },
+        ["投稿"] = new() { ["zh_TW"] = "投稿", ["ja"] = "投稿日", ["en"] = "Posted" },
+        ["评分"] = new() { ["zh_TW"] = "評分", ["ja"] = "評価", ["en"] = "Rating" },
+        ["页数"] = new() { ["zh_TW"] = "頁數", ["ja"] = "ページ数", ["en"] = "Pages" },
+        ["该画廊已在站点被删除，内容可能不全"] = new()
+        {
+            ["zh_TW"] = "該畫廊已在站點被刪除，內容可能不全",
+            ["ja"] = "このギャラリーはサイト上で削除済みです。内容が不完全な場合があります",
+            ["en"] = "This gallery was expunged on the site; contents may be incomplete",
+        },
+        ["仅预览前 {n} 页，共 {m} 页；下载可取全本。"] = new()
+        {
+            ["zh_TW"] = "僅預覽前 {n} 頁，共 {m} 頁；下載可取全本。",
+            ["ja"] = "プレビューは先頭 {n} ページのみ（全 {m} ページ）。ダウンロードすれば全ページ取得できます。",
+            ["en"] = "Preview shows the first {n} of {m} pages; download to get them all.",
+        },
+        ["在站点打开"] = new() { ["zh_TW"] = "在站點開啟", ["ja"] = "サイトで開く", ["en"] = "Open on site" },
+        ["正在抓取图片清单 {i}/{n}：{title}"] = new()
+        {
+            ["zh_TW"] = "正在抓取圖片清單 {i}/{n}：{title}",
+            ["ja"] = "画像リストを取得中 {i}/{n}：{title}",
+            ["en"] = "Fetching image list {i}/{n}: {title}",
+        },
+        ["已加入下载：{galleries} 本画廊 / {files} 张图片"] = new()
+        {
+            ["zh_TW"] = "已加入下載：{galleries} 本畫廊 / {files} 張圖片",
+            ["ja"] = "ダウンロードに追加：{galleries} 件のギャラリー / {files} 枚の画像",
+            ["en"] = "Queued: {galleries} galleries / {files} images",
+        },
+        ["，跳过 {n} 本"] = new() { ["zh_TW"] = "，跳過 {n} 本", ["ja"] = "、{n} 件をスキップ", ["en"] = ", skipped {n}" },
+        ["站点"] = new() { ["zh_TW"] = "站點", ["ja"] = "サイト", ["en"] = "Site" },
+        ["图片画质"] = new() { ["zh_TW"] = "圖片畫質", ["ja"] = "画質", ["en"] = "Image quality" },
+        ["原图"] = new() { ["zh_TW"] = "原圖", ["ja"] = "オリジナル", ["en"] = "Original" },
+        ["站点显示图（省额度）"] = new()
+        {
+            ["zh_TW"] = "站點顯示圖（省額度）",
+            ["ja"] = "サイト表示サイズ（制限節約）",
+            ["en"] = "Resampled (saves quota)",
+        },
+        ["连接测试"] = new() { ["zh_TW"] = "連線測試", ["ja"] = "接続テスト", ["en"] = "Test connection" },
+        ["从浏览器登录后的 Cookie 中复制；exhentai(里站) 三项缺一不可，e-hentai(表站) 可匿名浏览"] = new()
+        {
+            ["zh_TW"] = "從瀏覽器登入後的 Cookie 中複製；exhentai(裏站) 三項缺一不可，e-hentai(表站) 可匿名瀏覽",
+            ["ja"] = "ブラウザでログイン後の Cookie からコピー。ExHentai は 3 項目すべて必須、E-Hentai は未設定でも閲覧可。",
+            ["en"] = "Copy from your browser cookies after signing in; ExHentai needs all three, E-Hentai works anonymously.",
+        },
         // ---------- FANBOX（pawchive 数据源）----------
         // 社团显示名映射（卡片右上角 🖊）
         ["自定义显示名称"] = new()

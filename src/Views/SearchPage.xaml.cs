@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
@@ -283,17 +283,19 @@ public partial class SearchPage : UserControl
     // 自动下载自主翻页单实例守卫：逐页推进（等当前页 AS 扫完再翻页），避免并发翻页循环
     private bool _autoLoadingPages;
 
-    // 当前搜索来源："dlsite"（作品号/社团号/目录页）或 "fanbox"（pawchive 作家）。
-    // 两种来源共用同一条搜索栏，结果区互斥显示（对齐 Web 端 renderSearchArea 的来源下拉）。
+    // 当前搜索来源："dlsite"（作品号/社团号/目录页）、"fanbox"（pawchive 作家）或 "ehentai"（画廊）。
+    // 各来源共用同一条搜索栏，结果区互斥显示（对齐 Web 端 renderSearchArea 的来源下拉）。
     private string _source = SourceDlsite;
     private const string SourceDlsite = "dlsite";
     private const string SourceFanbox = "fanbox";
+    private const string SourceEhentai = "ehentai";
     // DLsite 侧最后停在哪个子视图（""=还没搜过 / "results"=帖子结果 / "maker"=社团作品网格），
     // 切到 FANBOX 再切回来时按它原样恢复
     private string _dlsiteLevel = "";
 
-    // FANBOX 结果区：在代码里创建并塞进 XAML 的 FanboxHost（见该处注释）
+    // FANBOX / E-Hentai 结果区：在代码里创建并塞进 XAML 的空容器（见该处注释）
     private readonly FanboxSearchView FanboxView = new();
+    private readonly EhentaiSearchView EhentaiView = new();
 
     // 社团卡片与下载页状态同步：每秒把下载列表的聚合状态写回对应卡片角标
     private readonly DispatcherTimer _downSyncTimer = new() { Interval = TimeSpan.FromSeconds(1) };
@@ -309,6 +311,7 @@ public partial class SearchPage : UserControl
         _asCdTimer.Tick += (_, _) => TickAsCountdown();
 
         FanboxHost.Content = FanboxView;
+        EhentaiHost.Content = EhentaiView;
 
         // FANBOX 结果区的计数与「返回作家列表」按钮由本页的搜索栏统一呈现
         FanboxView.StatusChanged += text =>
@@ -324,6 +327,21 @@ public partial class SearchPage : UserControl
                 available && _source == SourceFanbox ? Visibility.Visible : Visibility.Collapsed;
         };
 
+        // E-Hentai 结果区的计数与返回按钮同样由本页的搜索栏统一呈现
+        EhentaiView.StatusChanged += text =>
+        {
+            if (_source != SourceEhentai)
+                return;
+            CountText.Text = text;
+            CountText.Visibility = text.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
+        };
+        EhentaiView.BackAvailabilityChanged += available =>
+        {
+            EhentaiBackButton.Content = EhentaiView.BackLabel;
+            EhentaiBackButton.Visibility =
+                available && _source == SourceEhentai ? Visibility.Visible : Visibility.Collapsed;
+        };
+
         BuildSourceBox();
         RetranslateUi();
         I18n.LanguageChanged += RetranslateUi;
@@ -335,7 +353,13 @@ public partial class SearchPage : UserControl
         SourceBox.Items.Clear();
         SourceBox.Items.Add(new ComboBoxItem { Content = "DLsite", Tag = SourceDlsite });
         SourceBox.Items.Add(new ComboBoxItem { Content = "FANBOX", Tag = SourceFanbox });
-        SourceBox.SelectedIndex = _source == SourceFanbox ? 1 : 0;
+        SourceBox.Items.Add(new ComboBoxItem { Content = "E-Hentai", Tag = SourceEhentai });
+        SourceBox.SelectedIndex = _source switch
+        {
+            SourceFanbox => 1,
+            SourceEhentai => 2,
+            _ => 0,
+        };
     }
 
     private void SourceBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -354,28 +378,37 @@ public partial class SearchPage : UserControl
     /// </summary>
     private void ApplySource()
     {
-        var dlsite = _source == SourceDlsite;
-        InputBox.ToolTip = dlsite
-            ? I18n.Tr("输入作品号(RJ/BJ/VJ)、社团号(RG)或 DLsite 链接")
-            : FanboxSearchView.InputHint;
+        InputBox.ToolTip = SourceHint(_source);
 
         // 全部收起
         ResultList.Visibility = Visibility.Collapsed;
         MakerList.Visibility = Visibility.Collapsed;
         FanboxHost.Visibility = Visibility.Collapsed;
+        EhentaiHost.Visibility = Visibility.Collapsed;
         AsmrBanner.Visibility = Visibility.Collapsed;
         AutoDownloadButton.Visibility = Visibility.Collapsed;
         BackButton.Visibility = Visibility.Collapsed;
         FanboxBackButton.Visibility = Visibility.Collapsed;
+        EhentaiBackButton.Visibility = Visibility.Collapsed;
         CountText.Visibility = Visibility.Collapsed;
 
-        if (dlsite)
+        if (_source == SourceDlsite)
         {
             // 恢复上次停留的 DLsite 子视图（ShowResultsPage / ShowMakerPage 会一并处理专属按钮）
             if (_dlsiteLevel == "maker")
                 ShowMakerPage();
             else if (_dlsiteLevel == "results")
                 ShowResultsPage();
+            return;
+        }
+
+        if (_source == SourceEhentai)
+        {
+            EhentaiHost.Visibility = Visibility.Visible;
+            CountText.Text = EhentaiView.CurrentStatus;
+            CountText.Visibility = CountText.Text.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
+            EhentaiBackButton.Content = EhentaiView.BackLabel;
+            EhentaiBackButton.Visibility = EhentaiView.CanGoBack ? Visibility.Visible : Visibility.Collapsed;
             return;
         }
 
@@ -386,16 +419,23 @@ public partial class SearchPage : UserControl
         FanboxBackButton.Visibility = FanboxView.CanGoBack ? Visibility.Visible : Visibility.Collapsed;
     }
 
+    /// <summary>各来源的输入框占位提示（对齐 Web 的 SEARCH_SOURCES.placeholder）。</summary>
+    private static string SourceHint(string source) => source switch
+    {
+        SourceFanbox => FanboxSearchView.InputHint,
+        SourceEhentai => EhentaiSearchView.InputHint,
+        _ => I18n.Tr("输入作品号(RJ/BJ/VJ)、社团号(RG)或 DLsite 链接"),
+    };
+
     private void RetranslateUi()
     {
         SearchButton.Content = I18n.Tr("查询");
         FanboxBackButton.Content = FanboxView.BackLabel;
+        EhentaiBackButton.Content = EhentaiView.BackLabel;
         BackButton.Content = I18n.Tr("← 返回社团作品");
         LoadingText.Text = I18n.Tr("正在查询…");
         AutoDownloadButton.Content = _autoDownload ? I18n.Tr("自动下载：开") : I18n.Tr("自动下载：关");
-        InputBox.ToolTip = _source == SourceDlsite
-            ? I18n.Tr("输入作品号(RJ/BJ/VJ)、社团号(RG)或 DLsite 链接")
-            : FanboxSearchView.InputHint;
+        InputBox.ToolTip = SourceHint(_source);
     }
 
     /// <summary>由下载管理页"重新搜索"触发：填入番号并自动搜索。</summary>
@@ -404,7 +444,7 @@ public partial class SearchPage : UserControl
         // 番号重搜固定走 DLsite 来源（下拉同步归位）
         if (_source != SourceDlsite)
         {
-            SourceBox.SelectedIndex = 0;
+            SourceBox.SelectedIndex = 0;   // 触发 SelectionChanged → ApplySource
             _source = SourceDlsite;
             ApplySource();
         }
@@ -420,12 +460,19 @@ public partial class SearchPage : UserControl
             await RunSearchAnyAsync();
     }
 
-    /// <summary>查询入口：按当前来源分流到 DLsite 搜索或 FANBOX 作家搜索。</summary>
-    private Task RunSearchAnyAsync() =>
-        _source == SourceFanbox ? FanboxView.RunSearchAsync(InputBox.Text) : RunSearchAsync();
+    /// <summary>查询入口：按当前来源分流到 DLsite / FANBOX / E-Hentai 的搜索。</summary>
+    private Task RunSearchAnyAsync() => _source switch
+    {
+        SourceFanbox => FanboxView.RunSearchAsync(InputBox.Text),
+        SourceEhentai => EhentaiView.RunSearchAsync(InputBox.Text),
+        _ => RunSearchAsync(),
+    };
 
     /// <summary>搜索栏返回按钮：按 FANBOX 当前层级回上一层（详情 → 作品列表 → 作家列表）。</summary>
     private void FanboxBack_Click(object sender, RoutedEventArgs e) => FanboxView.GoBack();
+
+    /// <summary>搜索栏返回按钮：E-Hentai 的详情回画廊网格。</summary>
+    private void EhentaiBack_Click(object sender, RoutedEventArgs e) => EhentaiView.GoBack();
 
     private void BackButton_Click(object sender, RoutedEventArgs e)
     {

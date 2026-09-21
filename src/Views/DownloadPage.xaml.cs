@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Linq;
@@ -246,9 +246,9 @@ public partial class DownloadPage : UserControl
     /// 工具栏其余按钮按列表内容灰显：空列表点「清空列表」、没有失败项点「全部重新解析」都不会有任何反应。
     /// 判定规则与 Web 同源（<see cref="DownloadListActions.FlagsOf"/>，Web 由 /api/downloads 回传）。
     /// </summary>
-    private void UpdateToolbarButtons(IEnumerable<string> statuses)
+    private void UpdateToolbarButtons(IEnumerable<(string Status, string? Error)> items)
     {
-        var flags = DownloadListActions.FlagsOf(statuses);
+        var flags = DownloadListActions.FlagsOf(items);
         ClearDoneButton.IsEnabled = flags.HasDone;
         ClearNoLinkButton.IsEnabled = flags.HasNoLink;
         ClearAllButton.IsEnabled = flags.HasRows;
@@ -468,7 +468,7 @@ public partial class DownloadPage : UserControl
                 row[3] as string ?? "", row[4]?.ToString() ?? "", row[5] as string, row[6] as string));
         }
         // 工具栏按钮灰显跟着列表内容走（整表已在手上，不再额外查库）
-        UpdateToolbarButtons(rows.Select(r => r[3] as string ?? ""));
+        UpdateToolbarButtons(rows.Select(r => (r[3] as string ?? "", r[5] as string)));
 
         // 同步到现有集合（保留展开状态与滚动位置）
         var anyActive = false;   // 是否存在下载中/等待/解压中的任务，用于空闲降频

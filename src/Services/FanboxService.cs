@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -343,8 +343,11 @@ public static class FanboxService
         }
     }
 
-    /// <summary>作品封面：目录内按名称排序的第一张图片（文件名的三位序号保证与站上顺序一致）。</summary>
-    private static string? FindCover(string folder)
+    /// <summary>
+    /// 作品封面：目录内按名称排序的第一张图片（文件名的三位序号保证与站上顺序一致）。
+    /// E-Hentai 来源的命名规则与此一致（三位页码 + 扩展名），故共用这一个实现。
+    /// </summary>
+    internal static string? FindCover(string folder)
     {
         if (!Directory.Exists(folder))
             return null;

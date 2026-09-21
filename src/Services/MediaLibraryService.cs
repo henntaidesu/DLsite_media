@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -17,9 +17,18 @@ public delegate void BackfillProgress(int index, int total, string rj, bool ok);
 /// </summary>
 public static class MediaLibraryService
 {
-    // 作品文件夹名：DLsite 的 RJ 号，或 fanbox 的 FB+作品号（两者都以作品号命名，扫描才能认出来）
+    // 作品文件夹名：DLsite 的 RJ 号，或 fanbox 的 FB+作品号、E-Hentai 的 EH+画廊号
+    // （都以作品号命名，扫描才能认出来）
     private static readonly Regex RjPattern =
-        new(@"(?:RJ\d{6,}|FB\d+)", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+        new(@"(?:RJ\d{6,}|FB\d+|EH\d+)", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    /// <summary>
+    /// 该作品的图片是否直接摊在作品目录里——没有 DLsite 那套 DataSource 子目录，也没有
+    /// description.txt 里的 [img:] 正文占位图。fanbox 投稿与 E-Hentai 画廊都是这样
+    /// （一篇/一本动辄上百张），详情页据此只挂封面一张、不翻目录，要看图走「查看作品」。
+    /// </summary>
+    public static bool IsFlatImageWork(string workId) =>
+        FanboxService.IsFanboxWorkId(workId) || EhentaiService.IsEhentaiWorkId(workId);
 
     /// <summary>只读取目录下的全部一级文件夹，返回 {RJ号: 文件夹绝对路径}。</summary>
     public static Dictionary<string, string> ScanTopRjFolders(string root)

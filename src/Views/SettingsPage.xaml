@@ -121,6 +121,40 @@
                 </StackPanel>
             </GroupBox>
 
+            <!-- E-Hentai（桌面独有配置，Web 设置页不暴露；排版随 ASMR.ONE 分区） -->
+            <GroupBox x:Name="EhentaiGroup" Header="E-Hentai">
+                <StackPanel>
+                    <!-- 站点 + 下载原图 同一行 -->
+                    <StackPanel Orientation="Horizontal" Margin="0,4">
+                        <TextBlock x:Name="EhHostLabel" Text="站点" Style="{StaticResource FieldLabel}" />
+                        <ComboBox x:Name="EhHostCombo" Width="160" VerticalContentAlignment="Center"
+                                  SelectionChanged="EhHostCombo_SelectionChanged" />
+                        <TextBlock x:Name="EhOriginalLabel" Text="图片画质" Style="{StaticResource FieldLabel}"
+                                   MinWidth="0" Margin="24,0,12,0" />
+                        <ComboBox x:Name="EhOriginalCombo" Width="200" VerticalContentAlignment="Center"
+                                  SelectionChanged="EhOriginalCombo_SelectionChanged" />
+                        <Button x:Name="EhTestButton" Content="连接测试" Margin="16,0,0,0"
+                                Click="EhTestButton_Click" />
+                    </StackPanel>
+                    <!-- 登录 cookie 三项同一行 -->
+                    <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                        <TextBlock x:Name="EhMemberLabel" Text="member_id" Style="{StaticResource FieldLabel}" />
+                        <TextBox x:Name="EhMemberBox" Width="140" VerticalContentAlignment="Center"
+                                 LostFocus="EhMemberBox_LostFocus" />
+                        <TextBlock x:Name="EhHashLabel" Text="pass_hash" Style="{StaticResource FieldLabel}"
+                                   MinWidth="0" Margin="24,0,12,0" />
+                        <TextBox x:Name="EhHashBox" Width="280" VerticalContentAlignment="Center"
+                                 LostFocus="EhHashBox_LostFocus" />
+                        <TextBlock x:Name="EhIgneousLabel" Text="igneous" Style="{StaticResource FieldLabel}"
+                                   MinWidth="0" Margin="24,0,12,0" />
+                        <TextBox x:Name="EhIgneousBox" Width="200" VerticalContentAlignment="Center"
+                                 LostFocus="EhIgneousBox_LostFocus" />
+                    </StackPanel>
+                    <TextBlock x:Name="EhHint" Style="{StaticResource CaptionText}" Margin="0,6,0,0"
+                               Text="从浏览器登录后的 Cookie 中复制；exhentai(里站) 三项缺一不可，e-hentai(表站) 可匿名浏览" />
+                </StackPanel>
+            </GroupBox>
+
             <!-- 系统（顺序对齐 Web：系统在外部访问之前，settings.js）。关闭按钮为桌面独有项 -->
             <GroupBox x:Name="SystemGroup" Header="系统">
                 <StackPanel>

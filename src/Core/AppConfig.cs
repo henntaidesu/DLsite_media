@@ -50,6 +50,13 @@ public static class AppConfig
         },
         // fanbox 数据源（pawchive 站点）：域名可换镜像，附件/缩略图子域由主域推导
         ["pawchive"] = new() { ["host"] = "pawchive.pw" },
+        // E-Hentai 数据源：表站(e-hentai.org)可匿名浏览，里站(exhentai.org)必须带登录 cookie；
+        // original=True 时下原图（fullimg），否则下站点显示用的缩放图（省看图额度）
+        ["ehentai"] = new()
+        {
+            ["host"] = "e-hentai.org", ["member_id"] = "", ["pass_hash"] = "", ["igneous"] = "",
+            ["original"] = "True",
+        },
         // 图床存储（自建 Image_hosting 服务）：开启后作品卡封面由图床直供，不再逐张唤醒 HDD
         ["image_host"] = new()
         {
@@ -329,6 +336,37 @@ public static class AppConfig
         }
         set => Write("pawchive", "host", value.Trim());
     }
+
+    // ---------- E-Hentai 数据源 ----------
+
+    /// <summary>
+    /// 站点域名：e-hentai.org（表站，可匿名浏览）或 exhentai.org（里站，必须带登录 cookie）。
+    /// 元数据 API 固定走 api.e-hentai.org，两站通用，不随此项变化。
+    /// </summary>
+    public static string EhentaiHost
+    {
+        get
+        {
+            var host = (Read("ehentai", "host", "e-hentai.org") ?? "").Trim();
+            return host.Length > 0 ? host : "e-hentai.org";
+        }
+        set => Write("ehentai", "host", value.Trim());
+    }
+
+    /// <summary>登录 cookie 的 ipb_member_id（浏览器登录后从 Cookie 里复制）。</summary>
+    public static string EhentaiMemberId => (Read("ehentai", "member_id", "") ?? "").Trim();
+
+    /// <summary>登录 cookie 的 ipb_pass_hash。</summary>
+    public static string EhentaiPassHash => (Read("ehentai", "pass_hash", "") ?? "").Trim();
+
+    /// <summary>登录 cookie 的 igneous（仅 exhentai 需要，表站留空即可）。</summary>
+    public static string EhentaiIgneous => (Read("ehentai", "igneous", "") ?? "").Trim();
+
+    /// <summary>
+    /// 是否下载原图。关闭时下站点显示用的缩放图（默认 1280px 宽）——画质略低，
+    /// 但每张只算一次看图额度，大批量下载不容易触发站点的限额封锁。
+    /// </summary>
+    public static bool EhentaiOriginal => Read("ehentai", "original", "True") != "False";
 
     // ---------- 图床存储（自建 Image_hosting）----------
 

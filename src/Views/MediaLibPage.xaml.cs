@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
@@ -1340,7 +1340,7 @@ public partial class MediaLibPage : UserControl
             "SELECT \"work_id\", \"work_name\", \"maker_name\", \"sell_date\", \"series\", " +
             "\"scenario\", \"illust\", \"voice_actor\", \"age_category\", \"work_type\", " +
             "\"genre\", \"file_size\", \"intro_s\", \"folder\", \"read_flag\", \"favorite\", " +
-            "\"maker_id\", \"cover\" " +
+            "\"maker_id\", \"cover\", \"eh_token\" " +   // eh_token: E-Hentai 画廊令牌，拼站点链接要用
             "FROM \"works\" WHERE \"work_id\" = @w",
             ("@w", _currentWork));
         if (rows is not { Count: > 0 })
@@ -1359,11 +1359,18 @@ public partial class MediaLibPage : UserControl
         SearchBox.Visibility = Visibility.Collapsed;
         RjLabel.Inlines.Clear();
         var isFanbox = FanboxService.IsFanboxWorkId(workId);
-        // fanbox 的 work_id 是内部键（fb_+作品号），展示与跳转都用站上的作品号
-        var linkText = isFanbox ? FanboxService.PostIdOf(workId) : workId;
+        var isEhentai = EhentaiService.IsEhentaiWorkId(workId);
+        // fanbox / E-Hentai 的 work_id 是内部键（FB/EH + 站上的号），展示与跳转都用站上的号
+        var linkText = isFanbox ? FanboxService.PostIdOf(workId)
+            : isEhentai ? EhentaiService.GidOf(workId)
+            : workId;
         var linkUrl = isFanbox
             ? $"https://{AppConfig.PawchiveHost}/{PawchiveApi.FanboxService}/user/" +
               $"{r[16] as string ?? ""}/post/{FanboxService.PostIdOf(workId)}"   // r[16]=maker_id=作家号
+            : isEhentai
+            // 画廊地址要 gid + token，token 入队时存在 works.eh_token 里（r[18]）
+            ? EhentaiApi.GalleryUrl(long.TryParse(EhentaiService.GidOf(workId), out var gid) ? gid : 0,
+                r[18] as string ?? "")
             : $"https://www.dlsite.com/maniax/work/=/product_id/{workId}.html";
         var rjLink = new Hyperlink(new Run(linkText))
         {
@@ -1401,9 +1408,10 @@ public partial class MediaLibPage : UserControl
             FontWeight = FontWeights.SemiBold, FontSize = 18, TextWrapping = TextWrapping.Wrap,
         });
 
-        // fanbox 作品的图片就摊在作品目录里（没有 DLsite 那套 DataSource 子目录与正文占位图）
+        // fanbox / E-Hentai 作品的图片就摊在作品目录里（没有 DLsite 那套 DataSource 子目录与正文占位图）
+        var isFlat = MediaLibraryService.IsFlatImageWork(workId);
         var folder = workFolder ?? "";
-        if (!isFanbox)
+        if (!isFlat)
         {
             folder = workFolder != null ? Path.Combine(workFolder, DlsitePage.DataSourceDir) : "";
             if (!Directory.Exists(folder))
@@ -1425,10 +1433,10 @@ public partial class MediaLibPage : UserControl
         CardsScroll.ScrollToVerticalOffset(0);
 
         // 正文文本与轮播图列表在后台线程读盘/解析。
-        // fanbox 作品目录里是整篇投稿的图（动辄上百张），进详情只挂封面一张、不翻目录，
-        // 要看图走「查看作品」（对齐 Web：/api/detail 对 fanbox 不返回轮播图列表）
+        // fanbox 投稿 / E-Hentai 画廊的目录里是整篇的图（动辄上百张），进详情只挂封面一张、不翻目录，
+        // 要看图走「查看作品」（对齐 Web：/api/detail 对这两种来源不返回轮播图列表）
         var coverPath = r[17] as string ?? "";
-        var detail = await Task.Run(() => isFanbox
+        var detail = await Task.Run(() => isFlat
             ? new DetailContent([], File.Exists(coverPath) ? [coverPath] : [])
             : LoadDetailContent(folder));
         if (_currentWork != workId || _level != "detail")

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
@@ -84,8 +84,9 @@ public static class DownloadEngine
     /// <summary>作品子文件夹名：按设置以 RJ号 或 DL API 返回的作品名称命名。</summary>
     private static string FolderLeafName(string workId)
     {
-        // fanbox 作品固定以作品号命名（标题会改、会重名，且顶层扫描要靠作品号认出它们）
-        if (AppConfig.FolderNameMode != "work_name" || FanboxService.IsFanboxWorkId(workId))
+        // fanbox / E-Hentai 作品固定以作品号命名（标题会改、会重名，且顶层扫描要靠作品号认出它们）
+        if (AppConfig.FolderNameMode != "work_name" ||
+            FanboxService.IsFanboxWorkId(workId) || EhentaiService.IsEhentaiWorkId(workId))
             return workId;
         var name = WorkNameCache.GetOrAdd(workId, id =>
         {
@@ -445,6 +446,27 @@ public static class DownloadEngine
                 ("@s", status), ("@k", key));
     }
 
+    /// <summary>
+    /// 用解析出的真实文件名纠正 E-Hentai 图片的扩展名。
+    ///
+    /// 入队时扩展名是从画廊页缩略图的 title 里猜的（那里偶尔没写，就按 .jpg 算），
+    /// 真正的文件名要进图片页才看得到。两者不一致时以后者为准，并把 sub_path 一并改掉——
+    /// 否则磁盘上是 001.png、下载列表显示 001.jpg，续传时还会对不上文件。
+    /// 页码部分不动，排序始终按页码走。
+    /// </summary>
+    private static string FixEhentaiExtension(string key, string subPath, string resolvedName)
+    {
+        if (string.IsNullOrEmpty(subPath) || string.IsNullOrEmpty(resolvedName))
+            return subPath;
+        var ext = EhentaiApi.ExtensionOf(resolvedName);
+        if (string.Equals(Path.GetExtension(subPath), ext, StringComparison.OrdinalIgnoreCase))
+            return subPath;
+        var fixedPath = Path.ChangeExtension(subPath, ext);
+        Db.Execute("UPDATE \"download_list\" SET \"sub_path\" = @s WHERE \"UUID\" = @k",
+            ("@s", fixedPath), ("@k", key));
+        return fixedPath;
+    }
+
     /// <summary>标记某分卷解析失败('2')，并记录失败原因（debrid-link 错误码）。</summary>
     private static void SetParseFailed(string key, string? error)
     {
@@ -498,10 +520,10 @@ public static class DownloadEngine
     /// <summary>把某网盘（账户级则为所有论坛源）当前待下载('0')的分卷标记为流量用尽('2')暂停。</summary>
     private static void PauseHostDownloads(string key, string error)
     {
-        // 直链源（asmr / fanbox）不经 debrid-link，不受其流量限制，不参与暂停
+        // 站点源（asmr / fanbox / ehentai）不经 debrid-link，不受其流量限制，不参与暂停
         var rows = Db.Select(
             "SELECT \"UUID\", \"url\" FROM \"download_list\" WHERE \"status\" = '0' " +
-            "AND (\"source\" IS NULL OR \"source\" NOT IN ('asmr', 'fanbox'))");
+            "AND (\"source\" IS NULL OR \"source\" NOT IN ('asmr', 'fanbox', 'ehentai'))");
         foreach (var r in rows ?? [])
         {
             var url = r[1] as string ?? "";
@@ -604,13 +626,14 @@ public static class DownloadEngine
     }
 
     /// <summary>探测文件总大小；返回 (总字节数, 是否支持 Range)。</summary>
-    private static (long Total, bool Range) ProbeSize(HttpClient client, string url, string? userAgent)
+    private static (long Total, bool Range) ProbeSize(HttpClient client, string url,
+        string? userAgent, string? cookie)
     {
         try
         {
             using var request = new HttpRequestMessage(HttpMethod.Get, url);
             request.Headers.Range = new System.Net.Http.Headers.RangeHeaderValue(0, 0);
-            ApplyUserAgent(request, userAgent);
+            ApplyRequestHeaders(request, userAgent, cookie);
             using var response = client.Send(request, HttpCompletionOption.ResponseHeadersRead);
             if (response.StatusCode == HttpStatusCode.PartialContent)
             {
@@ -629,11 +652,11 @@ public static class DownloadEngine
 
     /// <summary>单连接下载（断点续传 + 暂停 + 低速重试），返回 done/paused/slow/failed/throttled/missing。</summary>
     private static string DownloadSingle(HttpClient client, string url, string filePath,
-        string filename, string key, string workId, string? userAgent)
+        string filename, string key, string workId, string? userAgent, string? cookie)
     {
         long downloaded = 0;
         using var request = new HttpRequestMessage(HttpMethod.Get, url);
-        ApplyUserAgent(request, userAgent);
+        ApplyRequestHeaders(request, userAgent, cookie);
         if (File.Exists(filePath))
         {
             downloaded = new FileInfo(filePath).Length;
@@ -767,9 +790,9 @@ public static class DownloadEngine
 
     /// <summary>下载单个文件：清理旧版分段下载元数据后单连接下载，返回 done/paused/slow/failed/throttled/missing。</summary>
     private static string DownloadFile(HttpClient client, string directUrl, string filePath,
-        string filename, string key, string workId, string? userAgent = null)
+        string filename, string key, string workId, string? userAgent = null, string? cookie = null)
     {
-        var (totalSize, _) = ProbeSize(client, directUrl, userAgent);
+        var (totalSize, _) = ProbeSize(client, directUrl, userAgent, cookie);
 
         // 旧版分段下载遗留的元数据：其预分配的整文件内容不可信，连同文件一起清掉后重下
         if (File.Exists(MetaPath(filePath)))
@@ -783,16 +806,23 @@ public static class DownloadEngine
         if (totalSize > 0 && File.Exists(filePath) && new FileInfo(filePath).Length == totalSize)
             return "done";
 
-        return DownloadSingle(client, directUrl, filePath, filename, key, workId, userAgent);
+        return DownloadSingle(client, directUrl, filePath, filename, key, workId, userAgent, cookie);
     }
 
-    /// <summary>按来源覆盖单次请求的 User-Agent（下载线程的 client 为各来源共用，只能逐请求设置）。</summary>
-    private static void ApplyUserAgent(HttpRequestMessage request, string? userAgent)
+    /// <summary>
+    /// 按来源覆盖单次请求的 User-Agent 与 Cookie
+    /// （下载线程的 client 为各来源共用，只能逐请求设置）。
+    /// pawchive 的防护网关要中性 UA；E-Hentai 的原图接口要登录 cookie。
+    /// </summary>
+    private static void ApplyRequestHeaders(HttpRequestMessage request, string? userAgent, string? cookie)
     {
-        if (string.IsNullOrEmpty(userAgent))
-            return;
-        request.Headers.UserAgent.Clear();
-        request.Headers.UserAgent.ParseAdd(userAgent);
+        if (!string.IsNullOrEmpty(userAgent))
+        {
+            request.Headers.UserAgent.Clear();
+            request.Headers.UserAgent.ParseAdd(userAgent);
+        }
+        if (!string.IsNullOrEmpty(cookie))
+            request.Headers.TryAddWithoutValidation("Cookie", cookie);
     }
 
     /// <summary>被站点限流后的冷却时长：期间该线程不再发起请求，让封锁自然解除。</summary>
@@ -827,11 +857,40 @@ public static class DownloadEngine
                 var (k, workId, url, source, subPath) = claimed.Value;
                 key = k;
                 // asmr.one 与 fanbox 都是直链源：url 即可直接下载，且 sub_path 保留作品内目录结构
-                var isDirect = source is "asmr" or "fanbox";
+                var isDirect = source is "asmr" or FanboxService.SourceName;
+                // E-Hentai：url 是图片页地址，直链在页面里、与 IP 绑定又会过期，必须临下载前现解析；
+                // 但和直链源一样带 sub_path（作品内的三位页码文件名）
+                var isEhentai = source == EhentaiApi.SourceName;
+                var keepsSubPath = isDirect || isEhentai;
 
                 string directUrl;
                 string filename;
-                if (isDirect)
+                if (isEhentai)
+                {
+                    var link = EhentaiApi.ResolveImage(url, AppConfig.EhentaiOriginal);
+                    if (!link.Ok)
+                    {
+                        if (link.Throttled)
+                        {
+                            // 本 IP 的看图额度用尽：热重试只会让封锁一直续期，冷却后再来
+                            Logger.Warning(
+                                $"E-Hentai 看图额度已用尽，冷却 {ThrottleCooldown.TotalSeconds:F0} 秒后重试");
+                            SetStatus(key, "0");
+                            for (var i = 0; i < ThrottleCooldown.TotalSeconds && !_stopRequested; i++)
+                                Thread.Sleep(1000);
+                            continue;
+                        }
+                        Logger.Error($"{workId} E-Hentai 图片页解析失败: {url} ({link.Error})");
+                        SetParseFailed(key, link.Error);
+                        continue;
+                    }
+                    directUrl = link.Url;
+                    // 入队时的扩展名是按画廊页缩略图猜的，这里拿到了真名就以它为准，
+                    // 并把 sub_path 一并改掉，免得磁盘上的文件名与下载列表显示的对不上
+                    subPath = FixEhentaiExtension(key, subPath, link.FileName);
+                    filename = Path.GetFileName(subPath);
+                }
+                else if (isDirect)
                 {
                     // 直链源：download_list.url 本身就是直链，无需 debrid 解析；
                     // sub_path 为作品内相对路径（含文件名），按其重建目录树落盘
@@ -865,15 +924,17 @@ public static class DownloadEngine
                 var downloadPath = WorkFolderPath(workId);
                 // 首个分卷处理时落库缓存目录，保证后续分卷、重启续传后的解压/入库都用同一目录
                 PersistWorkFolder(workId, downloadPath);
-                // 直链源保留作品内子目录结构；论坛源扁平落盘
-                var filePath = isDirect && !string.IsNullOrEmpty(subPath)
+                // 站点源保留作品内子目录结构/文件名；论坛源扁平落盘
+                var filePath = keepsSubPath && !string.IsNullOrEmpty(subPath)
                     ? Path.Combine(downloadPath, subPath.Replace('/', Path.DirectorySeparatorChar))
                     : Path.Combine(downloadPath, filename);
                 Directory.CreateDirectory(Path.GetDirectoryName(filePath) ?? downloadPath);
 
                 // pawchive 的防护网关会拦截浏览器 UA 的请求，取附件须换成中性 UA（见 PawchiveApi.UserAgent）
-                var userAgent = source == "fanbox" ? PawchiveApi.UserAgent : null;
-                var result = DownloadFile(client, directUrl, filePath, filename, key, workId, userAgent);
+                var userAgent = source == FanboxService.SourceName ? PawchiveApi.UserAgent : null;
+                // E-Hentai 的原图走站点自己的 fullimg 接口，要带登录 cookie（里站更是整站都要）
+                var cookie = isEhentai ? EhentaiApi.CookieHeader : null;
+                var result = DownloadFile(client, directUrl, filePath, filename, key, workId, userAgent, cookie);
                 DownloadProgress.TryRemove(key, out _);
                 // pawchive 对只归档了预览的投稿（has_full=false）原图一律 404，但 img.<host> 上
                 // 800px 的预览图是有的。原图没有就存预览图，总好过整篇空手而归；
@@ -884,7 +945,7 @@ public static class DownloadEngine
                     var thumbUrl = PawchiveApi.ThumbUrlFromFileUrl(directUrl);
                     if (thumbUrl.Length > 0)
                     {
-                        result = DownloadFile(client, thumbUrl, filePath, filename, key, workId, userAgent);
+                        result = DownloadFile(client, thumbUrl, filePath, filename, key, workId, userAgent, cookie);
                         DownloadProgress.TryRemove(key, out _);
                         if (result == "done")
                         {
@@ -910,6 +971,8 @@ public static class DownloadEngine
                     // 直链源（asmr / fanbox）的 url 就是源站地址，文件之间也彼此独立：404 说明
                     // 源站没有这个文件（如 pawchive 只导入了投稿元数据、未归档文件本体），
                     // 再怎么重试都不会变，只会让整条队列原地打转。标记跳过、继续下能下的。
+                    // E-Hentai 不在此列：它的直链是刚解析出来的临时地址，404 多半是这一台图片
+                    // 服务器掉线，重新领取会重新解析（还会换一台机器），故按普通失败重试。
                     if (isDirect)
                     {
                         Logger.Warning($"{filename} 源站不存在（HTTP 404/410），跳过该文件");
@@ -1043,13 +1106,14 @@ public static class DownloadEngine
         return done != null && Convert.ToInt64(done) > 0;
     }
 
-    /// <summary>按来源触发收尾：直链源（asmr / fanbox）无压缩包，下完直接入库；论坛源走自动解压。</summary>
+    /// <summary>按来源触发收尾：站点源（asmr / fanbox / ehentai）无压缩包，下完直接入库；论坛源走自动解压。</summary>
     private static void FinalizeBySource(string workId, string source)
     {
         switch (source)
         {
             case "asmr": AsmrFinalizeIfDone(workId); break;
             case FanboxService.SourceName: FanboxFinalizeIfDone(workId); break;
+            case EhentaiApi.SourceName: EhentaiFinalizeIfDone(workId); break;
             default: AutoUnzipIfDone(workId); break;
         }
     }
@@ -1123,6 +1187,46 @@ public static class DownloadEngine
         Logger.Info($"{workId} fanbox 下载完成，开始入库");
         new Thread(() => RunFanboxFinalize(workId))
             { IsBackground = true, Name = $"fanbox-finalize-{workId}" }.Start();
+    }
+
+    /// <summary>
+    /// E-Hentai 画廊下完后的收尾（无解压）：所有图片完成后在后台移动到媒体库、
+    /// 写画廊信息、定位封面并标记已品悦。每本画廊只执行一次。
+    /// </summary>
+    private static void EhentaiFinalizeIfDone(string workId)
+    {
+        if (!ReadyToFinalize(workId))
+            return;  // 还有未终结的图片，或一张都没下成（全部被跳过的画廊不入库）
+
+        lock (UnzipLock)
+        {
+            if (!Unzipping.Add(workId))
+                return;  // 已有线程在收尾该画廊（并发完成时去重）
+        }
+
+        UnzipProgress[workId] = new UnzipProgressInfo { State = "moving", Pct = 0 };
+        Logger.Info($"{workId} E-Hentai 下载完成，开始入库");
+        new Thread(() => RunEhentaiFinalize(workId))
+            { IsBackground = true, Name = $"ehentai-finalize-{workId}" }.Start();
+    }
+
+    /// <summary>在后台把 E-Hentai 画廊移入媒体库并入库，进度由 MoveToTargetFolder 维护。</summary>
+    private static void RunEhentaiFinalize(string workId)
+    {
+        try
+        {
+            EhentaiService.FinalizeIntoLibrary(workId);
+        }
+        catch (Exception e)
+        {
+            Logger.Error(e, "E-Hentai 入库收尾");
+        }
+        finally
+        {
+            UnzipProgress.TryRemove(workId, out _);
+            lock (UnzipLock)
+                Unzipping.Remove(workId);
+        }
     }
 
     /// <summary>在后台把 fanbox 作品移入媒体库并入库，进度由 MoveToTargetFolder 维护。</summary>

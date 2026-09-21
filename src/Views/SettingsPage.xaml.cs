@@ -52,6 +52,8 @@ public partial class SettingsPage : UserControl
             LanguageCombo.Items.Add(name);
         foreach (var site in new[] { "Original", "Mirror-1", "Mirror-2", "Mirror-3" })
             AsmrMirrorCombo.Items.Add(site);
+        foreach (var host in EhHosts)
+            EhHostCombo.Items.Add(host);
         BuildSearchSourceRows();
         BuildFileTypeChecks();
         _loading = false;
@@ -136,6 +138,15 @@ public partial class SettingsPage : UserControl
         AsmrMirrorLabel.Text = I18n.Tr("镜像站");
         AsmrFileTypeLabel.Text = I18n.Tr("下载文件类型");
         AsmrTestButton.Content = I18n.Tr("登录测试");
+        EhentaiGroup.Header = "E-Hentai";
+        EhHostLabel.Text = I18n.Tr("站点");
+        EhOriginalLabel.Text = I18n.Tr("图片画质");
+        EhMemberLabel.Text = "member_id";
+        EhHashLabel.Text = "pass_hash";
+        EhIgneousLabel.Text = "igneous";
+        EhTestButton.Content = I18n.Tr("连接测试");
+        EhHint.Text = I18n.Tr("从浏览器登录后的 Cookie 中复制；exhentai(里站) 三项缺一不可，e-hentai(表站) 可匿名浏览");
+        BuildEhOriginalCombo();
         SystemGroup.Header = I18n.Tr("系统");
         MediaLibGroup.Header = I18n.Tr("媒体库");
         PathLabel.Text = I18n.Tr("缓存路径");
@@ -241,6 +252,12 @@ public partial class SettingsPage : UserControl
 
         AsmrUserBox.Text = AppConfig.AsmrUsername;
         AsmrPassBox.Text = AppConfig.AsmrPassword;
+        var ehHost = Array.IndexOf(EhHosts, AppConfig.EhentaiHost);
+        EhHostCombo.SelectedIndex = ehHost >= 0 ? ehHost : 0;
+        EhOriginalCombo.SelectedIndex = AppConfig.EhentaiOriginal ? 0 : 1;
+        EhMemberBox.Text = AppConfig.EhentaiMemberId;
+        EhHashBox.Text = AppConfig.EhentaiPassHash;
+        EhIgneousBox.Text = AppConfig.EhentaiIgneous;
         AsmrMirrorCombo.SelectedIndex = AppConfig.AsmrMirrorSite switch
         {
             "Mirror-1" => 1,
@@ -418,6 +435,78 @@ public partial class SettingsPage : UserControl
         else
             InAppDialog.Warn(this,
                 I18n.Format(I18n.Tr("登录失败：{err}"), ("err", error ?? "")), I18n.Tr("测试失败"));
+    }
+
+    // ---------- E-Hentai ----------
+
+    /// <summary>可选站点：表站可匿名浏览，里站必须带登录 cookie。</summary>
+    private static readonly string[] EhHosts = ["e-hentai.org", "exhentai.org"];
+
+    /// <summary>画质下拉的选项随语言重建（下标 0=原图 / 1=站点显示图）。</summary>
+    private void BuildEhOriginalCombo()
+    {
+        var index = EhOriginalCombo.SelectedIndex;
+        var loading = _loading;
+        _loading = true;
+        EhOriginalCombo.Items.Clear();
+        EhOriginalCombo.Items.Add(I18n.Tr("原图"));
+        EhOriginalCombo.Items.Add(I18n.Tr("站点显示图（省额度）"));
+        EhOriginalCombo.SelectedIndex = index >= 0 ? index : (AppConfig.EhentaiOriginal ? 0 : 1);
+        _loading = loading;
+    }
+
+    private void EhHostCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_loading || EhHostCombo.SelectedIndex < 0)
+            return;
+        AppConfig.EhentaiHost = EhHosts[EhHostCombo.SelectedIndex];
+        EhentaiApi.Invalidate();   // 换站/换 cookie 后要按新配置重建客户端
+    }
+
+    private void EhOriginalCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_loading || EhOriginalCombo.SelectedIndex < 0)
+            return;
+        AppConfig.Write("ehentai", "original", EhOriginalCombo.SelectedIndex == 0 ? "True" : "False");
+    }
+
+    private void EhMemberBox_LostFocus(object sender, RoutedEventArgs e) =>
+        SaveEhCookie("member_id", EhMemberBox.Text);
+
+    private void EhHashBox_LostFocus(object sender, RoutedEventArgs e) =>
+        SaveEhCookie("pass_hash", EhHashBox.Text);
+
+    private void EhIgneousBox_LostFocus(object sender, RoutedEventArgs e) =>
+        SaveEhCookie("igneous", EhIgneousBox.Text);
+
+    private void SaveEhCookie(string key, string value)
+    {
+        if (_loading)
+            return;
+        AppConfig.Write("ehentai", key, value.Trim());
+        EhentaiApi.Invalidate();
+    }
+
+    private async void EhTestButton_Click(object sender, RoutedEventArgs e)
+    {
+        // 先保存当前输入，再用其连接
+        AppConfig.Write("ehentai", "member_id", EhMemberBox.Text.Trim());
+        AppConfig.Write("ehentai", "pass_hash", EhHashBox.Text.Trim());
+        AppConfig.Write("ehentai", "igneous", EhIgneousBox.Text.Trim());
+        EhentaiApi.Invalidate();
+        EhTestButton.IsEnabled = false;
+        try
+        {
+            var (ok, message) = await EhentaiApi.TestAsync();
+            if (ok)
+                InAppDialog.Info(this, message, I18n.Tr("测试成功"));
+            else
+                InAppDialog.Warn(this, message, I18n.Tr("测试失败"));
+        }
+        finally
+        {
+            EhTestButton.IsEnabled = true;
+        }
     }
 
     private void AutoDownloadCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)

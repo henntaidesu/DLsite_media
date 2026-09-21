@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using Microsoft.Data.Sqlite;
@@ -219,8 +219,9 @@ public static class Db
                 "state", "library", "sell_date", "series", "scenario", "illust",
                 "voice_actor", "genre", "file_size", "cover", "meta_scanned", "folder",
                 "target", "target_lib", "read_flag", "favorite",
-                // 数据源区分："anime-sharing"(默认/旧数据) 或 "asmr"；asmr_id 存 asmr.one 的数字作品 id（调 API 用）
-                "source", "asmr_id"
+                // 数据源区分："anime-sharing"(默认/旧数据) / "asmr" / "fanbox" / "ehentai"；
+                // asmr_id 存 asmr.one 的数字作品 id，eh_token 存 E-Hentai 画廊令牌（回访画廊页两者缺一不可）
+                "source", "asmr_id", "eh_token"
             ];
             foreach (var col in required)
             {

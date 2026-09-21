@@ -133,7 +133,7 @@ public class FanboxCardItem : ObservableBase
 /// 交互与样式以 Web 端 src/Web/js/fanbox.js 为基准：单个搜索结果直接进主页、卡内按钮选择、
 /// 下拉到底自动翻页、已下载/下载中的作品置灰且不可选。
 /// 工具栏（来源下拉 + 输入框 + 查询 + 返回作家列表）由宿主 <see cref="SearchPage"/> 提供。
-/// 层级（_level）：artists（作家结果）/ posts（作家主页）/ detail（单篇作品内容）。
+/// 层级（_level）：artists（作家结果）/ posts（作家主页）/ detail（单篇作品内容）/ watch（作家监控）。
 /// </summary>
 public partial class FanboxSearchView : UserControl
 {
@@ -163,6 +163,13 @@ public partial class FanboxSearchView : UserControl
     private string _detailState = "";
     private int _detailGen;     // 详情请求代际：与 _generation 分开，看详情不该作废主页的分页
 
+    // 作家监控
+    private bool _watched;                      // 当前作家是否已在监控中
+    private string _watchReturnLevel = "artists";  // 进监控面板前所处的层级，返回时回到那里
+    private bool _fillingWatchUi;               // 正在填充监控面板控件（抑制 SelectionChanged 回写）
+    private System.Windows.Threading.DispatcherTimer? _watchTimer;
+    private bool _watchTimerHooked;
+
     /// <summary>预览图的本地临时副本目录：看图窗口按路径翻页，故要先落盘。</summary>
     private static string PreviewCacheDir =>
         Path.Combine(Path.GetTempPath(), "R-18MediaLibrary", "fanbox-preview");
@@ -176,16 +183,23 @@ public partial class FanboxSearchView : UserControl
     public event Action<bool>? BackAvailabilityChanged;
 
     /// <summary>当前是否可返回上一层（宿主切回本来源时用它恢复返回按钮）。</summary>
-    public bool CanGoBack => _level == "detail" || (_level == "posts" && _fromArtists);
+    public bool CanGoBack =>
+        _level is "watch" or "detail" || (_level == "posts" && _fromArtists);
 
-    /// <summary>返回按钮文案：详情层回作品列表，作家主页回作家列表（对齐 Web fbUpdateBackBtn）。</summary>
-    public string BackLabel =>
-        _level == "detail" ? I18n.Tr("← 返回作品列表") : I18n.Tr("← 返回作家列表");
+    /// <summary>返回按钮文案：按当前层级切换（对齐 Web fbUpdateBackBtn）。</summary>
+    public string BackLabel => _level switch
+    {
+        "watch" => I18n.Tr("← 返回搜索结果"),
+        "detail" => I18n.Tr("← 返回作品列表"),
+        _ => I18n.Tr("← 返回作家列表"),
+    };
 
     /// <summary>宿主的返回按钮：按当前层级回上一层。</summary>
     public void GoBack()
     {
-        if (_level == "detail")
+        if (_level == "watch")
+            GoBackFromWatch();
+        else if (_level == "detail")
             GoBackToPosts();
         else
             GoBackToArtists();
@@ -202,6 +216,9 @@ public partial class FanboxSearchView : UserControl
     private void RetranslateUi()
     {
         SelectAllButton.Content = I18n.Tr("全选");
+        WatchCheckAllButton.Content = I18n.Tr("立即检查全部");
+        WatchDefaultLabel.Text = I18n.Tr("默认间隔");
+        UpdateWatchButton();
         SelectNoneButton.Content = I18n.Tr("清空");
         DownloadSelectedButton.Content = I18n.Tr("下载选中");
         LoadingText.Text = I18n.Tr("正在查询…");
@@ -224,8 +241,11 @@ public partial class FanboxSearchView : UserControl
     {
         _level = level;
         SelectBar.Visibility = level == "posts" ? Visibility.Visible : Visibility.Collapsed;
-        CardList.Visibility = level == "detail" ? Visibility.Collapsed : Visibility.Visible;
+        CardList.Visibility = level is "artists" or "posts" ? Visibility.Visible : Visibility.Collapsed;
         DetailPane.Visibility = level == "detail" ? Visibility.Visible : Visibility.Collapsed;
+        WatchPane.Visibility = level == "watch" ? Visibility.Visible : Visibility.Collapsed;
+        if (level != "watch")
+            StopWatchTimer();
         BackAvailabilityChanged?.Invoke(CanGoBack);
     }
 
@@ -341,6 +361,8 @@ public partial class FanboxSearchView : UserControl
         _loadingMore = false;
         ShowLevel("posts");
         UpdateSelectInfo();
+        _watched = FanboxWatchService.IsWatched(artistId);
+        UpdateWatchButton();
         SetStatus("");
         LoadingText.Text = I18n.Tr("正在获取作品…");
         LoadingOverlay.Visibility = Visibility.Visible;
@@ -811,6 +833,371 @@ public partial class FanboxSearchView : UserControl
                 ? I18n.Format(I18n.Tr("，跳过 {n} 篇"), ("n", result.Skipped))
                 : ""),
             I18n.Tr("提示"));
+    }
+
+    // ---------- 作家监控（有新作品自动下载） ----------
+    //
+    // 对齐 Web 端 fanbox.js 的 fbWatchPane：总开关 + 立即检查全部 + 默认间隔，
+    // 下面一位作家一张卡（间隔下拉 / 立即检查 / 暂停 / 打开主页 / 删除）。
+    // 数据与轮询都在 FanboxWatchService，本视图只负责显示与操作。
+
+    /// <summary>宿主工具栏的「⏱ 监控」：进入监控面板（记住来时的层级，返回时回到那里）。</summary>
+    public void OpenWatchList()
+    {
+        if (_level != "watch")
+            _watchReturnLevel = _level;
+        ShowLevel("watch");
+        SetStatus("");
+        WatchPane.ScrollToTop();
+        RefreshWatchList();
+    }
+
+    private void GoBackFromWatch()
+    {
+        var back = _watchReturnLevel == "watch" ? "artists" : _watchReturnLevel;
+        ShowLevel(back);
+        SetStatus(back switch
+        {
+            "posts" => PostCountText(),
+            "detail" => DetailTitle.Text,
+            _ => _artistCards.Count > 0
+                ? I18n.Format(I18n.Tr("搜索到 {n} 位作家"), ("n", _artistCards.Count))
+                : "",
+        });
+    }
+
+    /// <summary>重新拉取监控列表并重建卡片（检查进行中时由 _watchTimer 每 1.5 秒调一次）。</summary>
+    private void RefreshWatchList()
+    {
+        var watches = FanboxWatchService.All();
+        var (busy, status) = FanboxWatchService.State();
+
+        _fillingWatchUi = true;
+        WatchSwitchButton.Content = AppConfig.FanboxWatchEnabled
+            ? I18n.Tr("自动监控：开") : I18n.Tr("自动监控：关");
+        ApplyToggleState(WatchSwitchButton, AppConfig.FanboxWatchEnabled);
+        WatchSwitchButton.ToolTip = I18n.Tr("关闭后仅停止后台自动轮询，「立即检查」仍可用");
+        WatchCheckAllButton.IsEnabled = watches.Count > 0;
+        FillIntervalBox(WatchDefaultIntervalBox, AppConfig.FanboxWatchInterval);
+        _fillingWatchUi = false;
+
+        SetStatus(FanboxWatchService.IdleSummary());
+        WatchStatusText.Text = busy
+            ? "⏳ " + (status.Length > 0 ? status : I18n.Tr("正在检查…")) : "";
+        WatchStatusText.Visibility = busy ? Visibility.Visible : Visibility.Collapsed;
+
+        WatchList.Children.Clear();
+        foreach (var w in watches)
+            WatchList.Children.Add(BuildWatchCard(w));
+
+        WatchEmptyText.Text = I18n.Tr("还没有监控任何作家。搜到作家后进入作家主页，点「+ 监控作家」即可添加。");
+        WatchEmptyText.Visibility = watches.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+        WatchNoteText.Text = I18n.Tr(
+            "监控在本程序运行期间后台轮询，发现新作品即按该作家设定的媒体库自动加入下载队列；程序关闭时暂停，下次启动继续。");
+        WatchNoteText.Visibility = watches.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
+
+        if (busy)
+            StartWatchTimer();
+        else
+            StopWatchTimer();
+    }
+
+    /// <summary>一位作家一张卡（版式对齐 Web 的 .libcard：标题行 + 间隔行 + 上次结果）。</summary>
+    private Border BuildWatchCard(FanboxWatch w)
+    {
+        var head = new Grid();
+        head.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        head.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        for (var i = 0; i < 4; i++)
+            head.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+        var name = new TextBlock
+        {
+            Text = w.Display, FontWeight = FontWeights.SemiBold, VerticalAlignment = VerticalAlignment.Center,
+        };
+        head.Children.Add(name);
+
+        var sub = new List<string>();
+        if (!w.Enabled)
+            sub.Add(I18n.Tr("已暂停"));
+        sub.Add(w.LastCheck.Length > 0
+            ? I18n.Format(I18n.Tr("上次检查 {time}"), ("time", w.LastCheck))
+            : I18n.Tr("尚未检查过"));
+        if (FanboxWatchService.NextCheckText(w) is { Length: > 0 } next)
+            sub.Add(I18n.Format(I18n.Tr("下次 {time}"), ("time", next)));
+        if (w.Downloaded > 0)
+            sub.Add(I18n.Format(I18n.Tr("累计自动下载 {n} 篇"), ("n", w.Downloaded)));
+        var meta = new TextBlock
+        {
+            Text = string.Join(" · ", sub),
+            Margin = new Thickness(10, 0, 10, 0),
+            VerticalAlignment = VerticalAlignment.Center,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            Style = TryFindResource("CaptionText") as Style,
+        };
+        Grid.SetColumn(meta, 1);
+        head.Children.Add(meta);
+
+        AddWatchAction(head, 2, I18n.Tr("立即检查"), () =>
+        {
+            _ = FanboxWatchService.CheckNowAsync(w.ArtistId);
+            StartWatchTimer();
+        });
+        AddWatchAction(head, 3, w.Enabled ? I18n.Tr("暂停") : I18n.Tr("启用"), () =>
+        {
+            FanboxWatchService.SetEnabled(w.ArtistId, !w.Enabled);
+            RefreshWatchList();
+        });
+        AddWatchAction(head, 4, I18n.Tr("打开主页"), () =>
+        {
+            _watchReturnLevel = "artists";
+            _ = OpenArtistAsync(w.ArtistId, w.ArtistName, "", fromArtists: false);
+        });
+        AddWatchAction(head, 5, I18n.Tr("删除"), () =>
+        {
+            if (!InAppDialog.Confirm(this,
+                    I18n.Format(I18n.Tr("不再监控「{name}」？已经下载的作品不受影响。"), ("name", w.Display)),
+                    I18n.Tr("确认")))
+                return;
+            FanboxWatchService.Remove(w.ArtistId);
+            if (_artistId == w.ArtistId)
+            {
+                _watched = false;
+                UpdateWatchButton();
+            }
+            RefreshWatchList();
+        }, danger: true);
+
+        // 间隔行：轮询间隔下拉 + 自动下载去向
+        var row = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 8, 0, 0) };
+        row.Children.Add(new TextBlock
+        {
+            Text = I18n.Tr("轮询间隔"), VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(0, 0, 8, 0), Style = TryFindResource("CaptionText") as Style,
+        });
+        var box = new ComboBox { Width = 110, VerticalContentAlignment = VerticalAlignment.Center };
+        FillIntervalBox(box, w.IntervalMin);
+        box.SelectionChanged += (_, _) =>
+        {
+            if (_fillingWatchUi || box.SelectedItem is not ComboBoxItem { Tag: int minutes })
+                return;
+            if (minutes == w.IntervalMin)
+                return;
+            FanboxWatchService.SetInterval(w.ArtistId, minutes);
+            RefreshWatchList();
+        };
+        row.Children.Add(box);
+        row.Children.Add(new TextBlock
+        {
+            Text = w.TargetLib.Length > 0
+                ? I18n.Format(I18n.Tr("自动下载到媒体库「{lib}」"), ("lib", w.TargetLib))
+                : I18n.Tr("自动下载到缓存目录"),
+            VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(14, 0, 0, 0),
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            Style = TryFindResource("CaptionText") as Style,
+        });
+
+        var body = new StackPanel();
+        body.Children.Add(head);
+        body.Children.Add(row);
+        if (w.LastResult.Length > 0)
+            body.Children.Add(new TextBlock
+            {
+                Text = I18n.Format(I18n.Tr("上次结果：{text}"), ("text", w.LastResult)),
+                Margin = new Thickness(0, 6, 0, 0), TextWrapping = TextWrapping.Wrap,
+                Style = TryFindResource("CaptionText") as Style,
+            });
+
+        return new Border
+        {
+            Style = TryFindResource("Card") as Style,
+            Padding = new Thickness(12, 10, 12, 10),
+            Margin = new Thickness(0, 0, 0, 8),
+            Child = body,
+        };
+    }
+
+    private void AddWatchAction(Grid host, int column, string text, Action onClick, bool danger = false)
+    {
+        var button = new Button
+        {
+            Content = text,
+            MinWidth = 76,
+            Margin = new Thickness(8, 0, 0, 0),
+            Style = danger ? TryFindResource("DangerButton") as Style : null,
+        };
+        button.Click += (_, _) => onClick();
+        Grid.SetColumn(button, column);
+        host.Children.Add(button);
+    }
+
+    /// <summary>把间隔档位填进下拉并选中当前值；库里存着非档位值时补一档，免得下拉把它悄悄改掉。</summary>
+    private void FillIntervalBox(ComboBox box, int minutes)
+    {
+        var previous = _fillingWatchUi;
+        _fillingWatchUi = true;
+        box.Items.Clear();
+        var choices = FanboxWatchService.IntervalChoices.ToList();
+        if (!choices.Contains(minutes))
+            choices.Insert(0, minutes);
+        foreach (var value in choices)
+        {
+            var item = new ComboBoxItem { Content = IntervalLabel(value), Tag = value };
+            box.Items.Add(item);
+            if (value == minutes)
+                box.SelectedItem = item;
+        }
+        _fillingWatchUi = previous;
+    }
+
+    private static string IntervalLabel(int minutes) => minutes switch
+    {
+        < 60 => I18n.Format(I18n.Tr("{n} 分钟"), ("n", minutes)),
+        < 1440 when minutes % 60 == 0 => I18n.Format(I18n.Tr("{n} 小时"), ("n", minutes / 60)),
+        _ when minutes % 1440 == 0 => I18n.Format(I18n.Tr("{n} 天"), ("n", minutes / 1440)),
+        _ => I18n.Format(I18n.Tr("{n} 分钟"), ("n", minutes)),
+    };
+
+    /// <summary>切换按钮的激活态外观：on=强调色底+白字（等价 Web 的 .icon-btn.on，同媒体库的 ★/♥ 切换）。</summary>
+    private void ApplyToggleState(Button btn, bool on)
+    {
+        btn.Background = TryFindResource(on ? "AccentBrush" : "ButtonBrush") as Brush
+                         ?? (on ? Brushes.DodgerBlue : Brushes.DimGray);
+        btn.Foreground = on
+            ? Brushes.White
+            : TryFindResource("TextBrush") as Brush ?? Brushes.White;
+    }
+
+    private void StartWatchTimer()
+    {
+        _watchTimer ??= new System.Windows.Threading.DispatcherTimer
+        {
+            Interval = TimeSpan.FromMilliseconds(1500),
+        };
+        if (!_watchTimerHooked)
+        {
+            _watchTimer.Tick += (_, _) =>
+            {
+                if (_level != "watch")
+                {
+                    StopWatchTimer();
+                    return;
+                }
+                var (busy, status) = FanboxWatchService.State();
+                WatchStatusText.Text = busy
+                    ? "⏳ " + (status.Length > 0 ? status : I18n.Tr("正在检查…")) : "";
+                WatchStatusText.Visibility = busy ? Visibility.Visible : Visibility.Collapsed;
+                // 检查结束才整表重绘：每 1.5 秒重建一次会把用户正在操作的下拉框踢掉
+                if (!busy)
+                {
+                    StopWatchTimer();
+                    RefreshWatchList();
+                }
+            };
+            _watchTimerHooked = true;
+        }
+        _watchTimer.Start();
+    }
+
+    private void StopWatchTimer() => _watchTimer?.Stop();
+
+    // ---------- 监控面板的操作 ----------
+
+    private void WatchSwitch_Click(object sender, RoutedEventArgs e)
+    {
+        AppConfig.FanboxWatchEnabled = !AppConfig.FanboxWatchEnabled;
+        if (AppConfig.FanboxWatchEnabled)
+            FanboxWatchService.Kick();
+        RefreshWatchList();
+    }
+
+    private void WatchCheckAll_Click(object sender, RoutedEventArgs e)
+    {
+        _ = FanboxWatchService.CheckAllAsync();
+        StartWatchTimer();
+    }
+
+    private void WatchDefaultInterval_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_fillingWatchUi || WatchDefaultIntervalBox.SelectedItem is not ComboBoxItem { Tag: int minutes })
+            return;
+        AppConfig.FanboxWatchInterval = minutes;
+    }
+
+    // ---------- 作家主页的监控开关 ----------
+
+    private void UpdateWatchButton()
+    {
+        WatchToggleButton.Content = _watched ? I18n.Tr("✓ 已监控") : I18n.Tr("+ 监控作家");
+        ApplyToggleState(WatchToggleButton, _watched);
+        WatchToggleButton.ToolTip = _watched
+            ? I18n.Tr("点击取消监控这位作家")
+            : I18n.Tr("添加后按设定的间隔轮询，这位作家发新作品时自动下载");
+    }
+
+    private void WatchToggle_Click(object sender, RoutedEventArgs e) => _ = ToggleWatchAsync();
+
+    private async Task ToggleWatchAsync()
+    {
+        if (_artistId.Length == 0)
+            return;
+        var who = _artistName.Length > 0 ? _artistName : _artistId;
+
+        if (_watched)
+        {
+            if (!InAppDialog.Confirm(this,
+                    I18n.Format(I18n.Tr("不再监控「{name}」？已经下载的作品不受影响。"), ("name", who)),
+                    I18n.Tr("确认")))
+                return;
+            FanboxWatchService.Remove(_artistId);
+            _watched = false;
+            UpdateWatchButton();
+            return;
+        }
+
+        // 自动下载要有个落点：和手动下载一样先选媒体库，之后每次自动入队都往这里放
+        string? targetFolder = null, targetLib = null;
+        if (AppConfig.ReadMediaLibs().Count > 0)
+        {
+            var dialog = new DownTargetDialog();
+            if (!dialog.Show(Window.GetWindow(this)))
+                return;
+            targetFolder = dialog.SelectedFolder;
+            targetLib = dialog.SelectedLib;
+        }
+
+        // 现有作品下不下。Web 端是两选一的 confirm（取消即「只要新作品」），
+        // 桌面端多一个 Esc 关闭态，按本程序的一贯约定当作取消整个操作。
+        var choice = InAppDialog.Choose(this,
+            I18n.Format(I18n.Tr("监控「{name}」。这位作家站上已有的作品要一并下载吗？"), ("name", who)) + "\n\n" +
+            I18n.Tr("「全部下载」＝把现有作品也加入下载队列（数量可能很多）") + "\n" +
+            I18n.Tr("「只要新作品」＝从现在起，只下载今后新发布的作品"),
+            I18n.Tr("添加监控"),
+            [I18n.Tr("全部下载"), I18n.Tr("只要新作品")], out _);
+        if (choice < 0)
+            return;
+
+        WatchToggleButton.IsEnabled = false;
+        LoadingText.Text = I18n.Tr("正在添加监控…");
+        LoadingOverlay.Visibility = Visibility.Visible;
+        var artist = new PawchiveArtist
+        {
+            Id = _artistId, Service = PawchiveApi.FanboxService,
+            Name = _artistName, PublicId = _publicId,
+        };
+        var (ok, message) = await FanboxWatchService.AddAsync(
+            artist, intervalMin: 0, includeExisting: choice == 0, targetLib, targetFolder);
+        LoadingOverlay.Visibility = Visibility.Collapsed;
+        WatchToggleButton.IsEnabled = true;
+
+        if (!ok)
+        {
+            InAppDialog.Warn(this, message, I18n.Tr("提示"));
+            return;
+        }
+        _watched = true;
+        UpdateWatchButton();
+        InAppDialog.Info(this, message, I18n.Tr("提示"));
     }
 
     // ---------- 站上缩略图 ----------

@@ -201,6 +201,27 @@ public static class Db
                         "up_time" text,
                         PRIMARY KEY ("maker_name")
                     );
+
+                    -- FANBOX 作家监控：按作家轮询 pawchive，发现新投稿就自动入队下载。
+                    -- last_published 是"已处理到哪一篇"的水位线：站上投稿的 published 是 ISO 字符串
+                    -- （2026-08-29T23:53:10），按字典序比较即按时间比较，比它新的才算新作品。
+                    -- 空串表示"连现有作品也要下"，第一轮会把该作家站上的全部投稿入队，水位线随即推到最新。
+                    -- target_lib / target_folder 是添加监控时选定的下载目标，自动下载据此入库。
+                    CREATE TABLE IF NOT EXISTS "fanbox_watch" (
+                        "artist_id" text NOT NULL,
+                        "service" text,
+                        "artist_name" text,
+                        "interval_min" integer,
+                        "enabled" text,
+                        "last_check" text,
+                        "last_published" text,
+                        "target_lib" text,
+                        "target_folder" text,
+                        "last_result" text,
+                        "downloaded" integer,
+                        "add_time" text,
+                        PRIMARY KEY ("artist_id")
+                    );
                     """;
                 cmd.ExecuteNonQuery();
             }

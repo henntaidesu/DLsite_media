@@ -389,6 +389,7 @@ public partial class SearchPage : UserControl
         AutoDownloadButton.Visibility = Visibility.Collapsed;
         BackButton.Visibility = Visibility.Collapsed;
         FanboxBackButton.Visibility = Visibility.Collapsed;
+        FanboxWatchButton.Visibility = Visibility.Collapsed;
         EhentaiBackButton.Visibility = Visibility.Collapsed;
         CountText.Visibility = Visibility.Collapsed;
 
@@ -417,6 +418,7 @@ public partial class SearchPage : UserControl
         CountText.Visibility = CountText.Text.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
         FanboxBackButton.Content = FanboxView.BackLabel;
         FanboxBackButton.Visibility = FanboxView.CanGoBack ? Visibility.Visible : Visibility.Collapsed;
+        FanboxWatchButton.Visibility = Visibility.Visible;
     }
 
     /// <summary>各来源的输入框占位提示（对齐 Web 的 SEARCH_SOURCES.placeholder）。</summary>
@@ -431,6 +433,7 @@ public partial class SearchPage : UserControl
     {
         SearchButton.Content = I18n.Tr("查询");
         FanboxBackButton.Content = FanboxView.BackLabel;
+        FanboxWatchButton.Content = I18n.Tr("⏱ 监控");
         EhentaiBackButton.Content = EhentaiView.BackLabel;
         BackButton.Content = I18n.Tr("← 返回社团作品");
         LoadingText.Text = I18n.Tr("正在查询…");
@@ -470,6 +473,9 @@ public partial class SearchPage : UserControl
 
     /// <summary>搜索栏返回按钮：按 FANBOX 当前层级回上一层（详情 → 作品列表 → 作家列表）。</summary>
     private void FanboxBack_Click(object sender, RoutedEventArgs e) => FanboxView.GoBack();
+
+    /// <summary>工具栏「⏱ 监控」：进入 FANBOX 作家监控面板（有新作品自动下载）。</summary>
+    private void FanboxWatch_Click(object sender, RoutedEventArgs e) => FanboxView.OpenWatchList();
 
     /// <summary>搜索栏返回按钮：E-Hentai 的详情回画廊网格。</summary>
     private void EhentaiBack_Click(object sender, RoutedEventArgs e) => EhentaiView.GoBack();

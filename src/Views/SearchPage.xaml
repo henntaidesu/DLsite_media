@@ -20,6 +20,7 @@
                 <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
             <ComboBox x:Name="SourceBox" MinWidth="104" Margin="0,0,8,0" VerticalContentAlignment="Center"
                       SelectionChanged="SourceBox_SelectionChanged" />
@@ -32,7 +33,9 @@
                     Visibility="Collapsed" Click="AutoDownloadToggle_Click" Content="自动下载：关" />
             <Button x:Name="FanboxBackButton" Grid.Column="5" Margin="8,0,0,0" MinWidth="120"
                     Visibility="Collapsed" Click="FanboxBack_Click" Content="← 返回作家列表" />
-            <Button x:Name="EhentaiBackButton" Grid.Column="6" Margin="8,0,0,0" MinWidth="120"
+            <Button x:Name="FanboxWatchButton" Grid.Column="6" Margin="8,0,0,0" MinWidth="96"
+                    Visibility="Collapsed" Click="FanboxWatch_Click" Content="⏱ 监控" />
+            <Button x:Name="EhentaiBackButton" Grid.Column="7" Margin="8,0,0,0" MinWidth="120"
                     Visibility="Collapsed" Click="EhentaiBack_Click" Content="← 返回搜索结果" />
         </Grid>
 

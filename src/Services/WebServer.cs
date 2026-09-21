@@ -373,6 +373,12 @@ public static class WebServer
                 case "/api/fanbox/post": await ApiFanboxPostAsync(stream, req); break;
                 case "/api/fanbox/enqueue": await ApiFanboxEnqueueAsync(stream, req); break;
                 case "/api/fanbox/image": await ApiFanboxImageAsync(stream, req); break;
+                // FANBOX 作家监控（有新投稿就自动下载）
+                case "/api/fanbox/watches": ApiFanboxWatches(stream); break;
+                case "/api/fanbox/watch/add": await ApiFanboxWatchAddAsync(stream, req); break;
+                case "/api/fanbox/watch/update": ApiFanboxWatchUpdate(stream, req); break;
+                case "/api/fanbox/watch/check": ApiFanboxWatchCheck(stream, req); break;
+                case "/api/fanbox/watch/config": ApiFanboxWatchConfig(stream, req); break;
 
                 case "/api/eh/search": await ApiEhSearchAsync(stream, req); break;
                 case "/api/eh/gallery": await ApiEhGalleryAsync(stream, req); break;
@@ -2538,6 +2544,8 @@ public static class WebServer
         WriteJson(stream, 200, new
         {
             artist,
+            // 作家主页的「+ 监控作家 / ✓ 已监控」按钮据此定文案
+            watched = FanboxWatchService.IsWatched(artistId),
             posts = posts.Select(p => new
             {
                 id = p.Id, title = p.Title, published = p.Published, tags = p.Tags,
@@ -2675,6 +2683,100 @@ public static class WebServer
         {
             WriteBytes(stream, 404, "Not Found", "text/plain", []);
         }
+    }
+
+    // ---------- API：FANBOX 作家监控 ----------
+
+    /// <summary>监控列表 + 全局开关/默认间隔 + 当前检查状态。</summary>
+    private static void ApiFanboxWatches(NetworkStream stream)
+    {
+        var (busy, status) = FanboxWatchService.State();
+        WriteJson(stream, 200, new
+        {
+            enabled = AppConfig.FanboxWatchEnabled,
+            interval = AppConfig.FanboxWatchInterval,
+            choices = FanboxWatchService.IntervalChoices,
+            busy,
+            status,
+            summary = FanboxWatchService.IdleSummary(),
+            watches = FanboxWatchService.All().Select(w => new
+            {
+                id = w.ArtistId, service = w.Service, name = w.Display,
+                interval = w.IntervalMin, enabled = w.Enabled,
+                lastCheck = w.LastCheck, lastResult = w.LastResult,
+                downloaded = w.Downloaded, lib = w.TargetLib,
+                next = FanboxWatchService.NextCheckText(w),
+                icon = PawchiveApi.IconUrl(w.Service, w.ArtistId),
+            }),
+        });
+    }
+
+    /// <summary>
+    /// 添加作家监控。作家名由服务端重新取（不信任前端提交，与 fanbox 入队同理）；
+    /// backfill=true 时连该作家现有的作品一起下，否则只管今后新发布的。
+    /// </summary>
+    private static async Task ApiFanboxWatchAddAsync(NetworkStream stream, Request req)
+    {
+        var artistId = ReadStringField(req.Body, "id").Trim();
+        if (!IsPlainId(artistId))
+        {
+            WriteJson(stream, 400, new { error = "bad request" });
+            return;
+        }
+        var artist = await PawchiveApi.GetArtistAsync(PawchiveApi.FanboxService, artistId)
+                     ?? new PawchiveArtist { Id = artistId, Service = PawchiveApi.FanboxService };
+        var (ok, message) = await FanboxWatchService.AddAsync(
+            artist,
+            ReadIntField(req.Body, "interval"),
+            ReadBoolField(req.Body, "backfill"),
+            ReadStringField(req.Body, "lib"),
+            ReadStringField(req.Body, "folder"));
+        WriteJson(stream, 200, new { ok, message });
+    }
+
+    /// <summary>改间隔 / 暂停恢复 / 移除（remove=true 时其余字段忽略）。</summary>
+    private static void ApiFanboxWatchUpdate(NetworkStream stream, Request req)
+    {
+        var artistId = ReadStringField(req.Body, "id").Trim();
+        if (!IsPlainId(artistId))
+        {
+            WriteJson(stream, 400, new { error = "bad request" });
+            return;
+        }
+        if (ReadBoolField(req.Body, "remove"))
+        {
+            FanboxWatchService.Remove(artistId);
+            WriteJson(stream, 200, new { ok = true });
+            return;
+        }
+        if (ReadIntField(req.Body, "interval") is var interval and > 0)
+            FanboxWatchService.SetInterval(artistId, interval);
+        if (ReadOptionalBoolField(req.Body, "enabled") is { } on)
+            FanboxWatchService.SetEnabled(artistId, on);
+        WriteJson(stream, 200, new { ok = true });
+    }
+
+    /// <summary>立即检查（id 为空 = 全部）；检查在后台跑，前端轮询 /api/fanbox/watches 看进度。</summary>
+    private static void ApiFanboxWatchCheck(NetworkStream stream, Request req)
+    {
+        var artistId = ReadStringField(req.Body, "id").Trim();
+        if (artistId.Length == 0)
+            _ = FanboxWatchService.CheckAllAsync();
+        else if (IsPlainId(artistId))
+            _ = FanboxWatchService.CheckNowAsync(artistId);
+        WriteJson(stream, 200, new { ok = true });
+    }
+
+    /// <summary>全局开关 / 默认轮询间隔。</summary>
+    private static void ApiFanboxWatchConfig(NetworkStream stream, Request req)
+    {
+        if (ReadOptionalBoolField(req.Body, "enabled") is { } on)
+            AppConfig.FanboxWatchEnabled = on;
+        if (ReadIntField(req.Body, "interval") is var interval and > 0)
+            AppConfig.FanboxWatchInterval = interval;
+        if (AppConfig.FanboxWatchEnabled)
+            FanboxWatchService.Kick();
+        WriteJson(stream, 200, new { ok = true });
     }
 
     // ---------- E-Hentai 数据源 ----------
@@ -2999,6 +3101,48 @@ public static class WebServer
         catch (Exception)
         {
             return false;
+        }
+    }
+
+    /// <summary>取整数字段；缺失/非数字时返回 0（调用方据此判断"没传"）。</summary>
+    private static int ReadIntField(byte[] body, string field)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(Encoding.UTF8.GetString(body));
+            if (!doc.RootElement.TryGetProperty(field, out var v))
+                return 0;
+            return v.ValueKind switch
+            {
+                JsonValueKind.Number when v.TryGetInt32(out var n) => n,
+                JsonValueKind.String when int.TryParse(v.GetString(), out var n) => n,
+                _ => 0,
+            };
+        }
+        catch (Exception)
+        {
+            return 0;
+        }
+    }
+
+    /// <summary>取布尔字段，区分"没传"（null）与 false——只改其中一项的 PATCH 式请求要用到。</summary>
+    private static bool? ReadOptionalBoolField(byte[] body, string field)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(Encoding.UTF8.GetString(body));
+            if (!doc.RootElement.TryGetProperty(field, out var v))
+                return null;
+            return v.ValueKind switch
+            {
+                JsonValueKind.True => true,
+                JsonValueKind.False => false,
+                _ => null,
+            };
+        }
+        catch (Exception)
+        {
+            return null;
         }
     }
 

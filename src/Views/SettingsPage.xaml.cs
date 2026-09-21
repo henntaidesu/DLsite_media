@@ -6,6 +6,7 @@ using System.Windows;
 using System.Windows.Controls;
 using R18MediaLibrary.Core;
 using R18MediaLibrary.Services;
+using R18MediaLibrary.Services.Translate;
 using Microsoft.Win32;
 
 namespace R18MediaLibrary.Views;
@@ -25,7 +26,12 @@ public partial class SettingsPage : UserControl
         // 媒体库管理内联进设置页（对齐 Web 设置页），构建一次；扫描状态在页面切换间保持
         MediaLibHost.Content = _mediaLibSection.BuildSection(this);
         I18n.LanguageChanged += RetranslateUi;
+        // 模型依赖下载在后台线程推进度，切回调度线程再动控件
+        TranslateDeps.Changed += OnTranslateDepsChanged;
     }
+
+    private void OnTranslateDepsChanged() =>
+        Dispatcher.BeginInvoke(new Action(UpdateTranslateStatus));
 
     private void BuildCombos()
     {
@@ -42,6 +48,16 @@ public partial class SettingsPage : UserControl
         WebEnableCombo.Items.Add(I18n.Tr("关闭"));
         ImageHostEnableCombo.Items.Add(I18n.Tr("开启"));
         ImageHostEnableCombo.Items.Add(I18n.Tr("关闭"));
+        TransEnableCombo.Items.Add(I18n.Tr("开启"));
+        TransEnableCombo.Items.Add(I18n.Tr("关闭"));
+        // 档位来自依赖清单（用户可换清单），故按 id 记住顺序而不是写死索引语义
+        foreach (var tier in TranslateModels.Tiers)
+        {
+            _tierIds.Add(tier.Id);
+            TransTierCombo.Items.Add(tier.Note.Length > 0 ? $"{tier.Name} · {tier.Note}" : tier.Name);
+        }
+        TransDeviceCombo.Items.Add("CPU");
+        TransDeviceCombo.Items.Add("GPU");
         // 关闭按钮行为：索引 0=每次询问 / 1=最小化到托盘 / 2=退出程序
         CloseActionCombo.Items.Add(I18n.Tr("每次询问"));
         CloseActionCombo.Items.Add(I18n.Tr("最小化到托盘"));
@@ -61,6 +77,9 @@ public partial class SettingsPage : UserControl
 
     // 作品类型 → 来源下拉框（动态生成，按 WorkTypes.Known）
     private readonly System.Collections.Generic.Dictionary<string, ComboBox> _sourceCombos = new();
+
+    // 图片翻译档位下拉框的索引 → 清单里的档位 id（档位由清单决定，不能按索引写死语义）
+    private readonly System.Collections.Generic.List<string> _tierIds = [];
 
     private void BuildSearchSourceRows()
     {
@@ -176,6 +195,18 @@ public partial class SettingsPage : UserControl
         ImageHostTestButton.Content = I18n.Tr("测试连接");
         ImageHostMigrateButton.Content = I18n.Tr("迁移封面");
         ImageHostHint.Text = I18n.Tr("开启后作品卡封面由图床提供，未迁移的封面自动回退本地硬盘。迁移只复制不删除本地原图（它也是详情页的第一张图）；同一个作品重复迁移会被跳过，中断后再点一次即可续传。手机要看到图，服务地址须填电脑的局域网地址（不能是 127.0.0.1），并在图床「系统设置 → 附加访问主机名」里放行该地址。");
+        TranslateGroup.Header = I18n.Tr("图片翻译");
+        TransEnableLabel.Text = I18n.Tr("启用");
+        TransTierLabel.Text = I18n.Tr("模型档位");
+        TransDeviceLabel.Text = I18n.Tr("推理设备");
+        TransPathLabel.Text = I18n.Tr("模型目录");
+        TransFontLabel.Text = I18n.Tr("嵌字字体");
+        TransPathChooseButton.Content = I18n.Tr("浏览");
+        TransDownloadButton.Content = I18n.Tr("下载依赖");
+        TransCancelButton.Content = I18n.Tr("取消下载");
+        TransRemoveButton.Content = I18n.Tr("删除依赖");
+        TransFontBox.ToolTip = I18n.Tr("留空使用系统默认中文字体");
+        TransHint.Text = I18n.Tr("把漫画页里的日文识别出来、翻好再贴回图上，只对图片平铺型作品（E-Hentai 画廊 / FANBOX 投稿）生效。需要先下载模型依赖，下齐之前无法启用；不下载则完全不影响其它功能。译文图存在作品目录的 translated 子目录里，原图不动。模型有好几个 GB，建议把模型目录指到空间宽裕的盘；下载支持断点续传，中断后再点一次「下载依赖」即可接着下。");
         WebGroup.Header = I18n.Tr("外部访问");
         WebEnableLabel.Text = I18n.Tr("外部访问");
         WebPortLabel.Text = I18n.Tr("端口");
@@ -192,11 +223,14 @@ public partial class SettingsPage : UserControl
         WebEnableCombo.Items[1] = I18n.Tr("关闭");
         ImageHostEnableCombo.Items[0] = I18n.Tr("开启");
         ImageHostEnableCombo.Items[1] = I18n.Tr("关闭");
+        TransEnableCombo.Items[0] = I18n.Tr("开启");
+        TransEnableCombo.Items[1] = I18n.Tr("关闭");
         CloseActionCombo.Items[0] = I18n.Tr("每次询问");
         CloseActionCombo.Items[1] = I18n.Tr("最小化到托盘");
         CloseActionCombo.Items[2] = I18n.Tr("退出程序");
         _loading = false;
         UpdateWebStatus();
+        UpdateTranslateStatus();
     }
 
     private long _cfgVersionSeen = -1;
@@ -296,12 +330,20 @@ public partial class SettingsPage : UserControl
         ImageHostProjectBox.Text = AppConfig.ImageHostProject;
         ImageHostTokenBox.Text = AppConfig.ImageHostToken;
 
+        TransEnableCombo.SelectedIndex = AppConfig.TranslateEnabledSetting ? 0 : 1;
+        var tierIndex = _tierIds.IndexOf(AppConfig.TranslateModelTier);
+        TransTierCombo.SelectedIndex = tierIndex >= 0 ? tierIndex : 0;
+        TransDeviceCombo.SelectedIndex = AppConfig.TranslateDevice == "gpu" ? 1 : 0;
+        TransPathBox.Text = TranslateModels.Root;
+        TransFontBox.Text = AppConfig.TranslateFont;
+
         WebEnableCombo.SelectedIndex = AppConfig.WebEnabled ? 0 : 1;
         WebPortBox.Text = AppConfig.WebPort.ToString();
         WebPasswordBox.Text = AppConfig.WebPassword;
         _loading = false;
         UpdateWebStatus();
         UpdateImageHostStatus();
+        UpdateTranslateStatus();
     }
 
     // ---------- 保存 ----------
@@ -726,6 +768,207 @@ public partial class SettingsPage : UserControl
         }
         // 常驻提示（已迁移/待迁移）取服务端同一句文案，与 Web 设置页保持一致
         ImageHostStatusLabel.Text = status.Length > 0 ? "✓ " + status : ImageHostService.IdleSummary();
+    }
+
+    // ---------- 图片翻译 ----------
+
+    private void TransEnableCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_loading)
+            return;
+        var wantOn = TransEnableCombo.SelectedIndex == 0;
+        // 依赖没下齐就不让开：开了也不会生效（TranslateService.Enabled 两个条件都要），
+        // 与其让用户以为开了，不如在这里挡住并说清楚原因
+        if (wantOn && !TranslateService.DepsReady)
+        {
+            _loading = true;
+            TransEnableCombo.SelectedIndex = 1;
+            _loading = false;
+            TransStatusLabel.Text = I18n.Tr("请先下载模型依赖，下齐后才能启用");
+            return;
+        }
+        AppConfig.TranslateEnabledSetting = wantOn;
+        UpdateTranslateStatus();
+    }
+
+    private void TransTierCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_loading)
+            return;
+        var index = TransTierCombo.SelectedIndex;
+        if (index < 0 || index >= _tierIds.Count)
+            return;
+        AppConfig.TranslateModelTier = _tierIds[index];
+        // 换档位后新档位的依赖多半没下齐，此时先前的"已启用"就成了空头支票——直接关掉
+        if (AppConfig.TranslateEnabledSetting && !TranslateService.DepsReady)
+        {
+            AppConfig.TranslateEnabledSetting = false;
+            _loading = true;
+            TransEnableCombo.SelectedIndex = 1;
+            _loading = false;
+        }
+        UpdateTranslateStatus();
+    }
+
+    private void TransDeviceCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_loading)
+            return;
+        AppConfig.TranslateDevice = TransDeviceCombo.SelectedIndex == 1 ? "gpu" : "cpu";
+    }
+
+    private void TransPathBox_LostFocus(object sender, RoutedEventArgs e)
+    {
+        if (_loading)
+            return;
+        ApplyTranslatePath(TransPathBox.Text.Trim());
+    }
+
+    private void TransPathChooseButton_Click(object sender, RoutedEventArgs e)
+    {
+        var current = TransPathBox.Text;
+        var dialog = new OpenFolderDialog
+        {
+            Title = I18n.Tr("选择模型目录"),
+            InitialDirectory = Directory.Exists(current) ? current : TranslateModels.Root,
+        };
+        if (dialog.ShowDialog(Window.GetWindow(this)) != true)
+            return;
+        ApplyTranslatePath(Path.GetFullPath(dialog.FolderName));
+    }
+
+    /// <summary>换模型目录：清单与安装记录都跟着目录走，必须整体失效重读。</summary>
+    private void ApplyTranslatePath(string path)
+    {
+        if (TranslateDeps.Running)
+        {
+            TransStatusLabel.Text = I18n.Tr("下载进行中，无法更改模型目录");
+            TransPathBox.Text = TranslateModels.Root;
+            return;
+        }
+        AppConfig.TranslateModelPath = path;
+        TranslateModels.Invalidate();
+        TransPathBox.Text = TranslateModels.Root;
+        // 新目录里多半没有模型，同样不能让"已启用"悬空
+        if (AppConfig.TranslateEnabledSetting && !TranslateService.DepsReady)
+        {
+            AppConfig.TranslateEnabledSetting = false;
+            _loading = true;
+            TransEnableCombo.SelectedIndex = 1;
+            _loading = false;
+        }
+        UpdateTranslateStatus();
+    }
+
+    private void TransFontBox_LostFocus(object sender, RoutedEventArgs e)
+    {
+        if (_loading)
+            return;
+        AppConfig.TranslateFont = TransFontBox.Text.Trim();
+    }
+
+    private async void TransDownloadButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (TranslateDeps.Running)
+            return;
+        var tier = TranslateModels.Tier(AppConfig.TranslateModelTier);
+        var status = TranslateModels.Status(tier.Id);
+        if (status.Ready)
+        {
+            TransStatusLabel.Text = I18n.Tr("依赖已齐备，可以启用图片翻译");
+            return;
+        }
+        var need = Math.Max(0, status.TotalBytes - status.HaveBytes);
+        var message = I18n.Format(
+            I18n.Tr("将下载「{tier}」的模型依赖，约 {size}，存放在：\n{path}\n\n下载可随时取消并支持断点续传。是否继续？"),
+            ("tier", tier.Name), ("size", TranslateModels.FormatSize(need)), ("path", TranslateModels.Root));
+        if (!InAppDialog.Confirm(this, message, I18n.Tr("下载依赖")))
+            return;
+
+        UpdateTranslateStatus();
+        await TranslateDeps.StartAsync(tier.Id);
+        UpdateTranslateStatus();
+    }
+
+    private void TransCancelButton_Click(object sender, RoutedEventArgs e) => TranslateDeps.Cancel();
+
+    private void TransRemoveButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (TranslateDeps.Running)
+        {
+            TransStatusLabel.Text = I18n.Tr("请先取消下载");
+            return;
+        }
+        var tier = TranslateModels.Tier(AppConfig.TranslateModelTier);
+        var status = TranslateModels.Status(tier.Id);
+        if (status.HaveBytes <= 0)
+        {
+            TransStatusLabel.Text = I18n.Tr("没有已下载的模型文件");
+            return;
+        }
+        var message = I18n.Format(
+            I18n.Tr("将删除「{tier}」的模型文件，释放约 {size}。图片翻译会随之停用。是否继续？"),
+            ("tier", tier.Name), ("size", TranslateModels.FormatSize(status.HaveBytes)));
+        if (!InAppDialog.Confirm(this, message, I18n.Tr("删除依赖")))
+            return;
+
+        var freed = TranslateModels.Remove(tier.Id);
+        AppConfig.TranslateEnabledSetting = false;
+        _loading = true;
+        TransEnableCombo.SelectedIndex = 1;
+        _loading = false;
+        UpdateTranslateStatus();
+        TransStatusLabel.Text = I18n.Format(
+            I18n.Tr("已删除模型文件，释放 {size}"), ("size", TranslateModels.FormatSize(freed)));
+    }
+
+    /// <summary>刷新图片翻译区块的可用性、进度条与状态文字。</summary>
+    private void UpdateTranslateStatus()
+    {
+        if (TransStatusLabel == null)
+            return;
+
+        var running = TranslateDeps.Running;
+        var ready = TranslateService.DepsReady;
+
+        // 依赖没齐就不给开；下载中把会改动目标的控件全部锁住
+        TransEnableCombo.IsEnabled = ready && !running;
+        TransTierCombo.IsEnabled = !running;
+        TransPathBox.IsEnabled = !running;
+        TransPathChooseButton.IsEnabled = !running;
+        TransDownloadButton.IsEnabled = !running && !ready;
+        TransCancelButton.IsEnabled = running;
+        TransRemoveButton.IsEnabled = !running;
+
+        var progress = TranslateDeps.Progress;
+        if (running && progress.TotalTotal > 0)
+        {
+            TransProgressBar.Visibility = Visibility.Visible;
+            TransProgressBar.Value = Math.Clamp(progress.TotalHave * 100.0 / progress.TotalTotal, 0, 100);
+        }
+        else
+        {
+            TransProgressBar.Visibility = Visibility.Collapsed;
+        }
+
+        if (running)
+        {
+            var speed = progress.SpeedBps > 0
+                ? $" · {TranslateModels.FormatSize((long)progress.SpeedBps)}/s"
+                : "";
+            TransStatusLabel.Text =
+                $"⏳ {progress.Message}　{TranslateModels.FormatSize(progress.TotalHave)} / " +
+                $"{TranslateModels.FormatSize(progress.TotalTotal)}{speed}";
+            return;
+        }
+
+        // 下载刚失败/刚取消时优先显示那句话，否则显示常驻状态
+        if (progress.Message.Length > 0 && progress.Failed)
+        {
+            TransStatusLabel.Text = "✗ " + progress.Message;
+            return;
+        }
+        TransStatusLabel.Text = (ready ? "✓ " : "") + TranslateService.StatusText();
     }
 
     private void UpdateWebStatus()

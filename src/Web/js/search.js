@@ -38,9 +38,13 @@ function renderSearchArea() {
   autoAll.onclick = () => toggleAutoAll(autoAll);
   const backList = el('button', 'icon-btn', '返回作品列表'); backList.id = 'backListBtn'; backList.style.display = 'none'; backList.onclick = goBackToMaker;
   const fbBack = el('button', 'icon-btn', '返回作家列表'); fbBack.id = 'fbBackBtn'; fbBack.style.display = 'none'; fbBack.onclick = fbGoBackToArtists;
+  // FANBOX 作家监控入口：列表里可改轮询间隔 / 暂停 / 立即检查
+  const fbWatch = el('button', 'icon-btn', '⏱ 监控'); fbWatch.id = 'fbWatchBtn'; fbWatch.style.display = 'none';
+  fbWatch.title = '管理 FANBOX 作家监控：作家发新作品时自动下载';
+  fbWatch.onclick = fbOpenWatchPane;
   const ehBack = el('button', 'icon-btn', '返回搜索结果'); ehBack.id = 'ehBackBtn'; ehBack.style.display = 'none'; ehBack.onclick = ehGoBackToList;
 
-  bar.append(src, inp, btn, autoAll, backList, fbBack, ehBack);
+  bar.append(src, inp, btn, autoAll, backList, fbBack, fbWatch, ehBack);
   host.appendChild(bar);
 
   // DLsite：社团网格与帖子列表分两个 pane（进帖子列表时只隐藏社团 pane，保留 DOM 与后台扫描，返回即缓存恢复）
@@ -79,6 +83,7 @@ function applySearchSource() {
   const autoAll = $('autoAllBtn'); if (autoAll) autoAll.style.display = (dl && makerState) ? '' : 'none';
   const backList = $('backListBtn'); if (backList) backList.style.display = 'none';
   const fbBack = $('fbBackBtn'); if (fbBack) fbBack.style.display = 'none';
+  const fbWatch = $('fbWatchBtn'); if (fbWatch) fbWatch.style.display = fbOn ? '' : 'none';
   const ehBack = $('ehBackBtn'); if (ehBack) ehBack.style.display = 'none';
   if (dl) updateBackListBtn();
   else if (fbOn) fbUpdateBackBtn();

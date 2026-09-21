@@ -50,6 +50,9 @@ public static class AppConfig
         },
         // fanbox 数据源（pawchive 站点）：域名可换镜像，附件/缩略图子域由主域推导
         ["pawchive"] = new() { ["host"] = "pawchive.pw" },
+        // FANBOX 作家监控：总开关 + 新建监控时的默认轮询间隔（分钟）。
+        // 总开关只管后台自动轮询，手动「立即检查」不受它影响；没有监控项时轮询是空转。
+        ["fanbox_watch"] = new() { ["enabled"] = "True", ["interval"] = "360" },
         // E-Hentai 数据源：表站(e-hentai.org)可匿名浏览，里站(exhentai.org)必须带登录 cookie；
         // original=True 时下原图（fullimg），否则下站点显示用的缩放图（省看图额度）
         ["ehentai"] = new()
@@ -61,6 +64,13 @@ public static class AppConfig
         ["image_host"] = new()
         {
             ["enabled"] = "False", ["base_url"] = "", ["project"] = "", ["token"] = "",
+        },
+        // 图片翻译（漫画嵌字）：默认关闭，且模型依赖没下齐之前启用也不生效
+        // （生效与否一律问 Services.Translate.TranslateService.Enabled，别直接读 enabled）
+        ["translate"] = new()
+        {
+            ["enabled"] = "False", ["model_tier"] = "full", ["model_path"] = "",
+            ["target_lang"] = "zh_CN", ["device"] = "cpu", ["font"] = "",
         },
         // asmr.one 下载的文件类型过滤（仅勾选的类型会入队下载）
         ["asmr_filetype"] = new()
@@ -337,6 +347,21 @@ public static class AppConfig
         set => Write("pawchive", "host", value.Trim());
     }
 
+    /// <summary>FANBOX 作家监控的后台轮询总开关（关掉只停自动轮询，手动「立即检查」照常可用）。</summary>
+    public static bool FanboxWatchEnabled
+    {
+        get => Read("fanbox_watch", "enabled", "True") != "False";
+        set => Write("fanbox_watch", "enabled", value ? "True" : "False");
+    }
+
+    /// <summary>新建作家监控时的默认轮询间隔（分钟）；已有监控各自存自己的间隔。</summary>
+    public static int FanboxWatchInterval
+    {
+        get => Math.Clamp(ReadInt("fanbox_watch", "interval", 360), 10, 7 * 24 * 60);
+        set => Write("fanbox_watch", "interval",
+            Math.Clamp(value, 10, 7 * 24 * 60).ToString(System.Globalization.CultureInfo.InvariantCulture));
+    }
+
     // ---------- E-Hentai 数据源 ----------
 
     /// <summary>
@@ -404,4 +429,52 @@ public static class AppConfig
     /// <summary>配置是否齐全（地址/项目/Token 缺一不可），与"是否启用"分开判断。</summary>
     public static bool ImageHostConfigured =>
         ImageHostBaseUrl.Length > 0 && ImageHostProject.Length > 0 && ImageHostToken.Length > 0;
+
+    // ---------- 图片翻译（漫画嵌字）----------
+
+    /// <summary>
+    /// 用户在设置页勾的那个开关——**不代表功能真的可用**。
+    /// 模型依赖没下齐时这里为 True 也不该翻译，故各调用点一律问
+    /// <c>Services.Translate.TranslateService.Enabled</c>，不要直接读本属性。
+    /// </summary>
+    public static bool TranslateEnabledSetting
+    {
+        get => Read("translate", "enabled") == "True";
+        set => Write("translate", "enabled", value ? "True" : "False");
+    }
+
+    /// <summary>模型档位 id（对应依赖清单 tiers 里的 id，如 lite / full）。</summary>
+    public static string TranslateModelTier
+    {
+        get => (Read("translate", "model_tier", "full") ?? "full").Trim();
+        set => Write("translate", "model_tier", value.Trim());
+    }
+
+    /// <summary>模型存放目录；留空表示用默认的「工作目录/models/translate」。</summary>
+    public static string TranslateModelPath
+    {
+        get => (Read("translate", "model_path", "") ?? "").Trim();
+        set => Write("translate", "model_path", value.Trim());
+    }
+
+    /// <summary>译文目标语言（沿用 I18n 的语言代码）。</summary>
+    public static string TranslateTargetLang
+    {
+        get => (Read("translate", "target_lang", "zh_CN") ?? "zh_CN").Trim();
+        set => Write("translate", "target_lang", value.Trim());
+    }
+
+    /// <summary>推理设备："cpu" 或 "gpu"（无可用显卡时由引擎自行退回 CPU）。</summary>
+    public static string TranslateDevice
+    {
+        get => (Read("translate", "device", "cpu") ?? "cpu").Trim();
+        set => Write("translate", "device", value.Trim());
+    }
+
+    /// <summary>嵌字用的字体名；留空表示用系统默认中文字体。</summary>
+    public static string TranslateFont
+    {
+        get => (Read("translate", "font", "") ?? "").Trim();
+        set => Write("translate", "font", value.Trim());
+    }
 }

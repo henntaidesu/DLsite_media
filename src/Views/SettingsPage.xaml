@@ -217,6 +217,49 @@
                 </StackPanel>
             </GroupBox>
 
+            <!-- 图片翻译（按需功能：模型依赖没下齐之前「启用」不可选） -->
+            <GroupBox x:Name="TranslateGroup" Header="图片翻译">
+                <StackPanel>
+                    <StackPanel Orientation="Horizontal" Margin="0,4">
+                        <TextBlock x:Name="TransEnableLabel" Text="启用" Style="{StaticResource FieldLabel}" />
+                        <ComboBox x:Name="TransEnableCombo" Width="120"
+                                  SelectionChanged="TransEnableCombo_SelectionChanged" />
+                        <TextBlock x:Name="TransTierLabel" Text="模型档位" Style="{StaticResource FieldLabel}"
+                                   MinWidth="0" Margin="24,0,12,0" />
+                        <ComboBox x:Name="TransTierCombo" Width="140"
+                                  SelectionChanged="TransTierCombo_SelectionChanged" />
+                        <TextBlock x:Name="TransDeviceLabel" Text="推理设备" Style="{StaticResource FieldLabel}"
+                                   MinWidth="0" Margin="24,0,12,0" />
+                        <ComboBox x:Name="TransDeviceCombo" Width="100"
+                                  SelectionChanged="TransDeviceCombo_SelectionChanged" />
+                    </StackPanel>
+                    <DockPanel Margin="0,8,0,4">
+                        <TextBlock x:Name="TransPathLabel" Text="模型目录" Style="{StaticResource FieldLabel}"
+                                   DockPanel.Dock="Left" />
+                        <Button x:Name="TransPathChooseButton" Content="浏览" Margin="8,0,0,0"
+                                DockPanel.Dock="Right" Click="TransPathChooseButton_Click" />
+                        <TextBox x:Name="TransPathBox" LostFocus="TransPathBox_LostFocus" />
+                    </DockPanel>
+                    <StackPanel Orientation="Horizontal" Margin="0,8,0,4">
+                        <TextBlock x:Name="TransFontLabel" Text="嵌字字体" Style="{StaticResource FieldLabel}" />
+                        <TextBox x:Name="TransFontBox" Width="180" LostFocus="TransFontBox_LostFocus" />
+                        <Button x:Name="TransDownloadButton" Content="下载依赖" Margin="24,0,0,0"
+                                Click="TransDownloadButton_Click" />
+                        <Button x:Name="TransCancelButton" Content="取消下载" Margin="8,0,0,0"
+                                Click="TransCancelButton_Click" />
+                        <Button x:Name="TransRemoveButton" Content="删除依赖" Margin="8,0,0,0"
+                                Click="TransRemoveButton_Click" />
+                    </StackPanel>
+                    <ProgressBar x:Name="TransProgressBar" Height="6" Margin="0,8,0,0"
+                                 Minimum="0" Maximum="100" Visibility="Collapsed" />
+                    <TextBlock x:Name="TransStatusLabel" Margin="0,6,0,0"
+                               Foreground="{StaticResource CaptionBrush}" TextWrapping="Wrap" />
+                    <TextBlock x:Name="TransHint" Style="{StaticResource CaptionText}" Margin="0,6,0,0"
+                               TextWrapping="Wrap"
+                               Text="把漫画页里的日文识别出来、翻好再贴回图上，只对图片平铺型作品（E-Hentai 画廊 / FANBOX 投稿）生效。需要先下载模型依赖，下齐之前无法启用；不下载则完全不影响其它功能。译文图存在作品目录的 translated 子目录里，原图不动。模型有好几个 GB，建议把模型目录指到空间宽裕的盘；下载支持断点续传，中断后再点一次「下载依赖」即可接着下。" />
+                </StackPanel>
+            </GroupBox>
+
             <!-- 外部访问 -->
             <GroupBox x:Name="WebGroup" Header="外部访问">
                 <StackPanel>

@@ -17,14 +17,18 @@
                 <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
             <TextBlock x:Name="SelectInfo" VerticalAlignment="Center"
                        Style="{StaticResource CaptionText}" Text="已选 0 篇" />
-            <Button x:Name="SelectAllButton" Grid.Column="1" MinWidth="72" Margin="8,0,0,0"
+            <!-- 监控这位作家：加入后按设定间隔轮询，有新作品自动下载 -->
+            <Button x:Name="WatchToggleButton" Grid.Column="1" MinWidth="104" Margin="8,0,0,0"
+                    Click="WatchToggle_Click" Content="+ 监控作家" />
+            <Button x:Name="SelectAllButton" Grid.Column="2" MinWidth="72" Margin="8,0,0,0"
                     Click="SelectAll_Click" Content="全选" />
-            <Button x:Name="SelectNoneButton" Grid.Column="2" MinWidth="72" Margin="8,0,0,0"
+            <Button x:Name="SelectNoneButton" Grid.Column="3" MinWidth="72" Margin="8,0,0,0"
                     Click="SelectNone_Click" Content="清空" />
-            <Button x:Name="DownloadSelectedButton" Grid.Column="3" MinWidth="110" Margin="8,0,0,0"
+            <Button x:Name="DownloadSelectedButton" Grid.Column="4" MinWidth="110" Margin="8,0,0,0"
                     IsEnabled="False" Style="{StaticResource AccentButton}"
                     Click="DownloadSelected_Click" Content="下载选中" />
         </Grid>
@@ -230,6 +234,31 @@
                                        Visibility="Collapsed" Style="{StaticResource CaptionText}" />
                         </StackPanel>
                     </Border>
+                </StackPanel>
+            </ScrollViewer>
+
+            <!-- 作家监控（对齐 Web 的 fbWatchPane）：总开关 + 立即检查全部 + 默认间隔，下面一位作家一张卡。
+                 卡片由代码生成（WatchList），版式同 Web 的 .libcard。 -->
+            <ScrollViewer x:Name="WatchPane" Visibility="Collapsed"
+                          VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                <StackPanel Margin="0,0,8,0">
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                        <Button x:Name="WatchSwitchButton" MinWidth="124"
+                                Click="WatchSwitch_Click" Content="自动监控：开" />
+                        <Button x:Name="WatchCheckAllButton" MinWidth="110" Margin="8,0,0,0"
+                                Click="WatchCheckAll_Click" Content="立即检查全部" />
+                        <TextBlock x:Name="WatchDefaultLabel" Text="默认间隔" VerticalAlignment="Center"
+                                   Margin="16,0,8,0" Style="{StaticResource CaptionText}" />
+                        <ComboBox x:Name="WatchDefaultIntervalBox" Width="110" VerticalContentAlignment="Center"
+                                  SelectionChanged="WatchDefaultInterval_SelectionChanged" />
+                    </StackPanel>
+                    <TextBlock x:Name="WatchStatusText" Style="{StaticResource CaptionText}"
+                               Margin="2,0,0,8" TextWrapping="Wrap" Visibility="Collapsed" />
+                    <TextBlock x:Name="WatchEmptyText" Style="{StaticResource CaptionText}"
+                               Margin="2,12,0,0" TextWrapping="Wrap" Visibility="Collapsed" />
+                    <StackPanel x:Name="WatchList" />
+                    <TextBlock x:Name="WatchNoteText" Style="{StaticResource CaptionText}"
+                               Margin="2,12,0,0" TextWrapping="Wrap" Visibility="Collapsed" />
                 </StackPanel>
             </ScrollViewer>
 

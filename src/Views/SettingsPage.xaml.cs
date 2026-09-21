@@ -4,11 +4,11 @@ using System.Linq;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
-using DLsiteMedia.Core;
-using DLsiteMedia.Services;
+using R18MediaLibrary.Core;
+using R18MediaLibrary.Services;
 using Microsoft.Win32;
 
-namespace DLsiteMedia.Views;
+namespace R18MediaLibrary.Views;
 
 /// <summary>设置页（对应 Python 版 setting_UI.py）：输入框失焦即保存，下拉框选择即保存。</summary>
 public partial class SettingsPage : UserControl

@@ -1,7 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 
-namespace DLsiteMedia.Core;
+namespace R18MediaLibrary.Core;
 
 /// <summary>
 /// 界面多语言支持（对应 Python 版 i18n.py）。
@@ -74,6 +74,31 @@ public static class I18n
     private static readonly Dictionary<string, Dictionary<string, string>> Translations = new()
     {
         // ---------- FANBOX（pawchive 数据源）----------
+        // 社团显示名映射（卡片右上角 🖊）
+        ["自定义显示名称"] = new()
+            { ["zh_TW"] = "自訂顯示名稱", ["ja"] = "表示名を変更", ["en"] = "Rename (display only)" },
+        ["自定义社团名称"] = new()
+            { ["zh_TW"] = "自訂社團名稱", ["ja"] = "サークル表示名", ["en"] = "Custom maker name" },
+        ["社团「{maker}」的显示名称（留空恢复原名，不会改动作品数据）"] = new()
+        {
+            ["zh_TW"] = "社團「{maker}」的顯示名稱（留空恢復原名，不會改動作品資料）",
+            ["ja"] = "サークル「{maker}」の表示名（空欄で元に戻す。作品データは変更されません）",
+            ["en"] = "Display name for \"{maker}\" (leave empty to restore; work data is unchanged)",
+        },
+        // 作品详情（查看内容）
+        ["下载本篇"] = new() { ["zh_TW"] = "下載本篇", ["ja"] = "この投稿を保存", ["en"] = "Download post" },
+        ["正文"] = new() { ["zh_TW"] = "正文", ["ja"] = "本文", ["en"] = "Body" },
+        ["发布"] = new() { ["zh_TW"] = "發佈", ["ja"] = "公開日", ["en"] = "Published" },
+        ["文件"] = new() { ["zh_TW"] = "檔案", ["ja"] = "ファイル", ["en"] = "Files" },
+        ["未下载"] = new() { ["zh_TW"] = "未下載", ["ja"] = "未取得", ["en"] = "Not downloaded" },
+        ["这篇没有图片"] = new()
+            { ["zh_TW"] = "這篇沒有圖片", ["ja"] = "画像はありません", ["en"] = "No images in this post" },
+        ["获取作品详情失败"] = new()
+            { ["zh_TW"] = "取得作品詳情失敗", ["ja"] = "投稿の取得に失敗しました", ["en"] = "Failed to load post" },
+        ["其他附件（{n}）"] = new()
+            { ["zh_TW"] = "其他附件（{n}）", ["ja"] = "その他の添付（{n}）", ["en"] = "Other files ({n})" },
+        ["{n} 个（图片 {m}）"] = new()
+            { ["zh_TW"] = "{n} 個（圖片 {m}）", ["ja"] = "{n} 件（画像 {m}）", ["en"] = "{n} ({m} images)" },
         ["FANBOX"] = new() { ["zh_TW"] = "FANBOX", ["ja"] = "FANBOX", ["en"] = "FANBOX" },
         ["📚 我的库"] = new() { ["zh_TW"] = "📚 我的庫", ["ja"] = "📚 マイライブラリ", ["en"] = "📚 My Library" },
         ["输入作家名 / 作家 ID，或粘贴 pawchive 作家链接"] = new()
@@ -229,6 +254,8 @@ public static class I18n
         ["暂停中…"] = new() { ["zh_TW"] = "暫停中…", ["ja"] = "停止中…", ["en"] = "Pausing…" },
         ["清除已完成"] = new() { ["zh_TW"] = "清除已完成", ["ja"] = "完了分を消去", ["en"] = "Clear completed" },
         ["清空列表"] = new() { ["zh_TW"] = "清空列表", ["ja"] = "リストをクリア", ["en"] = "Clear all" },
+        ["清除无可用连接"] = new() { ["zh_TW"] = "清除無可用連結", ["ja"] = "利用可能なリンクなしを消去", ["en"] = "Clear no-link" },
+        ["全部重新解析"] = new() { ["zh_TW"] = "全部重新解析", ["ja"] = "すべて再解析", ["en"] = "Re-resolve all" },
         ["等待下载"] = new() { ["zh_TW"] = "等待下載", ["ja"] = "待機中", ["en"] = "Waiting" },
         ["下载中"] = new() { ["zh_TW"] = "下載中", ["ja"] = "ダウンロード中", ["en"] = "Downloading" },
         ["已完成"] = new() { ["zh_TW"] = "已完成", ["ja"] = "完了", ["en"] = "Completed" },
@@ -248,6 +275,29 @@ public static class I18n
         ["{n} 个解析失败"] = new() { ["zh_TW"] = "{n} 個解析失敗", ["ja"] = "{n} 件解析失敗", ["en"] = "{n} parse failed" },
         ["流量用尽"] = new() { ["zh_TW"] = "流量用盡", ["ja"] = "通信量超過", ["en"] = "Data limit reached" },
         ["文件失效"] = new() { ["zh_TW"] = "檔案失效", ["ja"] = "ファイル失効", ["en"] = "File dead" },
+        // 直链源（asmr / fanbox）源站 404：文件不存在，跳过后继续下别的文件
+        ["已完成（预览图）"] = new()
+        {
+            ["zh_TW"] = "已完成（預覽圖）",
+            ["ja"] = "完了（プレビュー画像）",
+            ["en"] = "Completed (preview)",
+        },
+        ["源站无此文件"] = new()
+            { ["zh_TW"] = "來源站無此檔案", ["ja"] = "配信元に無し", ["en"] = "Not on source" },
+        ["源站没有这个文件，已跳过"] = new()
+        {
+            ["zh_TW"] = "來源站沒有這個檔案，已略過",
+            ["ja"] = "配信元にこのファイルが存在しないためスキップしました",
+            ["en"] = "Not available on the source site, skipped",
+        },
+        ["源站无文件"] = new()
+            { ["zh_TW"] = "來源站無檔案", ["ja"] = "配信元にファイル無し", ["en"] = "No files on source" },
+        ["已完成（跳过 {n}）"] = new()
+        {
+            ["zh_TW"] = "已完成（略過 {n}）",
+            ["ja"] = "完了（{n} 件スキップ）",
+            ["en"] = "Completed ({n} skipped)",
+        },
         ["网盘不支持"] = new() { ["zh_TW"] = "網盤不支援", ["ja"] = "非対応ホスト", ["en"] = "Host unsupported" },
         ["需会员"] = new() { ["zh_TW"] = "需會員", ["ja"] = "会員限定", ["en"] = "Premium only" },
         ["Key 无效"] = new() { ["zh_TW"] = "Key 無效", ["ja"] = "Key 無効", ["en"] = "Bad API key" },

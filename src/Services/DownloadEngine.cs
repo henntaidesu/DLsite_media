@@ -7,9 +7,9 @@ using System.Net.Http;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
-using DLsiteMedia.Core;
+using R18MediaLibrary.Core;
 
-namespace DLsiteMedia.Services;
+namespace R18MediaLibrary.Services;
 
 /// <summary>正在下载任务的实时进度（UUID -> 进度），由下载线程写入、下载页 UI 读取。</summary>
 public class DownloadProgressInfo
@@ -627,7 +627,7 @@ public static class DownloadEngine
 
     private static string MetaPath(string filePath) => filePath + ".dlmeta";
 
-    /// <summary>单连接下载（断点续传 + 暂停 + 低速重试），返回 done/paused/slow/failed/throttled。</summary>
+    /// <summary>单连接下载（断点续传 + 暂停 + 低速重试），返回 done/paused/slow/failed/throttled/missing。</summary>
     private static string DownloadSingle(HttpClient client, string url, string filePath,
         string filename, string key, string workId, string? userAgent)
     {
@@ -659,6 +659,10 @@ public static class DownloadEngine
                 response.StatusCode != HttpStatusCode.PartialContent)
             {
                 Logger.Error($"{filename} 下载失败 HTTP {(int)response.StatusCode}");
+                // 404/410 是"源站根本没有这个文件"，重试多少次结果都一样：不回置 '0'，
+                // 交由上层按来源决定跳过还是重新解析（见 WorkerLoop 的 missing 分支）
+                if (response.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.Gone)
+                    return "missing";
                 SetStatus(key, "0");
                 // 403/429/503 多为站点限流（如 pawchive 前置的 DDoS-Guard）：5 秒一轮的热重试
                 // 只会让封锁一直续期，交由上层改用长冷却再试
@@ -761,7 +765,7 @@ public static class DownloadEngine
         }
     }
 
-    /// <summary>下载单个文件：清理旧版分段下载元数据后单连接下载，返回 done/paused/slow/failed/throttled。</summary>
+    /// <summary>下载单个文件：清理旧版分段下载元数据后单连接下载，返回 done/paused/slow/failed/throttled/missing。</summary>
     private static string DownloadFile(HttpClient client, string directUrl, string filePath,
         string filename, string key, string workId, string? userAgent = null)
     {
@@ -801,6 +805,7 @@ public static class DownloadEngine
         while (true)
         {
             string? key = null;
+            var thumbFallback = false;   // 本轮是否以预览图代替了原图
             try
             {
                 if (_stopRequested)
@@ -870,6 +875,24 @@ public static class DownloadEngine
                 var userAgent = source == "fanbox" ? PawchiveApi.UserAgent : null;
                 var result = DownloadFile(client, directUrl, filePath, filename, key, workId, userAgent);
                 DownloadProgress.TryRemove(key, out _);
+                // pawchive 对只归档了预览的投稿（has_full=false）原图一律 404，但 img.<host> 上
+                // 800px 的预览图是有的。原图没有就存预览图，总好过整篇空手而归；
+                // 只对 fanbox 的图片附件生效（压缩包/PDF 没有预览图，asmr 也没有这套机制）。
+                if (result == "missing" && source == FanboxService.SourceName &&
+                    PawchiveApi.IsImageName(filename))
+                {
+                    var thumbUrl = PawchiveApi.ThumbUrlFromFileUrl(directUrl);
+                    if (thumbUrl.Length > 0)
+                    {
+                        result = DownloadFile(client, thumbUrl, filePath, filename, key, workId, userAgent);
+                        DownloadProgress.TryRemove(key, out _);
+                        if (result == "done")
+                        {
+                            Logger.Warning($"{filename} 源站无原图，已改存 800px 预览图");
+                            thumbFallback = true;
+                        }
+                    }
+                }
                 if (result == "paused")
                     return;  // 全局暂停：部分文件保留在磁盘上，下次从断点续传
                 if (result == "workpaused")
@@ -882,6 +905,25 @@ public static class DownloadEngine
                         Thread.Sleep(1000);
                     continue;
                 }
+                if (result == "missing")
+                {
+                    // 直链源（asmr / fanbox）的 url 就是源站地址，文件之间也彼此独立：404 说明
+                    // 源站没有这个文件（如 pawchive 只导入了投稿元数据、未归档文件本体），
+                    // 再怎么重试都不会变，只会让整条队列原地打转。标记跳过、继续下能下的。
+                    if (isDirect)
+                    {
+                        Logger.Warning($"{filename} 源站不存在（HTTP 404/410），跳过该文件");
+                        SetParseFailed(key, SkippedError);
+                        MarkWorkDownloaded(workId);
+                        FinalizeBySource(workId, source);   // 最后一个文件被跳过时同样要收尾
+                        continue;
+                    }
+                    // 论坛源的直链是 debrid-link 现场解析出来的，404 多为解析结果过期；
+                    // 重新领取会重新解析，因此仍按普通失败重试
+                    SetStatus(key, "0");
+                    Thread.Sleep(5000);
+                    continue;
+                }
                 if (result is "slow" or "failed")
                 {
                     Thread.Sleep(5000);
@@ -890,14 +932,13 @@ public static class DownloadEngine
 
                 Logger.Info($"{workId}已完成下载");
                 SetStatus(key, "1", 100);
+                if (thumbFallback)
+                    // 标记该文件存的是预览图而非原图：post.txt 与下载列表据此提示，免得日后
+                    // 疑惑画质为何偏低。status 仍是 '1'（已完成），只借 error 列记来源。
+                    Db.Execute("UPDATE \"download_list\" SET \"error\" = @e WHERE \"UUID\" = @k",
+                        ("@e", ThumbError), ("@k", key));
                 MarkWorkDownloaded(workId);
-                // 直链源无压缩包，下完直接入库；论坛源走自动解压
-                if (source == "asmr")
-                    AsmrFinalizeIfDone(workId);
-                else if (source == "fanbox")
-                    FanboxFinalizeIfDone(workId);
-                else
-                    AutoUnzipIfDone(workId);
+                FinalizeBySource(workId, source);
             }
             catch (Exception e)
             {
@@ -928,8 +969,11 @@ public static class DownloadEngine
             SELECT w."work_id", w."source" FROM "works" w
             WHERE w."state" IN ('下载中', '已下载')
             AND EXISTS (SELECT 1 FROM "download_list" d WHERE d."work_id" = w."work_id")
+            AND EXISTS (SELECT 1 FROM "download_list" d
+                        WHERE d."work_id" = w."work_id" AND d."status" = '1')
             AND NOT EXISTS (SELECT 1 FROM "download_list" d
-                            WHERE d."work_id" = w."work_id" AND d."status" != '1')
+                            WHERE d."work_id" = w."work_id" AND d."status" != '1'
+                            AND NOT (d."status" = '2' AND IFNULL(d."error", '') = 'skipped'))
             """);
         if (stuck != null)
             foreach (var row in stuck)
@@ -937,12 +981,7 @@ public static class DownloadEngine
                 var stuckId = row[0] as string ?? "";
                 Logger.Info($"{stuckId} 分卷已全部下载但未完成入库，重新触发收尾");
                 MarkWorkDownloaded(stuckId);
-                switch (row[1] as string)
-                {
-                    case "asmr": AsmrFinalizeIfDone(stuckId); break;
-                    case FanboxService.SourceName: FanboxFinalizeIfDone(stuckId); break;
-                    default: AutoUnzipIfDone(stuckId); break;
-                }
+                FinalizeBySource(stuckId, row[1] as string ?? "");
             }
 
         // 流量重置监控线程：网盘流量用尽暂停后，到重置时间自动把暂停分卷重新排队续传
@@ -959,14 +998,67 @@ public static class DownloadEngine
             thread.Join();
     }
 
-    /// <summary>该番号的所有任务都下载完成后，作品行状态从 下载中 改为 已下载。</summary>
-    private static void MarkWorkDownloaded(string workId)
+    /// <summary>
+    /// 分卷"已跳过"标记：源站确实没有这个文件（HTTP 404/410），重试多少次都一样。
+    /// 记在 download_list.error 里，收尾判定按"已终结"计，两端 UI 显示为「源站无此文件」。
+    /// </summary>
+    internal const string SkippedError = "skipped";
+
+    /// <summary>该失败原因是否为"源站无此文件"的跳过标记（区别于可重试的解析失败）。</summary>
+    internal static bool IsSkipped(string? error) => error == SkippedError;
+
+    /// <summary>
+    /// 分卷"存的是预览图"标记：源站没有原图，改存了 800px 预览图（见 WorkerLoop 的 missing 分支）。
+    /// 记在 download_list.error 里，status 仍为 '1'（已完成，正常入库），只用于向用户说明画质来源。
+    /// </summary>
+    internal const string ThumbError = "thumb";
+
+    /// <summary>该分卷存的是否为预览图而非原图。</summary>
+    internal static bool IsThumb(string? error) => error == ThumbError;
+
+    /// <summary>
+    /// 作品的分卷是否全部终结：要么下载完成（'1'），要么源站没有而被跳过（'2' + skipped）。
+    /// 被跳过的文件永远不会再变成完成，若仍按"全部为 '1'"判定，缺一个文件就永远不会入库。
+    /// </summary>
+    private static bool AllFilesSettled(string workId)
     {
         var pending = Db.Scalar(
-            "SELECT COUNT(*) FROM \"download_list\" WHERE \"work_id\" = @w AND \"status\" != '1'",
+            "SELECT COUNT(*) FROM \"download_list\" WHERE \"work_id\" = @w " +
+            "AND \"status\" != '1' AND NOT (\"status\" = '2' AND IFNULL(\"error\", '') = @sk)",
+            ("@w", workId), ("@sk", SkippedError));
+        return pending != null && Convert.ToInt64(pending) == 0;
+    }
+
+    /// <summary>
+    /// 可以收尾入库：分卷全部终结，且至少有一个文件真的下到了。
+    /// 一个文件都没下成（源站整篇都没归档）的作品不入库，否则媒体库里会凭空多出一个空作品。
+    /// </summary>
+    private static bool ReadyToFinalize(string workId)
+    {
+        if (!AllFilesSettled(workId))
+            return false;
+        var done = Db.Scalar(
+            "SELECT COUNT(*) FROM \"download_list\" WHERE \"work_id\" = @w AND \"status\" = '1'",
             ("@w", workId));
-        if (pending is not long and not int || Convert.ToInt64(pending) != 0)
-            return;  // 还有未完成的分卷
+        return done != null && Convert.ToInt64(done) > 0;
+    }
+
+    /// <summary>按来源触发收尾：直链源（asmr / fanbox）无压缩包，下完直接入库；论坛源走自动解压。</summary>
+    private static void FinalizeBySource(string workId, string source)
+    {
+        switch (source)
+        {
+            case "asmr": AsmrFinalizeIfDone(workId); break;
+            case FanboxService.SourceName: FanboxFinalizeIfDone(workId); break;
+            default: AutoUnzipIfDone(workId); break;
+        }
+    }
+
+    /// <summary>该番号的所有任务都终结（下载完成或被跳过）后，作品行状态从 下载中 改为 已下载。</summary>
+    private static void MarkWorkDownloaded(string workId)
+    {
+        if (!ReadyToFinalize(workId))
+            return;  // 还有未终结的分卷，或一个都没下成
         Db.Execute(
             "UPDATE \"works\" SET \"state\" = '已下载' WHERE \"work_id\" = @w AND \"state\" = '下载中'",
             ("@w", workId));
@@ -977,11 +1069,8 @@ public static class DownloadEngine
     {
         if (!AppConfig.AutoUnzip)
             return;
-        var pending = Db.Scalar(
-            "SELECT COUNT(*) FROM \"download_list\" WHERE \"work_id\" = @w AND \"status\" != '1'",
-            ("@w", workId));
-        if (pending is null || Convert.ToInt64(pending) != 0)
-            return;  // 还有未完成的分卷，等全部下载完再解压
+        if (!ReadyToFinalize(workId))
+            return;  // 还有未终结的文件，或一个都没下成（全部被跳过的作品不入库）
 
         lock (UnzipLock)
         {
@@ -1001,11 +1090,8 @@ public static class DownloadEngine
     /// </summary>
     private static void AsmrFinalizeIfDone(string workId)
     {
-        var pending = Db.Scalar(
-            "SELECT COUNT(*) FROM \"download_list\" WHERE \"work_id\" = @w AND \"status\" != '1'",
-            ("@w", workId));
-        if (pending is null || Convert.ToInt64(pending) != 0)
-            return;  // 还有未完成的文件
+        if (!ReadyToFinalize(workId))
+            return;  // 还有未终结的文件，或一个都没下成（全部被跳过的作品不入库）
 
         lock (UnzipLock)
         {
@@ -1024,11 +1110,8 @@ public static class DownloadEngine
     /// </summary>
     private static void FanboxFinalizeIfDone(string workId)
     {
-        var pending = Db.Scalar(
-            "SELECT COUNT(*) FROM \"download_list\" WHERE \"work_id\" = @w AND \"status\" != '1'",
-            ("@w", workId));
-        if (pending is null || Convert.ToInt64(pending) != 0)
-            return;  // 还有未完成的文件
+        if (!ReadyToFinalize(workId))
+            return;  // 还有未终结的文件，或一个都没下成（全部被跳过的作品不入库）
 
         lock (UnzipLock)
         {

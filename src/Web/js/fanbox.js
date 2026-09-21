@@ -3,12 +3,17 @@
 // 工具栏（来源下拉 + 输入框 + 查询）由 search.js 统一提供，本模块只负责两个结果面板：
 //   fbArtistPane 作家搜索结果（只有一个结果时直接进主页）
 //   fbPostPane   作家主页：作品网格 + 卡内按钮选择 + 批量下载
+//   fbDetailPane 单篇作品内容：正文 + 图集（灯箱）+ 附件清单 + 下载本篇
 let fbArtist = null;        // 当前作家 { id, name, publicId }
 let fbPosts = [];           // 作家主页已加载的作品（跨分页累积）
 let fbSel = new Set();      // 选中待下载的作品号
 let fbPaging = null;        // { offset, hasMore, loading, io }
 let fbGen = 0;              // 请求代际：新一轮搜索/换作家即作废在途请求
 let fbFromArtists = false;  // 当前主页是否从作家列表点进来（决定「返回作家列表」是否显示）
+let fbLevel = 'artists';    // 当前层级：artists / posts / detail
+// 详情请求单独一套代际：看详情不应作废作家主页的在途分页与下拉监听（返回后还要继续翻页）
+let fbDetailGen = 0;
+let fbGridScroll = 0;       // 进详情前作品网格的滚动位置，返回时恢复
 
 const fbImg = (url) => '/api/fanbox/image?url=' + enc(url);
 
@@ -20,7 +25,8 @@ function fbBuildPanes(host) {
   const wrap = el('div'); wrap.id = 'fbResult';
   const ap = el('div'); ap.id = 'fbArtistPane';
   const pp = el('div'); pp.id = 'fbPostPane'; pp.style.display = 'none';
-  wrap.append(ap, pp);
+  const dp = el('div'); dp.id = 'fbDetailPane'; dp.style.display = 'none';
+  wrap.append(ap, pp, dp);
   host.appendChild(wrap);
 }
 
@@ -28,33 +34,54 @@ function fbResetState() {
   if (fbPaging && fbPaging.io) fbPaging.io.disconnect();
   fbPaging = null;
   fbArtist = null; fbPosts = []; fbSel = new Set(); fbFromArtists = false;
-  fbGen++;
+  fbLevel = 'artists'; fbGridScroll = 0;
+  fbGen++; fbDetailGen++;
 }
 
-function fbShowArtistPane() {
-  $('fbArtistPane').style.display = '';
-  $('fbPostPane').style.display = 'none';
+function fbShowPane(level) {
+  fbLevel = level;
+  $('fbArtistPane').style.display = level === 'artists' ? '' : 'none';
+  $('fbPostPane').style.display = level === 'posts' ? '' : 'none';
+  $('fbDetailPane').style.display = level === 'detail' ? '' : 'none';
   fbUpdateBackBtn();
 }
 
-function fbShowPostPane() {
-  $('fbArtistPane').style.display = 'none';
-  $('fbPostPane').style.display = '';
-  fbUpdateBackBtn();
-}
+const fbShowArtistPane = () => fbShowPane('artists');
+const fbShowPostPane = () => fbShowPane('posts');
+const fbShowDetailPane = () => fbShowPane('detail');
 
-// 工具栏「返回作家列表」：仅从作家搜索结果点进主页时显示（位置/逻辑同 DLsite 的「返回作品列表」）
+// 工具栏返回按钮：作品详情 → 返回作品列表；作家主页 → 返回作家列表（仅从作家结果点进来时）。
+// 文案随层级切换，位置/样式同 DLsite 的「返回作品列表」。
 function fbUpdateBackBtn() {
   const b = $('fbBackBtn');
   if (!b) return;
-  const pane = $('fbPostPane');
-  const onPosts = pane && pane.style.display !== 'none';
-  b.style.display = (onPosts && fbFromArtists) ? '' : 'none';
+  if (fbLevel === 'detail') {
+    b.textContent = '返回作品列表';
+    b.onclick = fbGoBackToPosts;
+    b.style.display = '';
+    return;
+  }
+  b.textContent = '返回作家列表';
+  b.onclick = fbGoBackToArtists;
+  b.style.display = (fbLevel === 'posts' && fbFromArtists) ? '' : 'none';
 }
 
 function fbGoBackToArtists() {
   fbShowArtistPane();
   $('count').textContent = '';
+}
+
+// 从详情返回作家主页：网格与已翻页数据都还在 DOM 里，恢复计数行与滚动位置即可
+function fbGoBackToPosts() {
+  fbShowPostPane();
+  fbUpdatePostCount();
+  window.scrollTo(0, fbGridScroll);
+}
+
+function fbUpdatePostCount() {
+  const who = (fbArtist && (fbArtist.name || fbArtist.id)) || '';
+  const more = fbPaging && fbPaging.hasMore ? '（下拉加载更多）' : '';
+  $('count').textContent = `${who}　已加载 ${fbPosts.length} 篇作品${more}`;
 }
 
 // ---------- 搜索作家 ----------
@@ -156,8 +183,7 @@ async function fbFetchPosts(gen, offset) {
   if (d.artist) fbArtist = { id: d.artist.id, name: d.artist.name, publicId: d.artist.publicId };
   if (fbPaging) { fbPaging.offset = offset + (d.posts || []).length; fbPaging.hasMore = !!d.hasMore; }
   fbPosts = fbPosts.concat(d.posts || []);
-  const who = (fbArtist && (fbArtist.name || fbArtist.id)) || '';
-  $('count').textContent = `${who}　已加载 ${fbPosts.length} 篇作品` + (d.hasMore ? '（下拉加载更多）' : '');
+  fbUpdatePostCount();
   return d.posts || [];
 }
 
@@ -186,6 +212,7 @@ function fbAppendPosts(grid, posts) {
 // 作品卡：结构与操作方式对齐 DLsite 作品卡（.card.mk）——封面占 2/3，
 // 底部区放标题 + 卡内常驻操作按钮行（.mcard-actions）。
 // 未下载：[选择/已选] [下载]；已入库/下载中：禁用的状态按钮。
+// 点卡片本体进详情看内容。
 function fbMakePostCard(p) {
   const done = p.state === '已品悦';
   const busy = p.state === '下载中' || p.state === '已下载';
@@ -215,8 +242,9 @@ function fbMakePostCard(p) {
   foot.appendChild(acts);
   c.appendChild(foot);
 
-  // 封面/标题区点击等同于点「选择」（按钮已 stopPropagation）；已下载/下载中的卡片不可选
-  c.onclick = () => { if (!done && !busy) fbTogglePick(p.id, c, acts.firstChild); };
+  // 封面/标题区点击 → 进入作品详情查看内容（卡内按钮已 stopPropagation，选择/下载不受影响）。
+  // 已下载/下载中的作品同样可以点进去看，只是不能再选。
+  c.onclick = () => fbOpenPost(p);
   return c;
 }
 
@@ -249,6 +277,136 @@ function fbRedrawGrid() {
 function fbUpdateSelInfo() {
   const info = $('fbSelInfo'); if (info) info.textContent = `已选 ${fbSel.size} 篇`;
   const btn = $('fbDlBtn'); if (btn) btn.disabled = fbSel.size === 0;
+}
+
+// ---------- 作品详情 ----------
+
+// 原图（file.<host>）对"只归档了预览"的投稿会 404（站点只存了预览图）：
+// 灯箱里遇到这种图自动回退到 800px 预览图，而不是留一个碎图标。
+const fbFullFallback = new Map();
+if ($('lbimg')) {
+  $('lbimg').addEventListener('error', () => {
+    const img = $('lbimg');
+    const alt = fbFullFallback.get(img.getAttribute('src') || '');
+    if (alt) img.src = alt;
+  });
+}
+
+// 点作品卡进入：拉取正文与附件清单并渲染
+async function fbOpenPost(post) {
+  const gen = ++fbDetailGen;
+  fbGridScroll = window.scrollY || 0;
+  fbShowDetailPane();
+  const box = $('fbDetailPane');
+  box.innerHTML = '<div class="empty"><span class="spin"></span> 正在获取作品内容…</div>';
+  $('count').textContent = post.title || post.id;
+  window.scrollTo(0, 0);
+
+  const q = new URLSearchParams();
+  q.set('id', fbArtist ? fbArtist.id : ''); q.set('post', post.id); q.set('service', 'fanbox');
+  let d;
+  try { d = await api('/api/fanbox/post?' + q); } catch (e) { return; }
+  // 期间已返回列表或换了作家就丢弃本次结果
+  if (gen !== fbDetailGen || fbLevel !== 'detail') return;
+  box.innerHTML = '';
+  if (d.error) { box.appendChild(el('div', 'empty', d.error)); return; }
+  fbRenderPost(box, d);
+}
+
+// 详情结构对齐媒体库详情页（.detail > .dtop > .gallery + .fields），沿用同一套样式
+function fbRenderPost(box, d) {
+  const done = d.state === '已品悦';
+  const busy = d.state === '下载中' || d.state === '已下载';
+
+  // 顶部操作条：下载本篇 / 已下载状态
+  const bar = el('div', 'toolbar');
+  if (done || busy) {
+    const b = el('button', 'icon-btn', done ? '已下载' : d.state); b.disabled = true;
+    bar.appendChild(b);
+  } else {
+    const b = el('button', 'icon-btn primary', '下载本篇');
+    b.onclick = async () => {
+      await fbDownloadOne(d.id, b);
+      // 入队成功时 fbEnqueue 会把 fbPosts 里的状态改成「下载中」，详情按钮跟着转成禁用态
+      const p = fbPosts.find(x => x.id === d.id);
+      if (p && p.state) { b.textContent = p.state; b.disabled = true; b.classList.remove('primary'); }
+    };
+    bar.appendChild(b);
+  }
+  box.appendChild(bar);
+
+  const root = el('div', 'detail');
+  root.appendChild(el('h1', null, d.title || d.id));
+
+  const top = el('div', 'dtop');
+  const imgs = d.images || [];
+  const gallery = el('div', 'gallery');
+  if (imgs.length) {
+    // 主图与缩略图条都用 800px 预览（快且一定存在）；点开灯箱才取原图，失败回退预览
+    const fulls = imgs.map(im => fbImg(im.full));
+    imgs.forEach((im, i) => fbFullFallback.set(fulls[i], fbImg(im.thumb)));
+    const main = el('img', 'main');
+    main.src = fbImg(imgs[0].thumb);
+    main.onclick = () => LB.open(fulls, 0);
+    gallery.appendChild(main);
+    if (imgs.length > 1) {
+      const thumbs = el('div', 'thumbs');
+      imgs.forEach((im, i) => {
+        const t = el('img'); t.src = fbImg(im.thumb); t.loading = 'lazy';
+        if (i === 0) t.className = 'sel';
+        t.onclick = () => {
+          main.src = fbImg(im.thumb);
+          main.onclick = () => LB.open(fulls, i);
+          thumbs.querySelectorAll('img').forEach(x => x.classList.remove('sel'));
+          t.classList.add('sel');
+        };
+        thumbs.appendChild(t);
+      });
+      gallery.appendChild(thumbs);
+    }
+  } else {
+    gallery.appendChild(el('div', 'empty', '这篇没有图片'));
+  }
+  top.appendChild(gallery);
+
+  const fields = el('div', 'fields');
+  const addF = (k, node) => {
+    if (node == null || node === '') return;
+    fields.appendChild(el('div', 'k', k));
+    const v = el('div', 'v');
+    if (typeof node === 'string') v.textContent = node; else v.appendChild(node);
+    fields.appendChild(v);
+  };
+  addF('作家', (fbArtist && (fbArtist.name || fbArtist.id)) || '');
+  addF('发布', fbFmtDate(d.published));
+  if (d.tags && d.tags.length) {
+    const wrap = el('span');
+    d.tags.forEach(t => wrap.appendChild(el('a', 'tag', t)));
+    addF('标签', wrap);
+  }
+  addF('文件', `${d.files} 个（图片 ${imgs.length}）`);
+  addF('状态', done ? '已下载' : (d.state || '未下载'));
+  top.appendChild(fields);
+  root.appendChild(top);
+
+  if (d.content) {
+    root.appendChild(el('h1', 'fb-subtitle', '正文'));
+    root.appendChild(el('div', 'fb-body', d.content));
+  }
+  const others = d.others || [];
+  if (others.length) {
+    root.appendChild(el('h1', 'fb-subtitle', `其他附件（${others.length}）`));
+    const list = el('div', 'fb-files');
+    others.forEach(f => list.appendChild(el('div', 'fb-file', f.name)));
+    root.appendChild(list);
+  }
+  box.appendChild(root);
+}
+
+// 站点给的是 2026-01-23T08:00:00 这种，去掉 T 与秒即可
+function fbFmtDate(s) {
+  if (!s) return '';
+  return String(s).replace('T', ' ').slice(0, 16);
 }
 
 // ---------- 下载 ----------

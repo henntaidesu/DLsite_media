@@ -6,13 +6,13 @@ publish/
 
 # ---- 本地数据（不入库）----
 CLAUDE.md
-DLsiteMedia.db
-DLsiteMedia.db-shm
-DLsiteMedia.db-wal
+R-18MediaLibrary.db
+R-18MediaLibrary.db-shm
+R-18MediaLibrary.db-wal
 images/
 log/
 *.log
-DLsiteMedia.zip
+R-18MediaLibrary.zip
 
 # ---- WPF 临时工程（构建中断时的残留，会导致 CS2001）----
 *_wpftmp.csproj

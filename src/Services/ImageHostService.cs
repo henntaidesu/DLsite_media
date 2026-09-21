@@ -2,11 +2,12 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
-using DLsiteMedia.Core;
+using R18MediaLibrary.Core;
 
-namespace DLsiteMedia.Services;
+namespace R18MediaLibrary.Services;
 
 /// <summary>
 /// 图床接管作品卡封面：把本地封面迁移到图床，并把"某作品的封面在图床上的地址"提供给
@@ -30,15 +31,26 @@ namespace DLsiteMedia.Services;
 public static class ImageHostService
 {
     private const string CoverKind = "cover";
+    private const string IconKind = "maker_icon";
+
+    /// <summary>社团头像取图宽度：卡片显示 82px，二倍图 164 向上取到图床的 200 这一档。</summary>
+    private const int IconWidth = 200;
 
     private static readonly object Sync = new();
     private static Dictionary<string, string>? _covers;   // work_id -> /images/<slug>/<name>
+    private static Dictionary<string, string>? _icons;    // external_key -> /images/<slug>/<name>
     private static bool _running;
     private static string _status = "";
     private static CancellationTokenSource? _cts;
 
     /// <summary>图床封面的幂等键：同一作品重复迁移只会在图床上存一份。</summary>
     private static string CoverKey(string workId) => $"work/{workId}/cover";
+
+    /// <summary>社团来源：DLsite 社团头像来自 ci-en，与 fanbox 作家头像分属两个命名空间。</summary>
+    public const string DlsiteSource = "dlsite";
+
+    /// <summary>图床头像的幂等键：同一社团重复迁移只会在图床上存一份。</summary>
+    private static string IconKey(string source, string makerId) => $"maker/{source}/{makerId}/icon";
 
     /// <summary>一条已迁移记录：图床上的位置 + 迁移时的本地文件指纹与内容指纹。</summary>
     private sealed record Record(string StoredName, string Path, string Fingerprint, string Sha256);
@@ -57,6 +69,20 @@ public static class ImageHostService
         if (!Active || workId.Length == 0)
             return null;
         var path = CoverMap().GetValueOrDefault(workId);
+        return path == null ? null : ImageHostClient.BuildUrl(AppConfig.ImageHostBaseUrl, path, width);
+    }
+
+    /// <summary>
+    /// fanbox 社团头像在图床上的地址；未启用或该作家尚未迁移时返回 null，由调用方回退站点直链。
+    ///
+    /// 与封面的动机不同：头像的源在 pawchive（网络）而不是本地 HDD，迁到图床是为了不必反复回源
+    /// ——桌面端只有进程内缓存、重启即失效，Web 端每个冷缓存的浏览器都要让服务端再取一次。
+    /// </summary>
+    public static string? MakerIconUrl(string source, string makerId, int width = IconWidth)
+    {
+        if (!Active || makerId.Length == 0)
+            return null;
+        var path = IconMap().GetValueOrDefault(IconKey(source, makerId));
         return path == null ? null : ImageHostClient.BuildUrl(AppConfig.ImageHostBaseUrl, path, width);
     }
 
@@ -94,24 +120,50 @@ public static class ImageHostService
     public static void Invalidate()
     {
         lock (Sync)
+        {
             _covers = null;
+            _icons = null;
+        }
     }
 
     private static Dictionary<string, string> CoverMap()
     {
         lock (Sync)
+            return _covers ??= LoadPathMap(CoverKind);
+    }
+
+    /// <summary>
+    /// 社团头像映射：external_key -> 图床路径。
+    /// 按 external_key 而不是社团号索引——DLsite 与 fanbox 的社团号各自独立，
+    /// 只有带上来源的键才保证不撞。
+    /// </summary>
+    private static Dictionary<string, string> IconMap()
+    {
+        lock (Sync)
         {
-            if (_covers != null)
-                return _covers;
-            var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            if (_icons != null)
+                return _icons;
+            var map = new Dictionary<string, string>(StringComparer.Ordinal);
             var rows = Db.Select(
-                "SELECT \"work_id\", \"path\" FROM \"image_host\" WHERE \"kind\" = @k",
-                ("@k", CoverKind));
+                "SELECT \"external_key\", \"path\" FROM \"image_host\" WHERE \"kind\" = @k",
+                ("@k", IconKind));
             foreach (var row in rows ?? [])
-                if (row[0] is string id && row[1] is string path && id.Length > 0 && path.Length > 0)
-                    map[id] = path;
-            return _covers = map;
+                if (row[0] is string key && row[1] is string path && key.Length > 0 && path.Length > 0)
+                    map[key] = path;
+            return _icons = map;
         }
+    }
+
+    /// <summary>按 kind 读出「业务 id -> 图床路径」映射（work_id 列对封面存作品号、对头像存作家号）。</summary>
+    private static Dictionary<string, string> LoadPathMap(string kind)
+    {
+        var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var rows = Db.Select(
+            "SELECT \"work_id\", \"path\" FROM \"image_host\" WHERE \"kind\" = @k", ("@k", kind));
+        foreach (var row in rows ?? [])
+            if (row[0] is string id && row[1] is string path && id.Length > 0 && path.Length > 0)
+                map[id] = path;
+        return map;
     }
 
     // ---------- 对外：迁移 ----------
@@ -180,13 +232,16 @@ public static class ImageHostService
             var works = Db.Select(
                 "SELECT \"work_id\", \"cover\" FROM \"works\" " +
                 "WHERE \"cover\" IS NOT NULL AND \"cover\" <> ''") ?? [];
-            var known = LoadRecords();
+            var known = LoadRecords(CoverKind);
             var total = works.Count;
 
             // 本地没有映射的，先批量问一遍图床："这些键你有吗？"
             // 本地映射表丢失（重装 / 还原备份 / 换机器）时，这一步把映射整批捡回来，
             // 而不是把已经在图床上的封面再传一遍。
-            var hosted = await LookupHostedAsync(baseUrl, project, token, works, known, ct);
+            var hosted = await LookupHostedAsync(
+                baseUrl, project, token,
+                works.Select(r => r[0] as string ?? "").Where(id => id.Length > 0).Select(CoverKey),
+                known, ct);
 
             SetStatus($"0/{total}");
             foreach (var row in works)
@@ -291,7 +346,9 @@ public static class ImageHostService
                     SetStatus($"{done}/{total}" + (failed > 0 ? $"，失败 {failed}" : ""));
             }
 
-            SetStatus(Summary(migrated, adopted, skipped, missing, failed));
+            var icons = await MigrateMakerIconsAsync(baseUrl, project, token, ct);
+            SetStatus(Summary(migrated, adopted, skipped, missing, failed)
+                      + (icons > 0 ? $"；社团头像 {icons} 张" : ""));
             if (migrated > 0 || adopted > 0 || failed > 0)
                 Logger.Info($"图床封面迁移完成：新迁移 {migrated} 张，认领 {adopted} 张，" +
                             $"跳过 {skipped} 张，缺文件 {missing} 个，失败 {failed} 张");
@@ -337,17 +394,149 @@ public static class ImageHostService
         return (allDone ? "已全部迁移：" : "迁移完成：") + string.Join("，", parts);
     }
 
+    /// <summary>
+    /// 把社团头像迁到图床（fanbox 作家头像来自 pawchive，DLsite 社团头像来自 ci-en），
+    /// 返回本轮新上传 + 认领的张数。
+    ///
+    /// <b>一个作家在图床上永远只有一张头像</b>，靠四处拦住重复：
+    /// <list type="number">
+    /// <item>枚举用 <c>SELECT DISTINCT maker_id</c>：同一社团有几十篇作品也只出现一次。</item>
+    /// <item>external_key 固定为 <c>maker/&lt;来源&gt;/&lt;社团号&gt;/icon</c>，既是 image_host 表的主键，
+    ///       也是图床侧的幂等键——重复上传同一个键不会产生第二份文件。
+    ///       来源进键里，是因为 DLsite 的 RG 号与 fanbox 的作家号各自独立编号。</item>
+    /// <item>本地已有该键的记录就直接跳过，连源站都不取。</item>
+    /// <item>本地没记录时先批量 lookup 认领图床上已有的那张，而不是再传一遍。</item>
+    /// </list>
+    ///
+    /// 与封面的差别在于源在网络上：
+    /// <list type="bullet">
+    /// <item>没有"本地文件指纹"那道闸——本地已有映射就直接跳过，不重新下载比对。
+    ///       头像极少变，为了检测变化而每轮都回源，正好把要省的请求又花回去了。</item>
+    /// <item>取图必须带 <see cref="PawchiveApi.UserAgent"/>，且要走代理感知的客户端
+    ///       （图床自己的客户端刻意关了代理，对外网站点不合适）。</item>
+    /// <item>头像 URL 不带扩展名、JPEG 与 WebP 混用，扩展名只能按 magic bytes 嗅探——
+    ///       图床按扩展名判定允许类型，给错会被 400 顶回来。</item>
+    /// </list>
+    /// </summary>
+    private static async Task<int> MigrateMakerIconsAsync(
+        string baseUrl, string project, string token, CancellationToken ct)
+    {
+        // fanbox 作家：头像地址由作家号直接拼出来
+        var targets = new List<(string Source, string MakerId, string Url)>();
+        foreach (var r in Db.Select(
+                     "SELECT DISTINCT \"maker_id\" FROM \"works\" WHERE \"source\" = @src " +
+                     "AND \"state\" = '已品悦' AND \"maker_id\" IS NOT NULL AND \"maker_id\" <> ''",
+                     ("@src", FanboxService.SourceName)) ?? [])
+            if (r[0] as string is { Length: > 0 } fanboxId)
+                targets.Add((PawchiveApi.FanboxService, fanboxId,
+                    PawchiveApi.IconUrl(PawchiveApi.FanboxService, fanboxId)));
+
+        // DLsite 社团：地址来自 ci-en 查表缓存，只有确实查到头像的才有得传
+        foreach (var r in Db.Select(
+                     "SELECT \"maker_id\", \"icon_url\" FROM \"maker_icon\" " +
+                     "WHERE \"icon_url\" IS NOT NULL AND \"icon_url\" <> ''") ?? [])
+            if (r[0] as string is { Length: > 0 } dlsiteId && r[1] as string is { Length: > 0 } iconUrl)
+                targets.Add((DlsiteSource, dlsiteId, iconUrl));
+
+        if (targets.Count == 0)
+            return 0;
+
+        var known = LoadRecords(IconKind);
+        var pending = targets.Where(t => !known.ContainsKey(IconKey(t.Source, t.MakerId))).ToList();
+        if (pending.Count == 0)
+            return 0;
+
+        // 本地映射丢了也先向图床认领，别把已经在图床上的头像再传一遍
+        var hosted = await LookupHostedAsync(
+            baseUrl, project, token, pending.Select(t => IconKey(t.Source, t.MakerId)), known, ct);
+
+        // pawchive 的防护网关拦浏览器 UA，取它的图要用中性 UA；ci-en 用默认客户端即可
+        using var pawchiveClient = Http.CreateClient(TimeSpan.FromSeconds(20), PawchiveApi.UserAgent);
+        using var plainClient = Http.CreateClient(TimeSpan.FromSeconds(20));
+        var handled = 0;
+        var failed = 0;
+        foreach (var (makerSource, makerId, source) in pending)
+        {
+            if (ct.IsCancellationRequested || !Active)
+                break;
+            var key = IconKey(makerSource, makerId);
+            var client = makerSource == PawchiveApi.FanboxService ? pawchiveClient : plainClient;
+
+            // 图床上已有同键的一张：直接认领（头像不比内容，同键即同一作家的头像）
+            if (hosted.TryGetValue(key, out var hit) && hit.Path.Length > 0)
+            {
+                SaveRecord(key, makerId, IconKind, hit.StoredName, hit.Path, source, "", "", hit.Sha256);
+                handled++;
+                continue;
+            }
+
+            byte[] bytes;
+            try
+            {
+                bytes = await client.GetByteArrayAsync(source, ct);
+            }
+            catch (Exception e) when (e is HttpRequestException or TaskCanceledException)
+            {
+                failed++;
+                Logger.Error($"图床头像取源失败 {makerId}：{e.Message}");
+                continue;
+            }
+            if (bytes.Length == 0)
+            {
+                failed++;
+                continue;
+            }
+
+            var sha256 = ImageHostClient.Sha256Of(bytes);
+            var extension = SniffImageExtension(bytes);
+            var result = await ImageHostClient.UploadAsync(
+                baseUrl, project, token, bytes, sha256, extension, key, ct);
+            if (result.Stale)
+            {
+                // 同封面那条恢复路径：图床上仍占着这个幂等键，查出来删掉再传
+                var again = await ImageHostClient.LookupAsync(baseUrl, project, token, [key], ct);
+                if (again.TryGetValue(key, out var staleHit))
+                {
+                    await ImageHostClient.DeleteAsync(baseUrl, project, token, staleHit.StoredName, ct);
+                    result = await ImageHostClient.UploadAsync(
+                        baseUrl, project, token, bytes, sha256, extension, key, ct);
+                }
+            }
+            if (!result.Ok || result.Path == null || result.StoredName == null)
+            {
+                failed++;
+                Logger.Error($"图床头像迁移失败 {makerId}：{result.Error}");
+                continue;
+            }
+            SaveRecord(key, makerId, IconKind, result.StoredName, result.Path, source, "", "", sha256);
+            handled++;
+        }
+        if (handled > 0 || failed > 0)
+            Logger.Info($"图床社团头像迁移：完成 {handled} 张" + (failed > 0 ? $"，失败 {failed} 张" : ""));
+        return handled;
+    }
+
+    /// <summary>
+    /// 按 magic bytes 判断图片扩展名。pawchive 的头像地址不带扩展名、Content-Type 又常是
+    /// application/octet-stream，只能看内容——实测同一站点 JPEG 与 WebP 都有。
+    /// </summary>
+    private static string SniffImageExtension(byte[] b) => b switch
+    {
+        [0xFF, 0xD8, ..] => ".jpg",
+        [0x89, 0x50, 0x4E, 0x47, ..] => ".png",
+        [0x52, 0x49, 0x46, 0x46, _, _, _, _, 0x57, 0x45, 0x42, 0x50, ..] => ".webp",
+        [0x47, 0x49, 0x46, ..] => ".gif",
+        _ => ".jpg",
+    };
+
     /// <summary>把本地还没有映射的 key 分批问图床要（每批不超过图床的 lookup 上限）。</summary>
     private static async Task<Dictionary<string, ImageHostClient.HostedImage>> LookupHostedAsync(
         string baseUrl, string project, string token,
-        List<object?[]> works, Dictionary<string, Record> known, CancellationToken ct)
+        IEnumerable<string> keys, Dictionary<string, Record> known, CancellationToken ct)
     {
         var hosted = new Dictionary<string, ImageHostClient.HostedImage>(StringComparer.Ordinal);
-        var wanted = works
-            .Select(r => r[0] as string ?? "")
-            .Where(id => id.Length > 0)
-            .Select(CoverKey)
-            .Where(key => !known.ContainsKey(key))
+        var wanted = keys
+            .Where(key => key.Length > 0 && !known.ContainsKey(key))
             .Distinct(StringComparer.Ordinal)
             .ToList();
         for (var i = 0; i < wanted.Count; i += ImageHostClient.LookupBatch)
@@ -361,27 +550,35 @@ public static class ImageHostService
         return hosted;
     }
 
-    /// <summary>写入/更新一条迁移记录（external_key 是主键，故同一作品永远只有一行）。</summary>
+    /// <summary>写入/更新一条封面迁移记录（external_key 是主键，故同一作品永远只有一行）。</summary>
     private static void Save(string key, string workId, string storedName, string path,
         string cover, FileInfo info, string sha256) =>
+        SaveRecord(key, workId, CoverKind, storedName, path,
+            cover, info.Length.ToString(), info.LastWriteTimeUtc.Ticks.ToString(), sha256);
+
+    /// <summary>
+    /// 写入/更新一条迁移记录。头像没有本地文件，src_* 三列改存来源 URL（便于排查），
+    /// 大小/时间留空——它们只服务于封面那道"本地文件指纹"闸。
+    /// </summary>
+    private static void SaveRecord(string key, string id, string kind, string storedName, string path,
+        string srcPath, string srcSize, string srcMtime, string sha256) =>
         Db.Execute(
             "INSERT OR REPLACE INTO \"image_host\" (\"external_key\", \"work_id\", \"kind\", " +
             "\"stored_name\", \"path\", \"src_path\", \"src_size\", \"src_mtime\", \"sha256\", \"up_time\") " +
             "VALUES (@k, @w, @kind, @s, @p, @sp, @ss, @sm, @sha, @t)",
-            ("@k", key), ("@w", workId), ("@kind", CoverKind),
+            ("@k", key), ("@w", id), ("@kind", kind),
             ("@s", storedName), ("@p", path),
-            ("@sp", cover), ("@ss", info.Length.ToString()),
-            ("@sm", info.LastWriteTimeUtc.Ticks.ToString()),
+            ("@sp", srcPath), ("@ss", srcSize), ("@sm", srcMtime),
             ("@sha", sha256),
             ("@t", DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.ffffff")));
 
     /// <summary>已迁移记录：external_key -> (图床存储名/路径, 本地文件指纹, 内容指纹)。</summary>
-    private static Dictionary<string, Record> LoadRecords()
+    private static Dictionary<string, Record> LoadRecords(string kind)
     {
         var map = new Dictionary<string, Record>(StringComparer.Ordinal);
         var rows = Db.Select(
             "SELECT \"external_key\", \"stored_name\", \"path\", \"src_path\", \"src_size\", " +
-            "\"src_mtime\", \"sha256\" FROM \"image_host\" WHERE \"kind\" = @k", ("@k", CoverKind));
+            "\"src_mtime\", \"sha256\" FROM \"image_host\" WHERE \"kind\" = @k", ("@k", kind));
         foreach (var row in rows ?? [])
             if (row[0] is string key && row[1] is string stored)
                 map[key] = new Record(

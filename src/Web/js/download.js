@@ -21,12 +21,17 @@ function renderDownloadSection() {
   const cn = el('button', 'icon-btn', '清除无可用连接'); cn.onclick = async () => { await apiPost('/api/clearnolink'); loadDownloads(); };
   const ca = el('button', 'icon-btn', '清空列表'); ca.onclick = async () => { if (await uiConfirm('确定要清空整个下载列表吗？等待中的任务也会被删除。', { danger: true })) { await apiPost('/api/clearall'); loadDownloads(); } };
   // 全部重新解析：所有解析失败分卷重新排队，所有"无可用下载连接"占位重新自动解析
-  const ra = el('button', 'icon-btn', '全部重新解析'); ra.onclick = async () => { ra.disabled = true; try { await apiPost('/api/reparseall'); } finally { ra.disabled = false; } loadDownloads(); };
+  // busy 标记：请求在途时按住禁用，别让每秒轮询把它又点亮
+  const ra = el('button', 'icon-btn', '全部重新解析');
+  ra.onclick = async () => { ra.dataset.busy = '1'; ra.disabled = true; try { await apiPost('/api/reparseall'); } finally { ra.dataset.busy = '0'; } loadDownloads(); };
   // debrid-link 使用量卡片：与按钮同一行、靠右；点击查看各网盘流量详情
   const usage = el('div', 'usage-card'); usage.id = 'usage';
   usage.innerHTML = '<div class="ut" id="usageText">debrid-link 使用量 --</div><div class="bar"><i id="usageBar" style="width:0;background:#a78bfa"></i></div>';
   usage.style.cursor = 'pointer'; usage.title = '点击查看各网盘流量详情';
   usage.onclick = showUsageDetail;
+  // 可用性由每秒轮询的 /api/downloads 回填（见 loadDownloads），初始先禁用，避免空列表时点了没反应
+  cd.id = 'clearDoneBtn'; cn.id = 'clearNoLinkBtn'; ca.id = 'clearAllBtn'; ra.id = 'reparseAllBtn';
+  cd.disabled = cn.disabled = ca.disabled = ra.disabled = true;
   bar.append(dled, cd, cn, ca, startBtn, ra, usage);
   host.appendChild(bar);
   host.appendChild(el('div', null)).id = 'dlList';
@@ -42,6 +47,13 @@ async function loadDownloads() {
     if (d.engine.running) { btn.dataset.running = '1'; if (d.engine.stopRequested) { btn.textContent = '暂停中…'; btn.disabled = true; } else { btn.textContent = '暂停下载'; btn.disabled = false; } }
     else { btn.dataset.running = '0'; btn.textContent = '开始下载'; btn.disabled = false; }
   }
+  // 工具栏其余按钮按列表内容灰显（服务端算好，桌面端同源：DownloadListActions.FlagsOf）
+  const acts = d.actions || {};
+  const setEnabled = (id, on) => { const b = $(id); if (b && b.dataset.busy !== '1') b.disabled = !on; };
+  setEnabled('clearDoneBtn', acts.canClearDone);
+  setEnabled('clearNoLinkBtn', acts.canClearNoLink);
+  setEnabled('clearAllBtn', acts.canClearAll);
+  setEnabled('reparseAllBtn', acts.canReparseAll);
   const list = $('dlList'); if (!list) return;
   // 用户正在该列表内选中文本时跳过本次重建：否则每秒刷新会清掉选区，导致文件名/失败原因无法复制
   const sel = window.getSelection && window.getSelection();

@@ -3,18 +3,18 @@ using System.Collections.Generic;
 using System.IO;
 using Microsoft.Data.Sqlite;
 
-namespace DLsiteMedia.Core;
+namespace R18MediaLibrary.Core;
 
 /// <summary>
 /// SQLite 数据库访问层（对应 Python 版 datebase_execution.py）。
-/// 沿用项目根目录的 DLsiteMedia.db：conf / download_list / works / work_genres 表，老数据无缝继承。
+/// 沿用项目根目录的 R-18MediaLibrary.db：conf / download_list / works / work_genres 表，老数据无缝继承。
 /// 每次操作独立连接（Sqlite 连接池），WAL 模式下 UI 刷新 + 下载线程 + 元数据补全并发安全。
 /// </summary>
 public static class Db
 {
-    private const string DbFileName = "DLsiteMedia.db";
-    // 改名前（DASD 时代）的库文件名：仅用于一次性迁移旧数据，之后一律按 DbFileName 访问。
-    private const string LegacyDbFileName = "DASD.db";
+    private const string DbFileName = "R-18MediaLibrary.db";
+    // 历次改名前的库文件名（新 → 旧）：仅用于一次性迁移旧数据，之后一律按 DbFileName 访问。
+    private static readonly string[] LegacyDbFileNames = ["DLsiteMedia.db", "DASD.db"];
 
     private static readonly string DbPath = LocateDb();
     private static readonly string ConnString =
@@ -24,8 +24,8 @@ public static class Db
     private static readonly object InitLock = new();
 
     /// <summary>
-    /// 定位 DLsiteMedia.db：优先当前工作目录，其次从 exe 目录向上逐级查找（开发期命中仓库根），
-    /// 每处查找前都会先尝试把同目录下的旧版 DASD.db 迁移为新文件名，都没有时在 exe 目录新建。
+    /// 定位 R-18MediaLibrary.db：优先当前工作目录，其次从 exe 目录向上逐级查找（开发期命中仓库根），
+    /// 每处查找前都会先尝试把同目录下的旧版库文件（DLsiteMedia.db / DASD.db）迁移为新文件名，都没有时在 exe 目录新建。
     /// </summary>
     private static string LocateDb()
     {
@@ -47,30 +47,37 @@ public static class Db
     }
 
     /// <summary>
-    /// 旧版数据库改名迁移：目录下存在老版 DASD.db 但新文件名尚不存在时原地改名（.db 本体 + -wal/-shm
-    /// 一并改名，不丢 WAL 里尚未 checkpoint 的数据），一次性完成。迁移前不能有任何连接打开过旧库，
-    /// 故只能在 LocateDb 算出路径之前做纯文件操作；失败（如文件被占用）时静默保留旧文件名，下次启动重试。
+    /// 旧版数据库改名迁移：目录下存在老版库文件（按 <see cref="LegacyDbFileNames"/> 由新到旧取第一个命中的）
+    /// 但新文件名尚不存在时原地改名（.db 本体 + -wal/-shm 一并改名，不丢 WAL 里尚未 checkpoint 的数据），
+    /// 一次性完成。迁移前不能有任何连接打开过旧库，故只能在 LocateDb 算出路径之前做纯文件操作；
+    /// 失败（如文件被占用）时静默保留旧文件名，下次启动重试。
     /// </summary>
     private static void MigrateLegacyDb(string dir)
     {
         var newPath = Path.Combine(dir, DbFileName);
-        var legacyPath = Path.Combine(dir, LegacyDbFileName);
-        if (File.Exists(newPath) || !File.Exists(legacyPath))
+        if (File.Exists(newPath))
             return;
-        try
+        foreach (var legacyName in LegacyDbFileNames)
         {
-            File.Move(legacyPath, newPath);
-            foreach (var suffix in new[] { "-wal", "-shm" })
+            var legacyPath = Path.Combine(dir, legacyName);
+            if (!File.Exists(legacyPath))
+                continue;
+            try
             {
-                var legacySide = legacyPath + suffix;
-                if (File.Exists(legacySide))
-                    File.Move(legacySide, newPath + suffix);
+                File.Move(legacyPath, newPath);
+                foreach (var suffix in new[] { "-wal", "-shm" })
+                {
+                    var legacySide = legacyPath + suffix;
+                    if (File.Exists(legacySide))
+                        File.Move(legacySide, newPath + suffix);
+                }
+                Console.WriteLine($"[DB] 已将旧版数据库 {legacyPath} 迁移为 {newPath}");
             }
-            Console.WriteLine($"[DASD] 已将旧版数据库 {legacyPath} 迁移为 {newPath}");
-        }
-        catch (IOException e)
-        {
-            Console.WriteLine($"[DASD] 旧版数据库迁移失败，保留旧文件名待下次重试: {e.Message}");
+            catch (IOException e)
+            {
+                Console.WriteLine($"[DB] 旧版数据库迁移失败，保留旧文件名待下次重试: {e.Message}");
+            }
+            return;
         }
     }
 
@@ -174,6 +181,25 @@ public static class Db
                         "sha256" text,
                         "up_time" text,
                         PRIMARY KEY ("external_key")
+                    );
+
+                    -- 社团显示名映射：只改界面上的显示，works.maker_name 这个真名不动。
+                    -- 分组、筛选、入库路径全部仍按真名走，本表丢了也只是回到显示真名。
+                    -- DLsite 社团头像（来自 ci-en）的查询结果缓存。
+                    -- icon_url 为空串表示"查过了，该社团没有 ci-en 账号/头像"——与"还没查过"
+                    -- （表里没有这一行）区分开，否则每次都要为没头像的社团重新发一次请求。
+                    CREATE TABLE IF NOT EXISTS "maker_icon" (
+                        "maker_id" text NOT NULL,
+                        "icon_url" text,
+                        "up_time" text,
+                        PRIMARY KEY ("maker_id")
+                    );
+
+                    CREATE TABLE IF NOT EXISTS "maker_alias" (
+                        "maker_name" text NOT NULL,
+                        "alias" text NOT NULL,
+                        "up_time" text,
+                        PRIMARY KEY ("maker_name")
                     );
                     """;
                 cmd.ExecuteNonQuery();
@@ -376,7 +402,7 @@ public static class Db
     }
 
     /// <summary>
-    /// 手动执行 WAL checkpoint，把 -wal 中已提交但尚未写回主库文件的数据落盘到 DLsiteMedia.db 并截断 -wal。
+    /// 手动执行 WAL checkpoint，把 -wal 中已提交但尚未写回主库文件的数据落盘到 R-18MediaLibrary.db 并截断 -wal。
     /// WAL 模式下应用内读写始终能看到最新数据（无需此调用才能读到），但外部工具/备份脚本若只复制主库文件
     /// 而不带上 -wal/-shm，会漏掉尚未 checkpoint 的数据——退出前调用一次收尾，尽量让主库文件保持最新。
     /// </summary>

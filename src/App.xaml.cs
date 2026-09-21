@@ -1,8 +1,8 @@
 using System.Windows;
-using DLsiteMedia.Core;
-using DLsiteMedia.Services;
+using R18MediaLibrary.Core;
+using R18MediaLibrary.Services;
 
-namespace DLsiteMedia;
+namespace R18MediaLibrary;
 
 public partial class App : Application
 {
@@ -17,6 +17,8 @@ public partial class App : Application
         // 设置中开启了外部访问时，随程序启动内嵌 Web 服务
         if (AppConfig.WebEnabled)
             WebServer.StartFromConfig();
+        // 后台补齐 DLsite 社团头像（查过的社团不会再发请求）；查完会自己再 Kick 一次图床
+        DlsiteMakerIcon.Kick();
         // 开启了图床存储时，后台把新入库作品的封面补传上去（未开启为空操作）
         ImageHostService.Kick();
     }

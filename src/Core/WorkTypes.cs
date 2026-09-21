@@ -1,4 +1,4 @@
-namespace DLsiteMedia.Core;
+namespace R18MediaLibrary.Core;
 
 /// <summary>
 /// DLsite work_type 代码 ↔ 中文名映射（集中维护，供「作品类型优先搜索」设置与类型显示复用）。

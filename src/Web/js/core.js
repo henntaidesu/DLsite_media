@@ -282,7 +282,7 @@ async function render() {
     else if (st.view === 'favorites') await renderWorks('/api/favorites', '我的收藏', true);
     else if (st.view === 'makers') await renderMakers(st.ctx);
     else if (st.view === 'genreworks') await renderWorks('/api/genreworks?genre=' + enc(st.ctx.genre), st.ctx.label || st.ctx.genre, true);
-    else if (st.view === 'works') await renderWorks(worksUrl(st.ctx), st.ctx.maker || '未知社团', true, st.ctx);
+    else if (st.view === 'works') await renderWorks(worksUrl(st.ctx), st.ctx.label || st.ctx.maker || '未知社团', true, st.ctx);
     else if (st.view === 'filter') await renderWorks(`/api/filter?col=${enc(st.ctx.col)}&val=${enc(st.ctx.val)}`, st.ctx.label, true);
     else if (st.view === 'detail') await renderDetail(st.ctx.id);
     else if (st.view === 'files') await renderFiles(st.ctx);
@@ -307,16 +307,26 @@ function drawGroups(items, mapFn, unit) {
   items2.forEach(i => {
     const m = mapFn(i);
     const c = el('div', 'card group-card');
-    // 左侧头像（目前只有 fanbox 社团有）：取不到就整个移除，让信息块占满，不留空框
+    // 左侧头像（目前只有 fanbox 社团有）。图床接管该头像时直取图床，取不到再回退站点代理地址；
+    // 都取不到就整个移除，让信息块占满，不留空框
     if (m.icon) {
       const ic = el('img', 'gicon'); ic.loading = 'lazy'; ic.src = m.icon;
-      ic.onerror = () => ic.remove();
+      ic.onerror = m.iconFallback
+        ? () => { ic.onerror = () => ic.remove(); ic.src = m.iconFallback; }
+        : () => ic.remove();
       c.appendChild(ic);
     }
     // 右侧信息块：名称 + 作品数竖排
     const info = el('div', 'ginfo');
     info.append(el('div', 'gt', m.title), el('div', 'gc', m.caption));
     c.appendChild(info);
+    // 右上角改名按钮（只有社团卡给 onEdit）：别让点击冒泡成"进入该分组"
+    if (m.onEdit) {
+      const eb = el('button', 'gedit', '🖊');
+      eb.title = '自定义显示名称';
+      eb.onclick = (ev) => { ev.stopPropagation(); m.onEdit(); };
+      c.appendChild(eb);
+    }
     c.onclick = m.onClick;
     grid.appendChild(c);
   });

@@ -321,6 +321,7 @@ public static class WebServer
             {
                 case "/api/libs": ApiLibs(stream); break;
                 case "/api/makers": ApiMakers(stream, req); break;
+                case "/api/makeralias": ApiMakerAlias(stream, req); break;
                 case "/api/works": ApiWorks(stream, req); break;
                 case "/api/genreworks": ApiGenreWorks(stream, req); break;
                 case "/api/libworks": ApiLibWorks(stream, req); break;
@@ -587,14 +588,46 @@ public static class WebServer
                 "SELECT \"maker_name\", COUNT(*), " + FanboxService.MakerIdExpr("") + " FROM \"works\" " +
                 "WHERE \"state\" = '已品悦' " +
                 "GROUP BY \"maker_name\" " + order.Replace("{p}", ""));
-        var makers = (rows ?? []).Select(r => new
+        var makers = (rows ?? []).Select(r =>
         {
-            maker = r[0] as string ?? "",
-            count = Convert.ToInt64(r[1]),
-            // fanbox 社团（= pawchive 作家）的头像；其余来源暂无头像，前端据此不画
-            icon = FanboxService.MakerIconUrl(r.Length > 2 ? r[2] as string : null),
+            // fanbox 社团（= pawchive 作家）才有头像；其余来源两个字段都是空串，前端据此不画
+            var fanboxId = r.Length > 2 ? r[2] as string ?? "" : "";
+            var source = FanboxService.MakerIconUrl(fanboxId);
+            var maker = r[0] as string ?? "";
+            return new
+            {
+                maker,
+                // 显示名：设过别名就用别名。分组/筛选一律仍按真名 maker，别名只进界面
+                display = MakerAliasService.Display(maker),
+                count = Convert.ToInt64(r[1]),
+                // 站点直链必须经本服务代理：浏览器直连 pawchive 会被防护网关按浏览器 UA 拦下
+                icon = source.Length > 0 ? "/api/fanbox/image?url=" + Uri.EscapeDataString(source) : "",
+                // 已迁到图床的直接给图床地址（既不经本服务、也不回源 pawchive）；
+                // 没迁的为空串，前端退回上面的代理地址
+                iconUrl = fanboxId.Length > 0 ? ImageHostService.MakerIconUrl(fanboxId) ?? "" : "",
+            };
         });
         WriteJson(stream, 200, new { makers });
+    }
+
+    /// <summary>
+    /// 设置/清除社团显示名映射。只改显示，works.maker_name 不动；alias 留空即取消映射。
+    /// </summary>
+    private static void ApiMakerAlias(NetworkStream stream, Request req)
+    {
+        if (req.Method != "POST")
+        {
+            WriteJson(stream, 405, new { error = "method not allowed" });
+            return;
+        }
+        var maker = ReadStringField(req.Body, "maker");
+        if (maker.Length == 0)
+        {
+            WriteJson(stream, 400, new { error = "bad request" });
+            return;
+        }
+        MakerAliasService.Set(maker, ReadStringField(req.Body, "alias"));
+        WriteJson(stream, 200, new { ok = true, display = MakerAliasService.Display(maker) });
     }
 
     private static void ApiWorks(NetworkStream stream, Request req)

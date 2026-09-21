@@ -535,10 +535,13 @@ public partial class MediaLibPage : UserControl
     }
 
     /// <param name="iconUrl">
-    /// 分组头像地址（目前只有 fanbox 社团有），空则不画。画在卡片左侧、名称与作品数的左边，
-    /// 异步载入，取不到就保持占位底色——不阻塞卡片先出来。
+    /// 分组头像的来源地址（目前只有 fanbox 社团有，指向 pawchive），空则不画头像。
+    /// 画在卡片左侧、名称与作品数的左边，异步载入，取不到就保持占位底色——不阻塞卡片先出来。
     /// </param>
-    private Border MakeClickCard(string title, string caption, Action onClick, string iconUrl = "")
+    /// <param name="iconHostUrl">该头像在图床上的地址；非空则优先走图床，失败再回退 <paramref name="iconUrl"/>。</param>
+    /// <param name="onEdit">非空则在卡片右上角挂一个 🖊 按钮（目前只有社团卡用它改显示名）。</param>
+    private Border MakeClickCard(string title, string caption, Action onClick,
+        string iconUrl = "", string iconHostUrl = "", Action? onEdit = null)
     {
         // 尺寸交给网格：卡片拉伸填满单元格（宽由 CardGrid 算、高为 ClickCardH），间距也由网格排
         var card = new Border
@@ -553,6 +556,7 @@ public partial class MediaLibPage : UserControl
         };
         // 右侧信息块：名称 + 作品数竖排（对齐 Web 的 .ginfo）
         var info = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
+        FrameworkElement content = info;   // 有头像时换成「头像 | 信息」两列
         info.Children.Add(new TextBlock
         {
             Text = title, FontWeight = FontWeights.SemiBold, FontSize = 15, TextWrapping = TextWrapping.Wrap,
@@ -570,34 +574,90 @@ public partial class MediaLibPage : UserControl
             var row = new Grid();
             row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
             row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            // 82 = 卡高 110 − 上下内距 14×2：头像比卡片小一圈，只留内距那一圈留白
             var avatar = new Border
             {
-                Width = 44, Height = 44, CornerRadius = new CornerRadius(6),
+                Width = 82, Height = 82, CornerRadius = new CornerRadius(6),
                 Margin = new Thickness(0, 0, 12, 0), VerticalAlignment = VerticalAlignment.Center,
                 Background = (Brush)FindResource("BorderBrush"),
             };
             Grid.SetColumn(info, 1);
             row.Children.Add(avatar);
             row.Children.Add(info);
-            card.Child = row;
-            _ = LoadGroupIconAsync(avatar, iconUrl);
+            content = row;
+            _ = LoadGroupIconAsync(avatar, iconUrl, iconHostUrl);
+        }
+
+        if (onEdit == null)
+        {
+            card.Child = content;
         }
         else
         {
-            card.Child = info;
+            // 内容与右上角按钮叠放。Button 自己会把 MouseLeftButtonUp 标记为已处理，
+            // 所以点按钮不会顺带触发卡片的"进入该分组"
+            var overlay = new Grid();
+            overlay.Children.Add(content);
+            var edit = new Button
+            {
+                Content = "🖊",
+                ToolTip = I18n.Tr("自定义显示名称"),
+                HorizontalAlignment = HorizontalAlignment.Right,
+                VerticalAlignment = VerticalAlignment.Top,
+                Margin = new Thickness(0, -8, -8, 0),   // 抵消卡片 14px 内距，贴近右上角
+                Padding = new Thickness(6, 2, 6, 2),
+                Background = Brushes.Transparent,
+                BorderThickness = new Thickness(0),
+                Foreground = (Brush)FindResource("CaptionBrush"),
+                FontSize = 13,
+                Cursor = Cursors.Hand,
+            };
+            edit.Click += (_, e) =>
+            {
+                e.Handled = true;
+                onEdit();
+            };
+            overlay.Children.Add(edit);
+            card.Child = overlay;
         }
         card.MouseLeftButtonUp += (_, _) => onClick();
         return card;
     }
 
     /// <summary>
-    /// 异步载入分组头像。走 ThumbnailCache（进程级缓存 + 并发上限），
-    /// 并带 pawchive 的中性 UA——防护网关会拦浏览器 UA。
+    /// 右上角 🖊：自定义该社团的显示名称。只写映射表，works.maker_name 这个真名不动，
+    /// 分组与筛选继续按真名走（见 <see cref="MakerAliasService"/>）。
     /// </summary>
-    private static async Task LoadGroupIconAsync(Border target, string url)
+    private void EditMakerAlias(string maker)
     {
-        // 44pt 的正方形头像，按 2 倍解码保证高 DPI 下不糊
-        var bmp = await ThumbnailCache.LoadUrlAsync(url, 88, PawchiveApi.UserAgent);
+        var current = MakerAliasService.Display(maker);
+        var input = InAppDialog.Prompt(
+            this,
+            I18n.Format(I18n.Tr("社团「{maker}」的显示名称（留空恢复原名，不会改动作品数据）"),
+                ("maker", maker)),
+            I18n.Tr("自定义社团名称"),
+            current == maker ? "" : current);
+        if (input == null)
+            return;   // 取消
+        MakerAliasService.Set(maker, input);
+        if (_level == "all_makers")
+            ShowAllMakers();
+        else
+            ShowMakers();
+    }
+
+    /// <summary>
+    /// 异步载入分组头像，走 ThumbnailCache（进程级缓存 + 并发上限）。
+    ///
+    /// 优先图床：那是用户自己机器上的服务，不必回源 pawchive，也不需要中性 UA；
+    /// 图床没有该头像（或取图失败）才回退站点直链，此时必须带 <see cref="PawchiveApi.UserAgent"/>
+    /// ——pawchive 的防护网关会拦浏览器 UA。
+    /// </summary>
+    private static async Task LoadGroupIconAsync(Border target, string url, string hostUrl)
+    {
+        // 82pt 的正方形头像，按 2 倍解码保证高 DPI 下不糊
+        var bmp = hostUrl.Length > 0 ? await ThumbnailCache.LoadUrlAsync(hostUrl, 164) : null;
+        bmp ??= await ThumbnailCache.LoadUrlAsync(url, 164, PawchiveApi.UserAgent);
         // Uniform 而非 UniformToFill：非正方形的头像也完整显示、不裁切（对齐 Web 的 object-fit: contain）
         if (bmp != null)
             target.Background = new ImageBrush(bmp) { Stretch = Stretch.Uniform };
@@ -669,15 +729,22 @@ public partial class MediaLibPage : UserControl
         {
             var maker = row[0] as string ?? "";
             var count = Convert.ToInt64(row[1]);
-            var title = maker.Length > 0 ? maker : I18n.Tr("未知社团");
-            var icon = FanboxService.MakerIconUrl(row.Length > 2 ? row[2] as string : null);
+            // 显示名走映射；真名只用于分组跳转与筛选
+            var display = MakerAliasService.Display(maker);
+            var title = display.Length > 0 ? display : I18n.Tr("未知社团");
+            var fanboxId = row.Length > 2 ? row[2] as string ?? "" : "";
+            var icon = FanboxService.MakerIconUrl(fanboxId);
+            var iconHost = fanboxId.Length > 0 ? ImageHostService.MakerIconUrl(fanboxId) ?? "" : "";
             return new GridCard(() => MakeClickCard(
                 title, I18n.Format(I18n.Tr("{count} 个作品"), ("count", count)),
                 () =>
                 {
                     _currentMaker = maker.Length > 0 ? maker : UnknownMaker;
                     ShowWorks();
-                }, icon), title.ToLowerInvariant());
+                }, icon, iconHost,
+                maker.Length > 0 ? () => EditMakerAlias(maker) : null),
+                // 搜索过滤同时匹配真名与显示名
+                $"{maker} {display}".ToLowerInvariant());
         }).ToList();
         PopulateSortBox(MakerSortOptions, _makerSort);
         ApplyCardFilter();
@@ -703,15 +770,22 @@ public partial class MediaLibPage : UserControl
         {
             var maker = row[0] as string ?? "";
             var count = Convert.ToInt64(row[1]);
-            var title = maker.Length > 0 ? maker : I18n.Tr("未知社团");
-            var icon = FanboxService.MakerIconUrl(row.Length > 2 ? row[2] as string : null);
+            // 显示名走映射；真名只用于分组跳转与筛选
+            var display = MakerAliasService.Display(maker);
+            var title = display.Length > 0 ? display : I18n.Tr("未知社团");
+            var fanboxId = row.Length > 2 ? row[2] as string ?? "" : "";
+            var icon = FanboxService.MakerIconUrl(fanboxId);
+            var iconHost = fanboxId.Length > 0 ? ImageHostService.MakerIconUrl(fanboxId) ?? "" : "";
             return new GridCard(() => MakeClickCard(
                 title, I18n.Format(I18n.Tr("{count} 个作品"), ("count", count)),
                 () =>
                 {
                     _currentMaker = maker.Length > 0 ? maker : UnknownMaker;
                     ShowWorks();
-                }, icon), title.ToLowerInvariant());
+                }, icon, iconHost,
+                maker.Length > 0 ? () => EditMakerAlias(maker) : null),
+                // 搜索过滤同时匹配真名与显示名
+                $"{maker} {display}".ToLowerInvariant());
         }).ToList();
         PopulateSortBox(MakerSortOptions, _makerSort);
         ApplyCardFilter();

@@ -182,6 +182,15 @@ public static class Db
                         "up_time" text,
                         PRIMARY KEY ("external_key")
                     );
+
+                    -- 社团显示名映射：只改界面上的显示，works.maker_name 这个真名不动。
+                    -- 分组、筛选、入库路径全部仍按真名走，本表丢了也只是回到显示真名。
+                    CREATE TABLE IF NOT EXISTS "maker_alias" (
+                        "maker_name" text NOT NULL,
+                        "alias" text NOT NULL,
+                        "up_time" text,
+                        PRIMARY KEY ("maker_name")
+                    );
                     """;
                 cmd.ExecuteNonQuery();
             }

@@ -74,6 +74,17 @@ public static class I18n
     private static readonly Dictionary<string, Dictionary<string, string>> Translations = new()
     {
         // ---------- FANBOX（pawchive 数据源）----------
+        // 社团显示名映射（卡片右上角 🖊）
+        ["自定义显示名称"] = new()
+            { ["zh_TW"] = "自訂顯示名稱", ["ja"] = "表示名を変更", ["en"] = "Rename (display only)" },
+        ["自定义社团名称"] = new()
+            { ["zh_TW"] = "自訂社團名稱", ["ja"] = "サークル表示名", ["en"] = "Custom maker name" },
+        ["社团「{maker}」的显示名称（留空恢复原名，不会改动作品数据）"] = new()
+        {
+            ["zh_TW"] = "社團「{maker}」的顯示名稱（留空恢復原名，不會改動作品資料）",
+            ["ja"] = "サークル「{maker}」の表示名（空欄で元に戻す。作品データは変更されません）",
+            ["en"] = "Display name for \"{maker}\" (leave empty to restore; work data is unchanged)",
+        },
         // 作品详情（查看内容）
         ["下载本篇"] = new() { ["zh_TW"] = "下載本篇", ["ja"] = "この投稿を保存", ["en"] = "Download post" },
         ["正文"] = new() { ["zh_TW"] = "正文", ["ja"] = "本文", ["en"] = "Body" },

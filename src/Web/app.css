@@ -94,12 +94,21 @@
   .card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
           overflow: hidden; cursor: pointer; display: flex; flex-direction: column; transition: border-color .12s; }
   .card:hover { border-color: var(--accent-dim); }
-  /* 左头像 | 右(名称 + 作品数)。.card 本身是竖向 flex，这里翻成横向 */
-  .group-card { padding: 14px; min-height: 92px; flex-direction: row; align-items: center; gap: 12px; }
+  /* 左头像 | 右(名称 + 作品数)。.card 本身是竖向 flex，这里翻成横向。
+     position: relative 是给右上角改名按钮定位用的 */
+  .group-card { padding: 14px; min-height: 110px; position: relative;
+                flex-direction: row; align-items: center; gap: 12px; }
   /* 社团头像：卡片左侧的正方形头像（目前只有 fanbox 社团有），定宽不被文字挤压。
+     82 = 卡高 110 − 上下内距 14×2，即"比卡片小一圈"，只留内距那一圈留白。
      contain 而非 cover：非正方形的头像也完整显示、不裁切，空白由底色补 */
-  .group-card .gicon { flex: none; width: 44px; height: 44px; border-radius: 6px;
+  .group-card .gicon { flex: none; width: 82px; height: 82px; border-radius: 6px;
                        object-fit: contain; background: var(--line); }
+  /* 右上角改名按钮：常驻但压暗，悬停卡片时才提亮，避免喧宾夺主 */
+  .group-card .gedit { position: absolute; top: 6px; right: 6px; padding: 2px 6px;
+                       background: none; border: none; color: var(--muted); cursor: pointer;
+                       font-size: 13px; line-height: 1; opacity: .35; transition: opacity .12s; }
+  .group-card:hover .gedit { opacity: .9; }
+  .group-card .gedit:hover { color: var(--fg); opacity: 1; }
   /* 右侧信息块：min-width:0 才允许长社团名在 flex 里收缩换行，否则会把卡片撑破 */
   .group-card .ginfo { flex: 1 1 auto; min-width: 0; }
   .group-card .gt { font-weight: 600; font-size: 15px; word-break: break-word; }

@@ -317,8 +317,12 @@ public partial class SearchPage : UserControl
             CountText.Visibility = text.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
         };
         FanboxView.BackAvailabilityChanged += available =>
+        {
+            // 文案随层级变（详情 → 返回作品列表；作家主页 → 返回作家列表）
+            FanboxBackButton.Content = FanboxView.BackLabel;
             FanboxBackButton.Visibility =
                 available && _source == SourceFanbox ? Visibility.Visible : Visibility.Collapsed;
+        };
 
         BuildSourceBox();
         RetranslateUi();
@@ -378,13 +382,14 @@ public partial class SearchPage : UserControl
         FanboxHost.Visibility = Visibility.Visible;
         CountText.Text = FanboxView.CurrentStatus;
         CountText.Visibility = CountText.Text.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
+        FanboxBackButton.Content = FanboxView.BackLabel;
         FanboxBackButton.Visibility = FanboxView.CanGoBack ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private void RetranslateUi()
     {
         SearchButton.Content = I18n.Tr("查询");
-        FanboxBackButton.Content = I18n.Tr("← 返回作家列表");
+        FanboxBackButton.Content = FanboxView.BackLabel;
         BackButton.Content = I18n.Tr("← 返回社团作品");
         LoadingText.Text = I18n.Tr("正在查询…");
         AutoDownloadButton.Content = _autoDownload ? I18n.Tr("自动下载：开") : I18n.Tr("自动下载：关");
@@ -419,8 +424,8 @@ public partial class SearchPage : UserControl
     private Task RunSearchAnyAsync() =>
         _source == SourceFanbox ? FanboxView.RunSearchAsync(InputBox.Text) : RunSearchAsync();
 
-    /// <summary>搜索栏「← 返回作家列表」：回到 FANBOX 的作家搜索结果。</summary>
-    private void FanboxBack_Click(object sender, RoutedEventArgs e) => FanboxView.GoBackToArtists();
+    /// <summary>搜索栏返回按钮：按 FANBOX 当前层级回上一层（详情 → 作品列表 → 作家列表）。</summary>
+    private void FanboxBack_Click(object sender, RoutedEventArgs e) => FanboxView.GoBack();
 
     private void BackButton_Click(object sender, RoutedEventArgs e)
     {

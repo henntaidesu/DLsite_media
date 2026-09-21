@@ -367,6 +367,7 @@ public static class WebServer
                 // FANBOX（pawchive）
                 case "/api/fanbox/artists": await ApiFanboxArtistsAsync(stream, req); break;
                 case "/api/fanbox/posts": await ApiFanboxPostsAsync(stream, req); break;
+                case "/api/fanbox/post": await ApiFanboxPostAsync(stream, req); break;
                 case "/api/fanbox/enqueue": await ApiFanboxEnqueueAsync(stream, req); break;
                 case "/api/fanbox/image": await ApiFanboxImageAsync(stream, req); break;
                 // 设置
@@ -563,33 +564,35 @@ public static class WebServer
         List<object?[]>? rows;
         if (!string.IsNullOrEmpty(genre))
             rows = Db.Select(
-                "SELECT w.\"maker_name\", COUNT(*) FROM \"works\" w " +
+                "SELECT w.\"maker_name\", COUNT(*), " + FanboxService.MakerIdExpr("w.") + " FROM \"works\" w " +
                 "JOIN \"work_genres\" g ON g.\"work_id\" = w.\"work_id\" " +
                 "WHERE w.\"state\" = '已品悦' AND g.\"genre\" = @g " +
                 "GROUP BY w.\"maker_name\" " + order.Replace("{p}", "w."),
                 ("@g", genre));
         else if (!string.IsNullOrEmpty(type))
             rows = Db.Select(
-                "SELECT \"maker_name\", COUNT(*) FROM \"works\" " +
+                "SELECT \"maker_name\", COUNT(*), " + FanboxService.MakerIdExpr("") + " FROM \"works\" " +
                 "WHERE \"state\" = '已品悦' AND \"work_type\" = @t " +
                 "GROUP BY \"maker_name\" " + order.Replace("{p}", ""),
                 ("@t", type));
         else if (!string.IsNullOrEmpty(lib))
             rows = Db.Select(
-                "SELECT \"maker_name\", COUNT(*) FROM \"works\" " +
+                "SELECT \"maker_name\", COUNT(*), " + FanboxService.MakerIdExpr("") + " FROM \"works\" " +
                 "WHERE \"state\" = '已品悦' AND \"library\" = @lib " +
                 "GROUP BY \"maker_name\" " + order.Replace("{p}", ""),
                 ("@lib", lib));
         else
             // 顶级"作品社团"分区：不限媒体库，聚合全部社团
             rows = Db.Select(
-                "SELECT \"maker_name\", COUNT(*) FROM \"works\" " +
+                "SELECT \"maker_name\", COUNT(*), " + FanboxService.MakerIdExpr("") + " FROM \"works\" " +
                 "WHERE \"state\" = '已品悦' " +
                 "GROUP BY \"maker_name\" " + order.Replace("{p}", ""));
         var makers = (rows ?? []).Select(r => new
         {
             maker = r[0] as string ?? "",
             count = Convert.ToInt64(r[1]),
+            // fanbox 社团（= pawchive 作家）的头像；其余来源暂无头像，前端据此不画
+            icon = FanboxService.MakerIconUrl(r.Length > 2 ? r[2] as string : null),
         });
         WriteJson(stream, 200, new { makers });
     }
@@ -1672,6 +1675,9 @@ public static class WebServer
                 // 解析失败：状态直接显示具体原因的简短标签（如"文件失效"/"流量用尽"），完整说明见 errorReason
                 if (it.Status == "2")
                     text = ParseErrorLabel(it.Error);
+                // 已完成、但存的是源站预览图而非原图
+                else if (it.Status == "1" && DownloadEngine.IsThumb(it.Error))
+                    text = "已完成（预览图）";
                 // asmr 直链带作品内目录层级（sub_path 含子目录），用于前端构建目录树；
                 // 论坛源无 sub_path，回退到 URL 解码后的文件名（位于根层级），对齐 WPF 下载页
                 var rel = string.IsNullOrEmpty(it.SubPath) ? FileNameOf(it.Url) : it.SubPath!;
@@ -1701,9 +1707,18 @@ public static class WebServer
                 children,
             };
         });
+        // 工具栏按钮的可用性：与桌面端同源（DownloadListActions.FlagsOf），避免两端灰显规则漂移
+        var flags = DownloadListActions.FlagsOf(grouped.Values.SelectMany(v => v).Select(it => it.Status));
         WriteJson(stream, 200, new
         {
             engine = new { running = DownloadEngine.IsRunning, stopRequested = DownloadEngine.StopRequested },
+            actions = new
+            {
+                canClearDone = flags.HasDone,
+                canClearNoLink = flags.HasNoLink,
+                canClearAll = flags.HasRows,
+                canReparseAll = flags.CanReparse,
+            },
             groups,
         });
     }
@@ -1856,28 +1871,28 @@ public static class WebServer
     /// <summary>全部重新解析：所有解析失败分卷('2')重新排队；所有"无可用下载连接"占位('6')清空空结果缓存后重新自动解析。</summary>
     private static void ApiReparseAll(NetworkStream stream)
     {
-        // 解析失败分卷 → 重新排队（经 debrid-link 再解析）
-        Db.Execute("UPDATE \"download_list\" SET \"status\" = '0', \"error\" = NULL WHERE \"status\" = '2'");
-        // "无可用下载连接"占位行 → 重新触发自动解析（清 7 天空结果缓存，让其真正重扫）
-        var rows = Db.Select("SELECT \"UUID\", \"work_id\" FROM \"download_list\" WHERE \"status\" = '6'");
-        foreach (var r in rows ?? [])
-        {
-            var uuid = r[0] as string ?? "";
-            var work = r[1] as string ?? "";
-            if (uuid.Length == 0 || work.Length == 0)
-                continue;
-            AsScanCache.Clear(work);
-            Db.Execute("UPDATE \"download_list\" SET \"status\" = '5' WHERE \"UUID\" = @u", ("@u", uuid));
-            _ = Task.Run(async () =>
-            {
-                await ResolveGate.WaitAsync();
-                try { if (PlaceholderAlive(uuid)) await AutoResolveLinksAsync(work, uuid); }
-                finally { ResolveGate.Release(); }
-            });
-        }
-        DownloadEngine.Start();
+        DownloadListActions.ReparseAll();   // 与桌面端下载页共用同一实现
         WriteJson(stream, 200, new { ok = true });
     }
+
+    /// <summary>
+    /// 把「无可用下载连接」占位行重新交给后台自动解析（串行排队，解析前再确认占位行还在）。
+    /// 解析流水线（AS 搜索 + 组合下载）在本类里，故由 <see cref="DownloadListActions.ReparseAll"/> 经此入口共用。
+    /// </summary>
+    internal static void KickAutoResolve(string workId, string placeholderUuid) =>
+        _ = Task.Run(async () =>
+        {
+            await ResolveGate.WaitAsync();
+            try
+            {
+                if (PlaceholderAlive(placeholderUuid))
+                    await AutoResolveLinksAsync(workId, placeholderUuid);
+            }
+            finally
+            {
+                ResolveGate.Release();
+            }
+        });
 
     /// <summary>手动组合下载：对指定帖子按 rapidgator 优先、跨网盘同名分卷补齐失效者组合出完整分卷集并入队。
     /// 组不齐完整档案（某分卷在所有网盘均失效）则不入队，回传缺口信息由前端提示。</summary>
@@ -2108,62 +2123,24 @@ public static class WebServer
         WriteJson(stream, 200, new { ok = true });
     }
 
+    // 三个清理动作与桌面端下载页共用 DownloadListActions 的同一实现
     private static void ApiClearDone(NetworkStream stream)
     {
-        var unzipping = DownloadEngine.UnzipProgress.Keys.ToList();
-        if (unzipping.Count > 0)
-        {
-            var names = new List<string>();
-            var args = new List<(string, object?)>();
-            for (var i = 0; i < unzipping.Count; i++)
-            {
-                names.Add($"@u{i}");
-                args.Add(($"@u{i}", unzipping[i]));
-            }
-            Db.Execute(
-                $"DELETE FROM \"download_list\" WHERE \"status\" = '1' AND \"work_id\" NOT IN ({string.Join(",", names)})",
-                args.ToArray());
-        }
-        else
-        {
-            Db.Execute("DELETE FROM \"download_list\" WHERE \"status\" = '1'");
-        }
+        DownloadListActions.ClearDone();
         WriteJson(stream, 200, new { ok = true });
     }
 
     private static void ApiClearAll(NetworkStream stream)
     {
-        var rows = Db.Select("SELECT DISTINCT \"work_id\" FROM \"download_list\" WHERE \"status\" != '1'");
-        foreach (var row in rows ?? [])
-            ClearPlaceholderWork(row[0] as string ?? "");
-        Db.Execute("DELETE FROM \"download_list\"");
+        DownloadListActions.ClearAll();
         WriteJson(stream, 200, new { ok = true });
     }
 
     /// <summary>清除"无可用下载连接"（占位状态 '6'）的作品：删占位行，并清掉因此残留的"下载中"作品记录。</summary>
     private static void ApiClearNoLink(NetworkStream stream)
     {
-        var rows = Db.Select("SELECT DISTINCT \"work_id\" FROM \"download_list\" WHERE \"status\" = '6'");
-        Db.Execute("DELETE FROM \"download_list\" WHERE \"status\" = '6'");
-        foreach (var row in rows ?? [])
-        {
-            var wid = row[0] as string ?? "";
-            if (wid.Length == 0)
-                continue;
-            // 该作品已无任何下载行时，清除仅为占位而建的"下载中"作品记录（有真实下载/已入库的则保留）
-            var remain = Db.Select("SELECT 1 FROM \"download_list\" WHERE \"work_id\" = @w", ("@w", wid));
-            if (remain is not { Count: > 0 })
-                ClearPlaceholderWork(wid);
-        }
+        DownloadListActions.ClearNoLink();
         WriteJson(stream, 200, new { ok = true });
-    }
-
-    /// <summary>删除尚未下载完成时留下的占位作品行（已入库的不动，避免清下载列表把媒体库作品删没）。</summary>
-    private static void ClearPlaceholderWork(string workId)
-    {
-        if (workId.Length == 0)
-            return;
-        Db.Execute("DELETE FROM \"works\" WHERE \"work_id\" = @w AND \"state\" = '下载中'", ("@w", workId));
     }
 
     private static void ApiDownloaded(NetworkStream stream)
@@ -2500,6 +2477,46 @@ public static class WebServer
                 state = states.GetValueOrDefault(p.Id, ""),
             }),
             hasMore = posts.Count >= PawchiveApi.PageSize,
+        });
+    }
+
+    /// <summary>
+    /// 单篇作品详情（「查看内容」用）：正文 + 图片清单 + 非图片附件清单。
+    ///
+    /// 图片一律给出 thumb（800px 预览）与 full（原图）两个地址，都经 /api/fanbox/image 代理——
+    /// 浏览器直连 pawchive 会被防护网关按浏览器 UA 403（见 PawchiveApi.UserAgent）。
+    /// 原图对"只归档了预览"的投稿会 404，前端据此回退到 thumb。
+    /// </summary>
+    private static async Task ApiFanboxPostAsync(NetworkStream stream, Request req)
+    {
+        var artistId = (req.Query.GetValueOrDefault("id") ?? "").Trim();
+        var postId = (req.Query.GetValueOrDefault("post") ?? "").Trim();
+        var service = FanboxServiceParam(req);
+        if (!IsPlainId(artistId) || !IsPlainId(postId))
+        {
+            WriteJson(stream, 400, new { error = "bad request" });
+            return;
+        }
+        var post = await PawchiveApi.GetPostAsync(service, artistId, postId);
+        if (post is null)
+        {
+            WriteJson(stream, 502, new { error = "获取作品详情失败" });
+            return;
+        }
+        var images = post.Files.Where(f => PawchiveApi.IsImageName(f.Name)).ToList();
+        WriteJson(stream, 200, new
+        {
+            id = post.Id, title = post.Title, published = post.Published,
+            tags = post.Tags, content = post.Content, files = post.Files.Count,
+            state = FanboxService.PostStates(artistId).GetValueOrDefault(post.Id, ""),
+            images = images.Select(f => new
+            {
+                name = f.Name,
+                thumb = PawchiveApi.ThumbUrl(f.Path),
+                full = PawchiveApi.FileUrl(f.Path, f.Name),
+            }),
+            // 压缩包 / PDF / 视频等：只报名字，下载走入队
+            others = post.Files.Where(f => !PawchiveApi.IsImageName(f.Name)).Select(f => new { name = f.Name }),
         });
     }
 

@@ -5,6 +5,7 @@ using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Media.Imaging;
+using R18MediaLibrary.Core;
 
 namespace R18MediaLibrary.Services;
 
@@ -91,7 +92,13 @@ public static class ThumbnailCache
     /// 不用文件指纹做键——换过封面时 URL 会随图床存储名一起变。
     /// 失败返回 null，由调用方回退本地原图（图床宕机时媒体库仍能看图）。
     /// </summary>
-    public static async Task<BitmapSource?> LoadUrlAsync(string url, int decodePixelWidth)
+    /// <param name="userAgent">
+    /// 非空则改用带该 UA 的代理感知客户端取图，而不是图床专用客户端。
+    /// pawchive 的防护网关会拦浏览器 UA（见 <see cref="PawchiveApi.UserAgent"/>），
+    /// 且图床客户端刻意关了代理——取站上图片两条都不合适。
+    /// </param>
+    public static async Task<BitmapSource?> LoadUrlAsync(string url, int decodePixelWidth,
+        string? userAgent = null)
     {
         if (string.IsNullOrEmpty(url))
             return null;
@@ -106,7 +113,9 @@ public static class ThumbnailCache
             await Net.WaitAsync().ConfigureAwait(false);
             try
             {
-                bytes = await ImageHostClient.Shared.GetByteArrayAsync(url).ConfigureAwait(false);
+                bytes = string.IsNullOrEmpty(userAgent)
+                    ? await ImageHostClient.Shared.GetByteArrayAsync(url).ConfigureAwait(false)
+                    : await UaClient(userAgent).GetByteArrayAsync(url).ConfigureAwait(false);
             }
             finally
             {
@@ -121,6 +130,21 @@ public static class ThumbnailCache
         if (bmp != null)
             Store(key, bmp);
         return bmp;
+    }
+
+    // 按 UA 复用 HttpClient：逐张图新建会耗尽本地端口（经典的 HttpClient 误用）
+    private static readonly Dictionary<string, HttpClient> UaClients = new();
+
+    private static HttpClient UaClient(string userAgent)
+    {
+        lock (UaClients)
+        {
+            if (UaClients.TryGetValue(userAgent, out var existing))
+                return existing;
+            var client = Http.CreateClient(TimeSpan.FromSeconds(20), userAgent);
+            UaClients[userAgent] = client;
+            return client;
+        }
     }
 
     private static BitmapSource? DecodeBytes(byte[] bytes, int decodePixelWidth)

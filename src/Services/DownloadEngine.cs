@@ -805,6 +805,7 @@ public static class DownloadEngine
         while (true)
         {
             string? key = null;
+            var thumbFallback = false;   // 本轮是否以预览图代替了原图
             try
             {
                 if (_stopRequested)
@@ -874,6 +875,24 @@ public static class DownloadEngine
                 var userAgent = source == "fanbox" ? PawchiveApi.UserAgent : null;
                 var result = DownloadFile(client, directUrl, filePath, filename, key, workId, userAgent);
                 DownloadProgress.TryRemove(key, out _);
+                // pawchive 对只归档了预览的投稿（has_full=false）原图一律 404，但 img.<host> 上
+                // 800px 的预览图是有的。原图没有就存预览图，总好过整篇空手而归；
+                // 只对 fanbox 的图片附件生效（压缩包/PDF 没有预览图，asmr 也没有这套机制）。
+                if (result == "missing" && source == FanboxService.SourceName &&
+                    PawchiveApi.IsImageName(filename))
+                {
+                    var thumbUrl = PawchiveApi.ThumbUrlFromFileUrl(directUrl);
+                    if (thumbUrl.Length > 0)
+                    {
+                        result = DownloadFile(client, thumbUrl, filePath, filename, key, workId, userAgent);
+                        DownloadProgress.TryRemove(key, out _);
+                        if (result == "done")
+                        {
+                            Logger.Warning($"{filename} 源站无原图，已改存 800px 预览图");
+                            thumbFallback = true;
+                        }
+                    }
+                }
                 if (result == "paused")
                     return;  // 全局暂停：部分文件保留在磁盘上，下次从断点续传
                 if (result == "workpaused")
@@ -913,6 +932,11 @@ public static class DownloadEngine
 
                 Logger.Info($"{workId}已完成下载");
                 SetStatus(key, "1", 100);
+                if (thumbFallback)
+                    // 标记该文件存的是预览图而非原图：post.txt 与下载列表据此提示，免得日后
+                    // 疑惑画质为何偏低。status 仍是 '1'（已完成），只借 error 列记来源。
+                    Db.Execute("UPDATE \"download_list\" SET \"error\" = @e WHERE \"UUID\" = @k",
+                        ("@e", ThumbError), ("@k", key));
                 MarkWorkDownloaded(workId);
                 FinalizeBySource(workId, source);
             }
@@ -982,6 +1006,15 @@ public static class DownloadEngine
 
     /// <summary>该失败原因是否为"源站无此文件"的跳过标记（区别于可重试的解析失败）。</summary>
     internal static bool IsSkipped(string? error) => error == SkippedError;
+
+    /// <summary>
+    /// 分卷"存的是预览图"标记：源站没有原图，改存了 800px 预览图（见 WorkerLoop 的 missing 分支）。
+    /// 记在 download_list.error 里，status 仍为 '1'（已完成，正常入库），只用于向用户说明画质来源。
+    /// </summary>
+    internal const string ThumbError = "thumb";
+
+    /// <summary>该分卷存的是否为预览图而非原图。</summary>
+    internal static bool IsThumb(string? error) => error == ThumbError;
 
     /// <summary>
     /// 作品的分卷是否全部终结：要么下载完成（'1'），要么源站没有而被跳过（'2' + skipped）。

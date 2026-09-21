@@ -168,6 +168,24 @@ public static class FanboxService
         return url + (url.Contains('?') ? "&" : "?") + "pcid=" + postId;
     }
 
+    /// <summary>
+    /// 社团分组查询里取该社团的 fanbox 作家号的 SQL 片段。
+    ///
+    /// 同一个社团名下可能混着多来源的作品，只挑 source='fanbox' 那一行的 maker_id
+    /// （即 pawchive 作家号）；社团里没有 fanbox 作品时为 NULL。prefix 传表别名（如 "w."）。
+    /// </summary>
+    public static string MakerIdExpr(string prefix) =>
+        $"MAX(CASE WHEN {prefix}\"source\" = '{SourceName}' THEN {prefix}\"maker_id\" END)";
+
+    /// <summary>
+    /// fanbox 社团（= pawchive 作家）的头像地址；不是 fanbox 社团则返回空串。
+    /// 取图须带 <see cref="PawchiveApi.UserAgent"/>，Web 端则要经 /api/fanbox/image 代理。
+    /// </summary>
+    public static string MakerIconUrl(string? fanboxMakerId) =>
+        string.IsNullOrEmpty(fanboxMakerId)
+            ? ""
+            : PawchiveApi.IconUrl(PawchiveApi.FanboxService, fanboxMakerId);
+
     /// <summary>该作品是否已入库或仍有未完成的下载任务（据此跳过重复入队）。</summary>
     private static bool IsBusy(string workId)
     {
@@ -303,6 +321,13 @@ public static class FanboxService
         };
         if (r[2] as string is { Length: > 0 } tags)
             lines.Add($"标签：{tags}");
+        // 源站没归档原图、改存了预览图的，记一笔：日后翻到这篇才知道画质为何偏低
+        var thumbs = Db.Scalar(
+            "SELECT COUNT(*) FROM \"download_list\" WHERE \"work_id\" = @w " +
+            "AND \"status\" = '1' AND \"error\" = @e",
+            ("@w", workId), ("@e", DownloadEngine.ThumbError));
+        if (thumbs != null && Convert.ToInt64(thumbs) > 0)
+            lines.Add($"注：其中 {Convert.ToInt64(thumbs)} 张为 800px 预览图（源站未归档原图）");
         if (r[3] as string is { Length: > 0 } content)
         {
             lines.Add("");

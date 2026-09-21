@@ -187,9 +187,10 @@ public partial class DownloadPage : UserControl
 
     private void RetranslateUi()
     {
-        RefreshButton.Content = I18n.Tr("刷新");
         ClearDoneButton.Content = I18n.Tr("清除已完成");
+        ClearNoLinkButton.Content = I18n.Tr("清除无可用连接");
         ClearAllButton.Content = I18n.Tr("清空列表");
+        ReparseAllButton.Content = I18n.Tr("全部重新解析");
         ShowDownloadedButton.Content = I18n.Tr("已下载");
         UsageLabel.ToolTip = UsageBar.ToolTip = I18n.Tr("点击查看各网盘流量详情");
         UpdateStartButton();
@@ -225,33 +226,34 @@ public partial class DownloadPage : UserControl
         UpdateStartButton();
     }
 
+    /// <summary>
+    /// 开始/暂停按钮：样式恒为蓝色主按钮，只切文案（对齐 Web 的 .icon-btn.primary，不再绿↔红换色）。
+    /// 已请求暂停时禁用，等当前文件停到断点。
+    /// </summary>
     private void UpdateStartButton()
     {
-        // 运行中=暂停按钮(红)；已停止=开始按钮(绿)
-        if (DownloadEngine.IsRunning)
+        if (!DownloadEngine.IsRunning)
         {
-            StartButton.Style = (Style)FindResource("DangerButton");
-            if (DownloadEngine.StopRequested)
-            {
-                // 已请求暂停，等待当前文件停到断点
-                StartButton.Content = I18n.Tr("暂停中…");
-                StartButton.IsEnabled = false;
-            }
-            else
-            {
-                StartButton.Content = I18n.Tr("暂停下载");
-                StartButton.IsEnabled = true;
-            }
-        }
-        else
-        {
-            StartButton.Style = (Style)FindResource("SuccessButton");
             StartButton.Content = I18n.Tr("开始下载");
             StartButton.IsEnabled = true;
+            return;
         }
+        StartButton.Content = DownloadEngine.StopRequested ? I18n.Tr("暂停中…") : I18n.Tr("暂停下载");
+        StartButton.IsEnabled = !DownloadEngine.StopRequested;
     }
 
-    private void RefreshButton_Click(object sender, RoutedEventArgs e) => Refresh();
+    /// <summary>
+    /// 工具栏其余按钮按列表内容灰显：空列表点「清空列表」、没有失败项点「全部重新解析」都不会有任何反应。
+    /// 判定规则与 Web 同源（<see cref="DownloadListActions.FlagsOf"/>，Web 由 /api/downloads 回传）。
+    /// </summary>
+    private void UpdateToolbarButtons(IEnumerable<string> statuses)
+    {
+        var flags = DownloadListActions.FlagsOf(statuses);
+        ClearDoneButton.IsEnabled = flags.HasDone;
+        ClearNoLinkButton.IsEnabled = flags.HasNoLink;
+        ClearAllButton.IsEnabled = flags.HasRows;
+        ReparseAllButton.IsEnabled = flags.CanReparse;
+    }
 
     // ---------- debrid-link 用量 ----------
 
@@ -465,6 +467,8 @@ public partial class DownloadPage : UserControl
             list.Add((row[0] as string ?? "", row[2] as string ?? "",
                 row[3] as string ?? "", row[4]?.ToString() ?? "", row[5] as string, row[6] as string));
         }
+        // 工具栏按钮灰显跟着列表内容走（整表已在手上，不再额外查库）
+        UpdateToolbarButtons(rows.Select(r => r[3] as string ?? ""));
 
         // 同步到现有集合（保留展开状态与滚动位置）
         var anyActive = false;   // 是否存在下载中/等待/解压中的任务，用于空闲降频
@@ -525,6 +529,9 @@ public partial class DownloadPage : UserControl
                 // 解析失败：状态列直接显示具体原因的简短标签（如"文件失效"/"流量用尽"），完整说明见下方 ErrorReason
                 if (it.Status == "2")
                     text = ParseErrorLabel(it.Error);
+                // 已完成、但存的是源站预览图而非原图
+                else if (it.Status == "1" && DownloadEngine.IsThumb(it.Error))
+                    text = I18n.Tr("已完成（预览图）");
 
                 if (!existingChildren.TryGetValue(it.Uuid, out var child))
                 {
@@ -795,27 +802,16 @@ public partial class DownloadPage : UserControl
         Refresh();
     }
 
+    // 四个批量动作都走 DownloadListActions（与 Web 的 /api/cleardone|clearnolink|clearall|reparseall 同一实现）
     private void ClearDoneButton_Click(object sender, RoutedEventArgs e)
     {
-        // 正在解压（待解压/解压中）的番号其分卷虽已是 '1'，但还未真正完成，保留不清除
-        var unzipping = DownloadEngine.UnzipProgress.Keys.ToList();
-        if (unzipping.Count > 0)
-        {
-            var names = new List<string>();
-            var args = new List<(string, object?)>();
-            for (var i = 0; i < unzipping.Count; i++)
-            {
-                names.Add($"@u{i}");
-                args.Add(($"@u{i}", unzipping[i]));
-            }
-            Db.Execute(
-                $"DELETE FROM \"download_list\" WHERE \"status\" = '1' AND \"work_id\" NOT IN ({string.Join(",", names)})",
-                args.ToArray());
-        }
-        else
-        {
-            Db.Execute("DELETE FROM \"download_list\" WHERE \"status\" = '1'");
-        }
+        DownloadListActions.ClearDone();
+        Refresh();
+    }
+
+    private void ClearNoLinkButton_Click(object sender, RoutedEventArgs e)
+    {
+        DownloadListActions.ClearNoLink();
         Refresh();
     }
 
@@ -827,16 +823,15 @@ public partial class DownloadPage : UserControl
                 I18n.Tr("确定要清空整个下载列表吗？等待中的任务也会被删除。"),
                 I18n.Tr("清空下载列表")))
             return;
-        // 没有下载完成就被删除的番号，从已下载（works 表）中移除
-        var rows = Db.Select(
-            "SELECT DISTINCT \"work_id\" FROM \"download_list\" WHERE \"status\" != '1'");
-        if (rows != null)
-            foreach (var row in rows)
-                // 只清尚未入库的占位行；已品悦的作品留在媒体库里
-                Db.Execute(
-                    "DELETE FROM \"works\" WHERE \"work_id\" = @w AND \"state\" = '下载中'",
-                    ("@w", row[0] as string ?? ""));
-        Db.Execute("DELETE FROM \"download_list\"");
+        DownloadListActions.ClearAll();
+        Refresh();
+    }
+
+    /// <summary>全部重新解析：解析失败分卷重新排队，「无可用下载连接」占位行重新自动解析。</summary>
+    private void ReparseAllButton_Click(object sender, RoutedEventArgs e)
+    {
+        ReparseAllButton.IsEnabled = false;   // 请求在途时按住，下一次刷新再按状态回填
+        DownloadListActions.ReparseAll();
         Refresh();
     }
 }

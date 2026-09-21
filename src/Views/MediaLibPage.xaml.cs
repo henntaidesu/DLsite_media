@@ -534,7 +534,11 @@ public partial class MediaLibPage : UserControl
         return _cardListScroll;
     }
 
-    private Border MakeClickCard(string title, string caption, Action onClick)
+    /// <param name="iconUrl">
+    /// 分组头像地址（目前只有 fanbox 社团有），空则不画。画在卡片左侧、名称与作品数的左边，
+    /// 异步载入，取不到就保持占位底色——不阻塞卡片先出来。
+    /// </param>
+    private Border MakeClickCard(string title, string caption, Action onClick, string iconUrl = "")
     {
         // 尺寸交给网格：卡片拉伸填满单元格（宽由 CardGrid 算、高为 ClickCardH），间距也由网格排
         var card = new Border
@@ -547,20 +551,56 @@ public partial class MediaLibPage : UserControl
             Cursor = Cursors.Hand,
             Tag = title.ToLowerInvariant(),  // 搜索过滤用
         };
-        var panel = new StackPanel();
-        panel.Children.Add(new TextBlock
+        // 右侧信息块：名称 + 作品数竖排（对齐 Web 的 .ginfo）
+        var info = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
+        info.Children.Add(new TextBlock
         {
             Text = title, FontWeight = FontWeights.SemiBold, FontSize = 15, TextWrapping = TextWrapping.Wrap,
             TextTrimming = TextTrimming.CharacterEllipsis,
         });
-        panel.Children.Add(new TextBlock
+        info.Children.Add(new TextBlock
         {
-            Text = caption, Style = (Style)FindResource("CaptionText"), Margin = new Thickness(0, 8, 0, 0),
+            Text = caption, Style = (Style)FindResource("CaptionText"), Margin = new Thickness(0, 6, 0, 0),
             TextTrimming = TextTrimming.CharacterEllipsis,
         });
-        card.Child = panel;
+        if (iconUrl.Length > 0)
+        {
+            // 左头像 | 右信息（对齐 Web 的 .group-card flex-direction: row）：
+            // 头像列定宽不被文字挤压，信息列吃掉剩余宽度
+            var row = new Grid();
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            var avatar = new Border
+            {
+                Width = 44, Height = 44, CornerRadius = new CornerRadius(6),
+                Margin = new Thickness(0, 0, 12, 0), VerticalAlignment = VerticalAlignment.Center,
+                Background = (Brush)FindResource("BorderBrush"),
+            };
+            Grid.SetColumn(info, 1);
+            row.Children.Add(avatar);
+            row.Children.Add(info);
+            card.Child = row;
+            _ = LoadGroupIconAsync(avatar, iconUrl);
+        }
+        else
+        {
+            card.Child = info;
+        }
         card.MouseLeftButtonUp += (_, _) => onClick();
         return card;
+    }
+
+    /// <summary>
+    /// 异步载入分组头像。走 ThumbnailCache（进程级缓存 + 并发上限），
+    /// 并带 pawchive 的中性 UA——防护网关会拦浏览器 UA。
+    /// </summary>
+    private static async Task LoadGroupIconAsync(Border target, string url)
+    {
+        // 44pt 的正方形头像，按 2 倍解码保证高 DPI 下不糊
+        var bmp = await ThumbnailCache.LoadUrlAsync(url, 88, PawchiveApi.UserAgent);
+        // Uniform 而非 UniformToFill：非正方形的头像也完整显示、不裁切（对齐 Web 的 object-fit: contain）
+        if (bmp != null)
+            target.Background = new ImageBrush(bmp) { Stretch = Stretch.Uniform };
     }
 
     /// <summary>一级：媒体库卡片。</summary>
@@ -603,20 +643,20 @@ public partial class MediaLibPage : UserControl
         List<object?[]>? rows;
         if (_currentGenre != null)
             rows = Db.Select(
-                "SELECT w.\"maker_name\", COUNT(*) FROM \"works\" w " +
+                "SELECT w.\"maker_name\", COUNT(*), " + FanboxService.MakerIdExpr("w.") + " FROM \"works\" w " +
                 "JOIN \"work_genres\" g ON g.\"work_id\" = w.\"work_id\" " +
                 "WHERE w.\"state\" = '已品悦' AND g.\"genre\" = @g " +
                 "GROUP BY w.\"maker_name\" " + MakerOrderClause("w."),
                 ("@g", _currentGenre));
         else if (_currentType != null)
             rows = Db.Select(
-                "SELECT \"maker_name\", COUNT(*) FROM \"works\" " +
+                "SELECT \"maker_name\", COUNT(*), " + FanboxService.MakerIdExpr("") + " FROM \"works\" " +
                 "WHERE \"state\" = '已品悦' AND \"work_type\" = @t " +
                 "GROUP BY \"maker_name\" " + MakerOrderClause(),
                 ("@t", _currentType));
         else
             rows = Db.Select(
-                "SELECT \"maker_name\", COUNT(*) FROM \"works\" " +
+                "SELECT \"maker_name\", COUNT(*), " + FanboxService.MakerIdExpr("") + " FROM \"works\" " +
                 "WHERE \"state\" = '已品悦' AND \"library\" = @lib " +
                 "GROUP BY \"maker_name\" " + MakerOrderClause(),
                 ("@lib", _currentLib ?? ""));
@@ -630,13 +670,14 @@ public partial class MediaLibPage : UserControl
             var maker = row[0] as string ?? "";
             var count = Convert.ToInt64(row[1]);
             var title = maker.Length > 0 ? maker : I18n.Tr("未知社团");
+            var icon = FanboxService.MakerIconUrl(row.Length > 2 ? row[2] as string : null);
             return new GridCard(() => MakeClickCard(
                 title, I18n.Format(I18n.Tr("{count} 个作品"), ("count", count)),
                 () =>
                 {
                     _currentMaker = maker.Length > 0 ? maker : UnknownMaker;
                     ShowWorks();
-                }), title.ToLowerInvariant());
+                }, icon), title.ToLowerInvariant());
         }).ToList();
         PopulateSortBox(MakerSortOptions, _makerSort);
         ApplyCardFilter();
@@ -651,7 +692,7 @@ public partial class MediaLibPage : UserControl
         _currentType = null;
         _currentMaker = null;
         var rows = Db.Select(
-            "SELECT \"maker_name\", COUNT(*) FROM \"works\" " +
+            "SELECT \"maker_name\", COUNT(*), " + FanboxService.MakerIdExpr("") + " FROM \"works\" " +
             "WHERE \"state\" = '已品悦' GROUP BY \"maker_name\" " + MakerOrderClause());
         if (rows == null)
             return;
@@ -663,13 +704,14 @@ public partial class MediaLibPage : UserControl
             var maker = row[0] as string ?? "";
             var count = Convert.ToInt64(row[1]);
             var title = maker.Length > 0 ? maker : I18n.Tr("未知社团");
+            var icon = FanboxService.MakerIconUrl(row.Length > 2 ? row[2] as string : null);
             return new GridCard(() => MakeClickCard(
                 title, I18n.Format(I18n.Tr("{count} 个作品"), ("count", count)),
                 () =>
                 {
                     _currentMaker = maker.Length > 0 ? maker : UnknownMaker;
                     ShowWorks();
-                }), title.ToLowerInvariant());
+                }, icon), title.ToLowerInvariant());
         }).ToList();
         PopulateSortBox(MakerSortOptions, _makerSort);
         ApplyCardFilter();

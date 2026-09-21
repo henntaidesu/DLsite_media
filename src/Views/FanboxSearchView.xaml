@@ -148,6 +148,84 @@
                 </ListBox.ItemTemplate>
             </ListBox>
 
+            <!-- 作品详情（对齐 Web 的 fbDetailPane）：操作条 + 图集 + 字段 + 正文 + 其他附件。
+                 结构照搬媒体库详情页（Web .detail > .dtop > .gallery + .fields）。 -->
+            <ScrollViewer x:Name="DetailPane" Visibility="Collapsed"
+                          VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                <StackPanel Margin="0,0,8,0">
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                        <Button x:Name="DetailDownloadButton" MinWidth="110"
+                                Style="{StaticResource AccentButton}"
+                                Click="DetailDownload_Click" Content="下载本篇" />
+                    </StackPanel>
+                    <Border Style="{StaticResource Card}" Padding="16">
+                        <StackPanel>
+                            <TextBlock x:Name="DetailTitle" FontSize="20" FontWeight="SemiBold"
+                                       TextWrapping="Wrap" Margin="0,0,0,12" />
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="1.6*" />
+                                </Grid.ColumnDefinitions>
+
+                                <!-- 图集：大图 + 缩略图条 -->
+                                <StackPanel>
+                                    <Border Background="#15151A" CornerRadius="8" MinHeight="140">
+                                        <Image x:Name="DetailMainImage" Stretch="Uniform" MaxHeight="460"
+                                               Cursor="Hand" MouseLeftButtonUp="DetailMainImage_Click" />
+                                    </Border>
+                                    <TextBlock x:Name="DetailNoImage" Text="这篇没有图片" Visibility="Collapsed"
+                                               Style="{StaticResource CaptionText}" Margin="0,10,0,0"
+                                               HorizontalAlignment="Center" />
+                                    <ScrollViewer Margin="0,8,0,0" HorizontalScrollBarVisibility="Auto"
+                                                  VerticalScrollBarVisibility="Disabled">
+                                        <ItemsControl x:Name="DetailThumbs">
+                                            <ItemsControl.ItemsPanel>
+                                                <ItemsPanelTemplate>
+                                                    <StackPanel Orientation="Horizontal" />
+                                                </ItemsPanelTemplate>
+                                            </ItemsControl.ItemsPanel>
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate>
+                                                    <Border Margin="0,0,6,0" CornerRadius="5" BorderThickness="2"
+                                                            BorderBrush="{Binding SelBorderBrush}"
+                                                            Opacity="{Binding SelOpacity}">
+                                                        <Image Source="{Binding Thumb}" Height="54" Stretch="Uniform"
+                                                               Cursor="Hand" MouseLeftButtonUp="DetailThumb_Click" />
+                                                    </Border>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                    </ScrollViewer>
+                                </StackPanel>
+
+                                <!-- 字段（作家 / 发布 / 标签 / 文件 / 状态） -->
+                                <StackPanel x:Name="DetailFields" Grid.Column="1" Margin="18,0,0,0" />
+                            </Grid>
+
+                            <TextBlock x:Name="DetailBodyHeader" Text="正文" FontSize="17" FontWeight="Medium"
+                                       Margin="0,22,0,10" Visibility="Collapsed" />
+                            <TextBlock x:Name="DetailBody" TextWrapping="Wrap" FontSize="13.5" LineHeight="23"
+                                       LineStackingStrategy="BlockLineHeight" Visibility="Collapsed" />
+
+                            <TextBlock x:Name="DetailOthersHeader" FontSize="17" FontWeight="Medium"
+                                       Margin="0,22,0,10" Visibility="Collapsed" />
+                            <ItemsControl x:Name="DetailOthers">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Border Background="#1B1B22" BorderThickness="1" CornerRadius="6"
+                                                BorderBrush="{StaticResource BorderBrush}"
+                                                Padding="9,6" Margin="0,0,0,6">
+                                            <TextBlock Text="{Binding}" TextWrapping="Wrap" FontSize="13" />
+                                        </Border>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+            </ScrollViewer>
+
             <!-- 加载遮罩 -->
             <Border x:Name="LoadingOverlay" Background="#96000000" Visibility="Collapsed">
                 <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">

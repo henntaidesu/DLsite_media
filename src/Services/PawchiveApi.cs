@@ -79,6 +79,28 @@ public static class PawchiveApi
     /// <summary>站上缩略图（未下载的作品在列表里用它当封面）。</summary>
     public static string ThumbUrl(string path) => $"https://img.{Host}/thumbnail/data{path}";
 
+    /// <summary>
+    /// 由附件直链推出对应的预览图地址；不是 /data/ 开头的链接返回空串。
+    ///
+    /// 站点对"只导入了元数据、没归档文件本体"的投稿（has_full=false）原图一律 404，
+    /// 但 img.&lt;host&gt; 上的 800px 预览图是有的，可在原图缺失时兜底（见 DownloadEngine 的 missing 分支）。
+    /// 预览图只按路径寻址，直链上的 ?f=&amp;pcid= 查询串要去掉。
+    /// </summary>
+    public static string ThumbUrlFromFileUrl(string fileUrl)
+    {
+        try
+        {
+            var path = new Uri(fileUrl).AbsolutePath;   // /data/ab/cd/<hash>.png
+            return path.StartsWith("/data/", StringComparison.Ordinal)
+                ? $"https://img.{Host}/thumbnail{path}"
+                : "";
+        }
+        catch (UriFormatException)
+        {
+            return "";
+        }
+    }
+
     public static string IconUrl(string service, string id) => $"https://{Host}/icons/{service}/{id}";
 
     public static string BannerUrl(string service, string id) => $"https://{Host}/banners/{service}/{id}";
@@ -247,6 +269,32 @@ public static class PawchiveApi
         }
     }
 
+    /// <summary>
+    /// 取单篇作品的详情；失败返回 null。
+    ///
+    /// 列表接口每页 50 篇、正文与附件清单都带着，但「查看内容」只需要其中一篇，
+    /// 故走站点的单篇接口，避免为看一篇而把整页重新拉一遍。返回结构与列表项一致，
+    /// 因此复用 ParsePost——展示的文件清单也就与下载时的清单完全同源。
+    /// </summary>
+    public static async Task<PawchivePost?> GetPostAsync(string service, string artistId, string postId)
+    {
+        var text = await GetAsync($"{ApiBase}/{service}/user/{artistId}/post/{postId}");
+        if (text is null)
+            return null;
+        try
+        {
+            using var doc = JsonDocument.Parse(text);
+            return doc.RootElement.ValueKind == JsonValueKind.Object
+                ? ParsePost(doc.RootElement, service)
+                : null;
+        }
+        catch (JsonException e)
+        {
+            Logger.Error(e, "pawchive 解析作品详情");
+            return null;
+        }
+    }
+
     /// <summary>取作家全部作品（逐页拉到尾），每页回调一次已获取总数。</summary>
     public static async Task<List<PawchivePost>> GetAllPostsAsync(
         string service, string artistId, Action<int>? onPage = null, int maxPages = 200)
@@ -315,7 +363,7 @@ public static class PawchiveApi
     private static readonly string[] ImageExts =
         [".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".avif", ".jfif"];
 
-    private static bool IsImageName(string name) =>
+    internal static bool IsImageName(string name) =>
         ImageExts.Contains(Path.GetExtension(name).ToLowerInvariant());
 
     /// <summary>tags 字段可能是 Postgres 数组字面量字符串（形如 {a,b}）或 JSON 数组，两种都解析。</summary>

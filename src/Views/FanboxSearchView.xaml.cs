@@ -8,12 +8,47 @@ using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using R18MediaLibrary.Core;
 using R18MediaLibrary.Services;
 
 namespace R18MediaLibrary.Views;
+
+/// <summary>作品详情图集里的一张图：站上预览图 + 落到临时目录的本地副本（供看图窗口翻页）。</summary>
+public class FanboxImageItem : ObservableBase
+{
+    public string Name { get; init; } = "";
+    public string ThumbUrl { get; init; } = "";
+    /// <summary>原图直链；源站未归档原图时会 404，详情只展示预览图，下载入库才取原图。</summary>
+    public string FullUrl { get; init; } = "";
+    /// <summary>预览图在临时目录里的本地副本路径，空表示还没下下来。</summary>
+    public string LocalPath { get; set; } = "";
+
+    private BitmapImage? _thumb;
+    public BitmapImage? Thumb { get => _thumb; set => Set(ref _thumb, value); }
+
+    private bool _isSelected;
+    public bool IsSelected
+    {
+        get => _isSelected;
+        set
+        {
+            if (!Set(ref _isSelected, value))
+                return;
+            Raise(nameof(SelBorderBrush));
+            Raise(nameof(SelOpacity));
+        }
+    }
+
+    /// <summary>当前大图对应的缩略图高亮描边（等价 Web 的 .thumbs img.sel）。</summary>
+    public Brush SelBorderBrush => IsSelected
+        ? Application.Current?.TryFindResource("AccentLightBrush") as Brush ?? Brushes.DodgerBlue
+        : Brushes.Transparent;
+
+    public double SelOpacity => IsSelected ? 1.0 : 0.65;
+}
 
 /// <summary>FANBOX 搜索结果里的一张卡片：作家卡（artist）或作家主页的作品卡（post）。</summary>
 public class FanboxCardItem : ObservableBase
@@ -98,7 +133,7 @@ public class FanboxCardItem : ObservableBase
 /// 交互与样式以 Web 端 src/Web/js/fanbox.js 为基准：单个搜索结果直接进主页、卡内按钮选择、
 /// 下拉到底自动翻页、已下载/下载中的作品置灰且不可选。
 /// 工具栏（来源下拉 + 输入框 + 查询 + 返回作家列表）由宿主 <see cref="SearchPage"/> 提供。
-/// 层级（_level）：artists（作家结果）/ posts（作家主页）。
+/// 层级（_level）：artists（作家结果）/ posts（作家主页）/ detail（单篇作品内容）。
 /// </summary>
 public partial class FanboxSearchView : UserControl
 {
@@ -122,6 +157,16 @@ public partial class FanboxSearchView : UserControl
     private bool _hasMore;
     private bool _loadingMore;
 
+    // 作品详情
+    private readonly ObservableCollection<FanboxImageItem> _detailImages = [];
+    private string _detailPostId = "";
+    private string _detailState = "";
+    private int _detailGen;     // 详情请求代际：与 _generation 分开，看详情不该作废主页的分页
+
+    /// <summary>预览图的本地临时副本目录：看图窗口按路径翻页，故要先落盘。</summary>
+    private static string PreviewCacheDir =>
+        Path.Combine(Path.GetTempPath(), "R-18MediaLibrary", "fanbox-preview");
+
     private static readonly Regex ArtistUrlRe = new(@"/fanbox/user/(\d+)", RegexOptions.IgnoreCase);
 
     /// <summary>结果计数/提示文案变化（宿主显示在搜索框下方）。</summary>
@@ -130,8 +175,21 @@ public partial class FanboxSearchView : UserControl
     /// <summary>「返回作家列表」按钮是否应该显示。</summary>
     public event Action<bool>? BackAvailabilityChanged;
 
-    /// <summary>当前是否停在作家主页且可返回作家列表（宿主切回本来源时用它恢复返回按钮）。</summary>
-    public bool CanGoBack => _level == "posts" && _fromArtists;
+    /// <summary>当前是否可返回上一层（宿主切回本来源时用它恢复返回按钮）。</summary>
+    public bool CanGoBack => _level == "detail" || (_level == "posts" && _fromArtists);
+
+    /// <summary>返回按钮文案：详情层回作品列表，作家主页回作家列表（对齐 Web fbUpdateBackBtn）。</summary>
+    public string BackLabel =>
+        _level == "detail" ? I18n.Tr("← 返回作品列表") : I18n.Tr("← 返回作家列表");
+
+    /// <summary>宿主的返回按钮：按当前层级回上一层。</summary>
+    public void GoBack()
+    {
+        if (_level == "detail")
+            GoBackToPosts();
+        else
+            GoBackToArtists();
+    }
 
     public FanboxSearchView()
     {
@@ -166,7 +224,9 @@ public partial class FanboxSearchView : UserControl
     {
         _level = level;
         SelectBar.Visibility = level == "posts" ? Visibility.Visible : Visibility.Collapsed;
-        BackAvailabilityChanged?.Invoke(level == "posts" && _fromArtists);
+        CardList.Visibility = level == "detail" ? Visibility.Collapsed : Visibility.Visible;
+        DetailPane.Visibility = level == "detail" ? Visibility.Visible : Visibility.Collapsed;
+        BackAvailabilityChanged?.Invoke(CanGoBack);
     }
 
     // ---------- 搜索 ----------
@@ -339,9 +399,7 @@ public partial class FanboxSearchView : UserControl
                     Selectable = state.Length == 0 && p.Files.Count > 0,
                 });
             }
-            SetStatus($"{(_artistName.Length > 0 ? _artistName : _artistId)}　" +
-                I18n.Format(I18n.Tr("已加载 {n} 篇作品"), ("n", _posts.Count)) +
-                (_hasMore ? I18n.Tr("（下拉加载更多）") : ""));
+            SetStatus(PostCountText());
             _ = LoadThumbnailsAsync(generation);
         }
         finally
@@ -368,12 +426,225 @@ public partial class FanboxSearchView : UserControl
         {
             _ = OpenArtistAsync(item.Id, item.Title, item.TagText, fromArtists: true);
         }
-        else if (item.Selectable)
+        else
         {
-            // 点卡片本体等同于点「选择」（对齐 Web）
-            item.IsPicked = !item.IsPicked;
-            UpdateSelectInfo();
+            // 点卡片本体进入作品详情查看内容（对齐 Web：选择仍由卡内「选择」按钮负责）。
+            // 已下载/下载中的作品同样能看，只是不能再选。
+            _ = OpenPostAsync(item);
         }
+    }
+
+    // ---------- 作品详情 ----------
+
+    /// <summary>从详情返回作家主页：网格与已翻页数据都还在，恢复计数行即可。</summary>
+    private void GoBackToPosts()
+    {
+        ShowLevel("posts");
+        SetStatus(PostCountText());
+    }
+
+    /// <summary>作家主页的计数行文案（加载完与从详情返回时共用同一处）。</summary>
+    private string PostCountText() =>
+        $"{(_artistName.Length > 0 ? _artistName : _artistId)}　" +
+        I18n.Format(I18n.Tr("已加载 {n} 篇作品"), ("n", _posts.Count)) +
+        (_hasMore ? I18n.Tr("（下拉加载更多）") : "");
+
+    /// <summary>点作品卡进入：拉取正文与附件清单并渲染。</summary>
+    private async Task OpenPostAsync(FanboxCardItem card)
+    {
+        var generation = ++_detailGen;
+        _detailPostId = card.Id;
+        _detailState = card.State;
+        ShowLevel("detail");
+        SetStatus(card.Title);
+
+        // 先清空上一篇的内容，免得新旧混显
+        DetailTitle.Text = card.Title;
+        DetailMainImage.Source = null;
+        _detailImages.Clear();
+        DetailThumbs.ItemsSource = _detailImages;
+        DetailFields.Children.Clear();
+        DetailOthers.ItemsSource = null;
+        DetailBodyHeader.Visibility = DetailBody.Visibility = Visibility.Collapsed;
+        DetailOthersHeader.Visibility = Visibility.Collapsed;
+        DetailNoImage.Visibility = Visibility.Collapsed;
+        DetailPane.ScrollToTop();
+        LoadingOverlay.Visibility = Visibility.Visible;
+
+        var post = await PawchiveApi.GetPostAsync(PawchiveApi.FanboxService, _artistId, card.Id);
+        if (generation != _detailGen || _level != "detail")
+            return;
+        LoadingOverlay.Visibility = Visibility.Collapsed;
+        if (post is null)
+        {
+            DetailNoImage.Text = I18n.Tr("获取作品详情失败");
+            DetailNoImage.Visibility = Visibility.Visible;
+            return;
+        }
+        RenderDetail(post);
+        _ = LoadDetailImagesAsync(generation);
+    }
+
+    /// <summary>渲染详情：标题 + 字段 + 正文 + 其他附件 + 图集占位（图片随后异步填充）。</summary>
+    private void RenderDetail(PawchivePost post)
+    {
+        var done = _detailState == "已品悦";
+        var busy = _detailState is "下载中" or "已下载";
+
+        DetailTitle.Text = post.Title.Length > 0 ? post.Title : post.Id;
+        DetailDownloadButton.Content = done ? I18n.Tr("已下载")
+            : busy ? _detailState : I18n.Tr("下载本篇");
+        DetailDownloadButton.IsEnabled = !done && !busy;
+
+        var images = post.Files.Where(f => PawchiveApi.IsImageName(f.Name)).ToList();
+        var others = post.Files.Where(f => !PawchiveApi.IsImageName(f.Name)).ToList();
+
+        AddDetailField(I18n.Tr("作家"), _artistName.Length > 0 ? _artistName : _artistId);
+        AddDetailField(I18n.Tr("发布"), FormatPublished(post.Published));
+        if (post.Tags.Count > 0)
+            AddDetailField(I18n.Tr("标签"), string.Join(" / ", post.Tags));
+        AddDetailField(I18n.Tr("文件"),
+            I18n.Format(I18n.Tr("{n} 个（图片 {m}）"), ("n", post.Files.Count), ("m", images.Count)));
+        AddDetailField(I18n.Tr("状态"), done ? I18n.Tr("已下载")
+            : _detailState.Length > 0 ? _detailState : I18n.Tr("未下载"));
+
+        if (post.Content.Length > 0)
+        {
+            DetailBody.Text = post.Content;
+            DetailBodyHeader.Text = I18n.Tr("正文");
+            DetailBodyHeader.Visibility = DetailBody.Visibility = Visibility.Visible;
+        }
+        if (others.Count > 0)
+        {
+            DetailOthers.ItemsSource = others.Select(f => f.Name).ToList();
+            DetailOthersHeader.Text = I18n.Format(I18n.Tr("其他附件（{n}）"), ("n", others.Count));
+            DetailOthersHeader.Visibility = Visibility.Visible;
+        }
+
+        foreach (var f in images)
+            _detailImages.Add(new FanboxImageItem
+            {
+                Name = f.Name,
+                ThumbUrl = PawchiveApi.ThumbUrl(f.Path),
+                FullUrl = PawchiveApi.FileUrl(f.Path, f.Name),
+            });
+        if (images.Count == 0)
+        {
+            DetailNoImage.Text = I18n.Tr("这篇没有图片");
+            DetailNoImage.Visibility = Visibility.Visible;
+        }
+    }
+
+    private void AddDetailField(string key, string value)
+    {
+        if (value.Length == 0)
+            return;
+        DetailFields.Children.Add(new TextBlock
+        {
+            Text = key,
+            Margin = new Thickness(0, 0, 0, 2),
+            Style = TryFindResource("CaptionText") as Style,
+        });
+        DetailFields.Children.Add(new TextBlock
+        {
+            Text = value,
+            TextWrapping = TextWrapping.Wrap,
+            FontSize = 13.5,
+            Margin = new Thickness(0, 0, 0, 12),
+        });
+    }
+
+    /// <summary>站点给的是 2026-01-23T08:00:00 这种，去掉中间的 T。</summary>
+    private static string FormatPublished(string raw) =>
+        raw.Length == 0 ? "" : raw.Replace('T', ' ');
+
+    /// <summary>
+    /// 后台下载图集的预览图。
+    ///
+    /// 详情只展示 800px 预览图（img.&lt;host&gt;），不取原图：原图动辄数 MB，而且源站未归档时
+    /// 一律 404（见 DownloadEngine 的预览图回退）。要原图请下载入库。
+    /// 预览图同时在临时目录存一份本地副本，供看图窗口按路径翻页。
+    /// </summary>
+    private async Task LoadDetailImagesAsync(int generation)
+    {
+        var dir = Path.Combine(PreviewCacheDir, _detailPostId);
+        try { Directory.CreateDirectory(dir); }
+        catch (IOException) { dir = ""; }
+        catch (UnauthorizedAccessException) { dir = ""; }
+
+        using var client = Http.CreateClient(TimeSpan.FromSeconds(20), PawchiveApi.UserAgent);
+        for (var i = 0; i < _detailImages.Count; i++)
+        {
+            if (generation != _detailGen)
+                return;
+            var item = _detailImages[i];
+            try
+            {
+                var bytes = await client.GetByteArrayAsync(item.ThumbUrl);
+                if (generation != _detailGen)
+                    return;
+                if (dir.Length > 0)
+                {
+                    // 站点预览图一律重编码为 jpeg（URL 后缀仍是原扩展名），本地副本按序号命名
+                    var local = Path.Combine(dir, (i + 1).ToString("D3") + ".jpg");
+                    try
+                    {
+                        await File.WriteAllBytesAsync(local, bytes);
+                        item.LocalPath = local;
+                    }
+                    catch (IOException) { }
+                }
+                var image = new BitmapImage();
+                using (var ms = new MemoryStream(bytes))
+                {
+                    image.BeginInit();
+                    image.CacheOption = BitmapCacheOption.OnLoad;
+                    image.StreamSource = ms;
+                    image.EndInit();
+                }
+                image.Freeze();
+                item.Thumb = image;
+                if (i == 0)
+                    SelectDetailImage(item);
+            }
+            catch (Exception e) when (e is HttpRequestException or TaskCanceledException
+                                          or NotSupportedException or ArgumentException)
+            {
+                // 单张失败不影响其它
+            }
+        }
+    }
+
+    /// <summary>把某张图设为大图，并把缩略图条的高亮挪过去。</summary>
+    private void SelectDetailImage(FanboxImageItem item)
+    {
+        foreach (var x in _detailImages)
+            x.IsSelected = ReferenceEquals(x, item);
+        DetailMainImage.Source = item.Thumb;
+    }
+
+    private void DetailThumb_Click(object sender, MouseButtonEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.DataContext is FanboxImageItem item)
+            SelectDetailImage(item);
+    }
+
+    /// <summary>点大图：用程序内看图窗口翻看这篇的全部预览图（对齐 Web 的灯箱）。</summary>
+    private void DetailMainImage_Click(object sender, MouseButtonEventArgs e)
+    {
+        var paths = _detailImages.Where(x => x.LocalPath.Length > 0).Select(x => x.LocalPath).ToList();
+        if (paths.Count == 0)
+            return;
+        var current = _detailImages.FirstOrDefault(x => x.IsSelected);
+        var index = current is null ? 0 : Math.Max(0, paths.IndexOf(current.LocalPath));
+        new ImageViewerDialog(paths, index) { Owner = Window.GetWindow(this) }.ShowDialog();
+    }
+
+    /// <summary>详情页「下载本篇」。</summary>
+    private void DetailDownload_Click(object sender, RoutedEventArgs e)
+    {
+        if (_detailPostId.Length > 0)
+            _ = EnqueueAsync([_detailPostId]);
     }
 
     // ---------- 选择与下载 ----------
@@ -470,6 +741,13 @@ public partial class FanboxSearchView : UserControl
                 MetaText = _cards[i].MetaText, State = "下载中", Selectable = false,
                 Thumb = _cards[i].Thumb,
             };
+        }
+        // 正停在被入队作品的详情页时，「下载本篇」同步转为禁用的状态按钮
+        if (_level == "detail" && wanted.Contains(_detailPostId))
+        {
+            _detailState = "下载中";
+            DetailDownloadButton.Content = _detailState;
+            DetailDownloadButton.IsEnabled = false;
         }
         UpdateSelectInfo();
         InAppDialog.Info(this,

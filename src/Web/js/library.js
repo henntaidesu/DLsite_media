@@ -21,7 +21,7 @@ async function renderLibView(ctx) {
     setSort(MAKER_SORTS, makerSort, v => { makerSort = v; render(); });
     const d = await api(`/api/makers?lib=${enc(ctx.lib)}&sort=${makerSort}`);
     curItems = d.makers.map(m => ({ ...m, _key: (m.maker || '未知社团').toLowerCase() }));
-    drawGroups(curItems, m => ({ title: m.maker || '未知社团', caption: `${m.count} 个作品`, onClick: () => pushView('works', { lib: ctx.lib, maker: m.maker }) }), '个社团');
+    drawGroups(curItems, m => ({ title: m.maker || '未知社团', caption: `${m.count} 个作品`, icon: m.icon ? fbImg(m.icon) : '', onClick: () => pushView('works', { lib: ctx.lib, maker: m.maker }) }), '个社团');
     prependLibToggle('▦ 显示作品', 'works');
   }
 }
@@ -48,7 +48,7 @@ async function renderAllMakers() {
   setSort(MAKER_SORTS, makerSort, v => { makerSort = v; render(); });
   const d = await api('/api/makers?sort=' + makerSort);
   curItems = d.makers.map(m => ({ ...m, _key: (m.maker || '未知社团').toLowerCase() }));
-  drawGroups(curItems, m => ({ title: m.maker || '未知社团', caption: `${m.count} 个作品`, onClick: () => pushView('works', { maker: m.maker }) }), '个社团');
+  drawGroups(curItems, m => ({ title: m.maker || '未知社团', caption: `${m.count} 个作品`, icon: m.icon ? fbImg(m.icon) : '', onClick: () => pushView('works', { maker: m.maker }) }), '个社团');
 }
 async function renderMakers(ctx) {
   $('title').textContent = ctx.genre || ctx.type || ctx.lib || '作品社团';
@@ -58,7 +58,7 @@ async function renderMakers(ctx) {
   q.set('sort', makerSort);
   const d = await api('/api/makers?' + q);
   curItems = d.makers.map(m => ({ ...m, _key: (m.maker || '未知社团').toLowerCase() }));
-  drawGroups(curItems, m => ({ title: m.maker || '未知社团', caption: `${m.count} 个作品`, onClick: () => pushView('works', { ...ctx, maker: m.maker }) }), '个社团');
+  drawGroups(curItems, m => ({ title: m.maker || '未知社团', caption: `${m.count} 个作品`, icon: m.icon ? fbImg(m.icon) : '', onClick: () => pushView('works', { ...ctx, maker: m.maker }) }), '个社团');
 }
 function worksUrl(ctx) {
   const q = new URLSearchParams();

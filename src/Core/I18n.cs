@@ -74,6 +74,20 @@ public static class I18n
     private static readonly Dictionary<string, Dictionary<string, string>> Translations = new()
     {
         // ---------- FANBOX（pawchive 数据源）----------
+        // 作品详情（查看内容）
+        ["下载本篇"] = new() { ["zh_TW"] = "下載本篇", ["ja"] = "この投稿を保存", ["en"] = "Download post" },
+        ["正文"] = new() { ["zh_TW"] = "正文", ["ja"] = "本文", ["en"] = "Body" },
+        ["发布"] = new() { ["zh_TW"] = "發佈", ["ja"] = "公開日", ["en"] = "Published" },
+        ["文件"] = new() { ["zh_TW"] = "檔案", ["ja"] = "ファイル", ["en"] = "Files" },
+        ["未下载"] = new() { ["zh_TW"] = "未下載", ["ja"] = "未取得", ["en"] = "Not downloaded" },
+        ["这篇没有图片"] = new()
+            { ["zh_TW"] = "這篇沒有圖片", ["ja"] = "画像はありません", ["en"] = "No images in this post" },
+        ["获取作品详情失败"] = new()
+            { ["zh_TW"] = "取得作品詳情失敗", ["ja"] = "投稿の取得に失敗しました", ["en"] = "Failed to load post" },
+        ["其他附件（{n}）"] = new()
+            { ["zh_TW"] = "其他附件（{n}）", ["ja"] = "その他の添付（{n}）", ["en"] = "Other files ({n})" },
+        ["{n} 个（图片 {m}）"] = new()
+            { ["zh_TW"] = "{n} 個（圖片 {m}）", ["ja"] = "{n} 件（画像 {m}）", ["en"] = "{n} ({m} images)" },
         ["FANBOX"] = new() { ["zh_TW"] = "FANBOX", ["ja"] = "FANBOX", ["en"] = "FANBOX" },
         ["📚 我的库"] = new() { ["zh_TW"] = "📚 我的庫", ["ja"] = "📚 マイライブラリ", ["en"] = "📚 My Library" },
         ["输入作家名 / 作家 ID，或粘贴 pawchive 作家链接"] = new()
@@ -229,6 +243,8 @@ public static class I18n
         ["暂停中…"] = new() { ["zh_TW"] = "暫停中…", ["ja"] = "停止中…", ["en"] = "Pausing…" },
         ["清除已完成"] = new() { ["zh_TW"] = "清除已完成", ["ja"] = "完了分を消去", ["en"] = "Clear completed" },
         ["清空列表"] = new() { ["zh_TW"] = "清空列表", ["ja"] = "リストをクリア", ["en"] = "Clear all" },
+        ["清除无可用连接"] = new() { ["zh_TW"] = "清除無可用連結", ["ja"] = "利用可能なリンクなしを消去", ["en"] = "Clear no-link" },
+        ["全部重新解析"] = new() { ["zh_TW"] = "全部重新解析", ["ja"] = "すべて再解析", ["en"] = "Re-resolve all" },
         ["等待下载"] = new() { ["zh_TW"] = "等待下載", ["ja"] = "待機中", ["en"] = "Waiting" },
         ["下载中"] = new() { ["zh_TW"] = "下載中", ["ja"] = "ダウンロード中", ["en"] = "Downloading" },
         ["已完成"] = new() { ["zh_TW"] = "已完成", ["ja"] = "完了", ["en"] = "Completed" },
@@ -249,6 +265,12 @@ public static class I18n
         ["流量用尽"] = new() { ["zh_TW"] = "流量用盡", ["ja"] = "通信量超過", ["en"] = "Data limit reached" },
         ["文件失效"] = new() { ["zh_TW"] = "檔案失效", ["ja"] = "ファイル失効", ["en"] = "File dead" },
         // 直链源（asmr / fanbox）源站 404：文件不存在，跳过后继续下别的文件
+        ["已完成（预览图）"] = new()
+        {
+            ["zh_TW"] = "已完成（預覽圖）",
+            ["ja"] = "完了（プレビュー画像）",
+            ["en"] = "Completed (preview)",
+        },
         ["源站无此文件"] = new()
             { ["zh_TW"] = "來源站無此檔案", ["ja"] = "配信元に無し", ["en"] = "Not on source" },
         ["源站没有这个文件，已跳过"] = new()

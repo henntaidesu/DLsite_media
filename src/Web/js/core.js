@@ -304,7 +304,22 @@ function drawGroups(items, mapFn, unit) {
   const works = items.reduce((s, i) => s + (i.works || i.count || 0), 0);
   $('count').textContent = $('search').value.trim() ? `共 ${items.length} ${unit}，匹配 ${items2.length} 个` : `共 ${items.length} ${unit}，${works} 个作品`;
   const grid = el('div', 'grid groups');
-  items2.forEach(i => { const m = mapFn(i); const c = el('div', 'card group-card'); c.appendChild(el('div', 'gt', m.title)); c.appendChild(el('div', 'gc', m.caption)); c.onclick = m.onClick; grid.appendChild(c); });
+  items2.forEach(i => {
+    const m = mapFn(i);
+    const c = el('div', 'card group-card');
+    // 左侧头像（目前只有 fanbox 社团有）：取不到就整个移除，让信息块占满，不留空框
+    if (m.icon) {
+      const ic = el('img', 'gicon'); ic.loading = 'lazy'; ic.src = m.icon;
+      ic.onerror = () => ic.remove();
+      c.appendChild(ic);
+    }
+    // 右侧信息块：名称 + 作品数竖排
+    const info = el('div', 'ginfo');
+    info.append(el('div', 'gt', m.title), el('div', 'gc', m.caption));
+    c.appendChild(info);
+    c.onclick = m.onClick;
+    grid.appendChild(c);
+  });
   const host = $('content'); host.innerHTML = ''; host.appendChild(items2.length ? grid : el('div', 'empty', '没有内容'));
 }
 function makeWorkCard(w) {

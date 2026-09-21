@@ -212,6 +212,8 @@ public partial class EhentaiSearchView : UserControl
         SelectBar.Visibility = level == "results" ? Visibility.Visible : Visibility.Collapsed;
         CardList.Visibility = level == "results" ? Visibility.Visible : Visibility.Collapsed;
         DetailPane.Visibility = level == "detail" ? Visibility.Visible : Visibility.Collapsed;
+        // 操作条在滚动区之外（第 0 行），随详情面板同步显隐
+        DetailBar.Visibility = DetailPane.Visibility;
         BackAvailabilityChanged?.Invoke(CanGoBack);
     }
 

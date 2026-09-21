@@ -73,7 +73,18 @@
 
   main { padding: 12px max(12px, env(safe-area-inset-left)) 40px; }
   .count { color: var(--muted); font-size: 13px; margin: 4px 2px 12px; }
-  .toolbar { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; align-items: center; }
+  /* 页内工具栏与顶栏一样常驻页顶，不随内容滚走。
+     top 不能写死：顶栏在窄屏会换行、详情页还会多出一排操作按钮，高度不固定；
+     且一页可能叠两条（搜索栏 + 选择条）。故由 syncStickyBars() 实测后逐条写入 --topbar-h / 各条的 top。
+     左右负外边距把底色铺满 main 的左右内边距，内容从条的下沿整齐消失。 */
+  .toolbar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center;
+             position: sticky; top: var(--topbar-h, 52px); z-index: 20;
+             background: var(--bg); border-bottom: 1px solid var(--line);
+             margin: 0 calc(-1 * max(12px, env(safe-area-inset-left))) 12px;
+             padding: 8px max(12px, env(safe-area-inset-left)); }
+  /* 分区内部的行内工具栏（系统设置的「媒体库」分区）不是页面顶栏，不参与顶置 */
+  .toolbar.inline { position: static; background: none; border-bottom: none;
+                    margin: 0 0 12px; padding: 0; }
 
   .grid { display: grid; gap: 12px; justify-content: start; }
   /* 列宽下限取 max(150px, 单行 8 列时每列的宽度)：一行最多 8 张，窄屏自动减列；
@@ -277,7 +288,8 @@
   /* 已下载表 */
   .dt { width: 100%; border-collapse: collapse; font-size: 13.5px; }
   .dt th { text-align: left; color: var(--muted); font-weight: 500; padding: 8px 10px; cursor: pointer;
-           border-bottom: 1px solid var(--line); white-space: nowrap; position: sticky; top: 0; background: var(--bg); }
+           border-bottom: 1px solid var(--line); white-space: nowrap; background: var(--bg);
+           position: sticky; top: var(--bars-h, 0px); z-index: 10; }
   .dt td { padding: 8px 10px; border-bottom: 1px solid var(--line); }
   .dt tr:hover td { background: var(--surface); }
   .pill { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 12px; }

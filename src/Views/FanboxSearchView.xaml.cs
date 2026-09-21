@@ -244,6 +244,9 @@ public partial class FanboxSearchView : UserControl
         CardList.Visibility = level is "artists" or "posts" ? Visibility.Visible : Visibility.Collapsed;
         DetailPane.Visibility = level == "detail" ? Visibility.Visible : Visibility.Collapsed;
         WatchPane.Visibility = level == "watch" ? Visibility.Visible : Visibility.Collapsed;
+        // 操作条在滚动区之外（第 0 行），随层级与各自的面板同步显隐
+        DetailBar.Visibility = DetailPane.Visibility;
+        WatchBar.Visibility = WatchPane.Visibility;
         if (level != "watch")
             StopWatchTimer();
         BackAvailabilityChanged?.Invoke(CanGoBack);

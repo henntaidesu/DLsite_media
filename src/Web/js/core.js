@@ -140,6 +140,37 @@ function applyLayout() {
   if (!mobile) closeDrawer();
 }
 window.addEventListener('resize', applyLayout);
+
+// ---------- 顶栏 + 页内工具栏常驻页顶 ----------
+// 顶栏高度不固定（窄屏换行、详情页多一排操作按钮），页内工具栏又要正好叠在它下面，
+// 所以只能实测：按文档顺序取当前可见的工具栏，逐条把 top 设成「顶栏高 + 之前各条高度之和」，
+// 最后把总高写进 --bars-h 供表头一类的二级吸顶元素使用（已下载表的 .dt th）。
+// 写入前先比对旧值：值没变就不写，否则下面的 MutationObserver 会被自己的写入再次唤醒、来回打转。
+function syncStickyBars() {
+  const root = document.documentElement, head = document.querySelector('header');
+  let top = head ? Math.round(head.getBoundingClientRect().height) : 0;
+  const setVar = (k, v) => { if (root.style.getPropertyValue(k) !== v) root.style.setProperty(k, v); };
+  setVar('--topbar-h', top + 'px');
+  document.querySelectorAll('#content .toolbar:not(.inline)').forEach(bar => {
+    // 藏起来的结果面板（切换搜索来源时的另两套）里的工具栏不占位
+    if (!bar.offsetParent) { if (bar.style.top) bar.style.top = ''; return; }
+    const v = top + 'px';
+    if (bar.style.top !== v) bar.style.top = v;
+    top += Math.round(bar.getBoundingClientRect().height);
+  });
+  setVar('--bars-h', top + 'px');
+}
+let _stickyRaf = 0;
+function scheduleStickyBars() {
+  if (_stickyRaf) return;
+  _stickyRaf = requestAnimationFrame(() => { _stickyRaf = 0; syncStickyBars(); });
+}
+window.addEventListener('resize', scheduleStickyBars);
+// 各分区自行重绘内容，这里统一盯住 DOM 变化，省去在每个 render 里逐处调用。
+// 每帧最多重算一次；下载列表每秒重建一次表格也只触发一次。
+new MutationObserver(scheduleStickyBars).observe(document.body,
+  { childList: true, subtree: true, attributes: true, attributeFilter: ['style', 'hidden', 'class'] });
+
 function stopTimers() { if (pollTimer) clearInterval(pollTimer); if (usageTimer) clearInterval(usageTimer); pollTimer = usageTimer = null; }
 
 function selectSection(key) {

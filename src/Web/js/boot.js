@@ -22,6 +22,7 @@ $('search').addEventListener('input', () => {
 // ---------- 启动 ----------
 async function boot() {
   applyLayout();
+  syncStickyBars();
   buildTabs();
   try { const s = await fetch('/api/state').then(r => r.json()); if (s.needLogin) { showLogin(true); return; } } catch (e) {}
   restoreFromHash();

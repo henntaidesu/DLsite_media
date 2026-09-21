@@ -137,7 +137,7 @@ function pollImageHost() {
 let _libScanPoll = null;
 async function renderMediaLibSection(host) {
   const sec = el('div', 'sec'); sec.appendChild(el('h3', null, '媒体库'));
-  const bar = el('div', 'toolbar');
+  const bar = el('div', 'toolbar inline');
   // 按钮文案同桌面端 MediaLibSettingDialog.BuildSection
   const addLibBtn = el('button', 'icon-btn', '新建媒体库');
   const scanAllBtn = el('button', 'icon-btn', '扫描全部数据源');

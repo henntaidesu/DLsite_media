@@ -558,6 +558,7 @@ public static class WebServer
 
     private static void ApiMakers(NetworkStream stream, Request req)
     {
+        DlsiteMakerIcon.Kick();   // 后台补齐还没查过的社团头像（已查过的不会重复请求）
         var lib = req.Query.GetValueOrDefault("lib");
         var genre = req.Query.GetValueOrDefault("genre");
         var type = req.Query.GetValueOrDefault("type");
@@ -565,34 +566,40 @@ public static class WebServer
         List<object?[]>? rows;
         if (!string.IsNullOrEmpty(genre))
             rows = Db.Select(
-                "SELECT w.\"maker_name\", COUNT(*), " + FanboxService.MakerIdExpr("w.") + " FROM \"works\" w " +
+                "SELECT w.\"maker_name\", COUNT(*), " + FanboxService.MakerIdExpr("w.") + ", " + DlsiteMakerIcon.MakerIdExpr("w.") + " FROM \"works\" w " +
                 "JOIN \"work_genres\" g ON g.\"work_id\" = w.\"work_id\" " +
                 "WHERE w.\"state\" = '已品悦' AND g.\"genre\" = @g " +
                 "GROUP BY w.\"maker_name\" " + order.Replace("{p}", "w."),
                 ("@g", genre));
         else if (!string.IsNullOrEmpty(type))
             rows = Db.Select(
-                "SELECT \"maker_name\", COUNT(*), " + FanboxService.MakerIdExpr("") + " FROM \"works\" " +
+                "SELECT \"maker_name\", COUNT(*), " + FanboxService.MakerIdExpr("") + ", " + DlsiteMakerIcon.MakerIdExpr("") + " FROM \"works\" " +
                 "WHERE \"state\" = '已品悦' AND \"work_type\" = @t " +
                 "GROUP BY \"maker_name\" " + order.Replace("{p}", ""),
                 ("@t", type));
         else if (!string.IsNullOrEmpty(lib))
             rows = Db.Select(
-                "SELECT \"maker_name\", COUNT(*), " + FanboxService.MakerIdExpr("") + " FROM \"works\" " +
+                "SELECT \"maker_name\", COUNT(*), " + FanboxService.MakerIdExpr("") + ", " + DlsiteMakerIcon.MakerIdExpr("") + " FROM \"works\" " +
                 "WHERE \"state\" = '已品悦' AND \"library\" = @lib " +
                 "GROUP BY \"maker_name\" " + order.Replace("{p}", ""),
                 ("@lib", lib));
         else
             // 顶级"作品社团"分区：不限媒体库，聚合全部社团
             rows = Db.Select(
-                "SELECT \"maker_name\", COUNT(*), " + FanboxService.MakerIdExpr("") + " FROM \"works\" " +
+                "SELECT \"maker_name\", COUNT(*), " + FanboxService.MakerIdExpr("") + ", " + DlsiteMakerIcon.MakerIdExpr("") + " FROM \"works\" " +
                 "WHERE \"state\" = '已品悦' " +
                 "GROUP BY \"maker_name\" " + order.Replace("{p}", ""));
         var makers = (rows ?? []).Select(r =>
         {
-            // fanbox 社团（= pawchive 作家）才有头像；其余来源两个字段都是空串，前端据此不画
+            // fanbox 作家头像来自 pawchive，DLsite 社团头像来自 ci-en；都没有就留空
             var fanboxId = r.Length > 2 ? r[2] as string ?? "" : "";
-            var source = FanboxService.MakerIconUrl(fanboxId);
+            var dlsiteId = r.Length > 3 ? r[3] as string ?? "" : "";
+            var (source, hosted) = MakerIcons.Resolve(fanboxId, dlsiteId);
+            // pawchive 的图必须经本服务代理（浏览器直连会被防护网关按浏览器 UA 拦下）；
+            // ci-en 是公开 CDN，直接给原地址即可
+            var direct = source.Length == 0 ? ""
+                : fanboxId.Length > 0 ? "/api/fanbox/image?url=" + Uri.EscapeDataString(source)
+                : source;
             var maker = r[0] as string ?? "";
             return new
             {
@@ -600,11 +607,11 @@ public static class WebServer
                 // 显示名：设过别名就用别名。分组/筛选一律仍按真名 maker，别名只进界面
                 display = MakerAliasService.Display(maker),
                 count = Convert.ToInt64(r[1]),
-                // 站点直链必须经本服务代理：浏览器直连 pawchive 会被防护网关按浏览器 UA 拦下
-                icon = source.Length > 0 ? "/api/fanbox/image?url=" + Uri.EscapeDataString(source) : "",
-                // 已迁到图床的直接给图床地址（既不经本服务、也不回源 pawchive）；
-                // 没迁的为空串，前端退回上面的代理地址
-                iconUrl = fanboxId.Length > 0 ? ImageHostService.MakerIconUrl(fanboxId) ?? "" : "",
+                icon = direct,
+                // 已迁到图床的直接给图床地址（既不经本服务、也不回源）；没迁的为空串，前端退回 icon
+                iconUrl = hosted,
+                // 社团卡一律留出头像位：没有头像的社团也保持同样的版式，只是那一格什么都不画
+                avatar = true,
             };
         });
         WriteJson(stream, 200, new { makers });

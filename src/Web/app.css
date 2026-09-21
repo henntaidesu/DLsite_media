@@ -90,16 +90,26 @@
   .mcard-actions button:hover:not(:disabled) { border-color: var(--accent-dim); }
   .mcard-actions button.primary:not(:disabled) { background: var(--accent-dim); border-color: var(--accent-dim); color: #fff; }
   .mcard-actions button:disabled { opacity: .45; cursor: not-allowed; }
-  .grid.groups { grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
+  /* 列宽下限 400：auto-fill 下卡片宽度是按列数跳变的，抬高下限即减少列数、把卡片拉长。
+     高度不受影响（分组卡高度由内容与 min-height 决定，不跟宽度联动） */
+  .grid.groups { grid-template-columns: repeat(auto-fill, minmax(400px, 1fr)); }
   .card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
           overflow: hidden; cursor: pointer; display: flex; flex-direction: column; transition: border-color .12s; }
   .card:hover { border-color: var(--accent-dim); }
-  /* 左头像 | 右(名称 + 作品数)。.card 本身是竖向 flex，这里翻成横向。
+  /* 无头像的分组卡（媒体库/标签/形式，以及没有头像的社团）：文字占满整卡。
      position: relative 是给右上角改名按钮定位用的 */
   .group-card { padding: 14px; min-height: 110px; position: relative;
                 flex-direction: row; align-items: center; gap: 12px; }
-  /* 社团头像：卡片左侧的正方形头像（目前只有 fanbox 社团有），定宽不被文字挤压。
-     82 = 卡高 110 − 上下内距 14×2，即"比卡片小一圈"，只留内距那一圈留白。
+  /* 社团卡：2:8 两栏栅格，左栏是头像位、右栏放名称与作品数（右栏吃得越多，长社团名越不容易折行）。
+     留位与有没有图无关——没有头像的社团左栏就空着，同一行里的卡片版式才对得齐。
+     左栏下限 82px = 头像边长：窄卡片上纯按比例分会让左栏小于头像，把头像挤裁掉。
+     显式指定 grid-column，这样头像缺席或加载失败时，信息块也不会被自动排版顶到左栏去 */
+  .group-card.avatar-slot { display: grid; grid-template-columns: minmax(82px, 2fr) 8fr;
+                            align-items: center; }
+  .group-card.avatar-slot .gicon { grid-column: 1; justify-self: center; }
+  .group-card.avatar-slot .ginfo { grid-column: 2; }
+  /* 社团头像：正方形，边长吃满卡片可用高度 82 = 卡高 110 − 上下内距 14×2。
+     不能再大了——卡片高度固定，正方形的边长只能由高度决定；左栏比它宽的部分留白，靠居中吃掉。
      contain 而非 cover：非正方形的头像也完整显示、不裁切，空白由底色补 */
   .group-card .gicon { flex: none; width: 82px; height: 82px; border-radius: 6px;
                        object-fit: contain; background: var(--line); }

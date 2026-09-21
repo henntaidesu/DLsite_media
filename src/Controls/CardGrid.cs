@@ -10,7 +10,7 @@ namespace R18MediaLibrary.Controls;
 /// .grid       { gap: 12px; }
 /// .grid.cards { grid-template-columns: repeat(auto-fill, minmax(max(150px, (100% - 84px) / 8), 1fr)); }
 /// .grid.cards &gt; .card { aspect-ratio: 2 / 3; }       /* 高 = 宽 × 1.5 */
-/// .grid.groups{ grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
+/// .grid.groups{ grid-template-columns: repeat(auto-fill, minmax(400px, 1fr)); }
 /// .fgrid      { gap: 10px; repeat(auto-fill, minmax(max(150px, (100% - 90px) / 10), 1fr)); }
 /// </code>
 ///
@@ -37,8 +37,8 @@ public static class CardGrid
     /// <summary>标题区占卡片高度的比重（Web <c>.wt { flex: 1 }</c>）。</summary>
     public const double TextFlex = 1;
 
-    /// <summary>分组卡（媒体库/社团/标签/形式）列宽下限（Web <c>.grid.groups</c> 的 220px）。</summary>
-    public const double GroupMinWidth = 220;
+    /// <summary>分组卡（媒体库/社团/标签/形式）列宽下限（Web <c>.grid.groups</c> 的 400px）。</summary>
+    public const double GroupMinWidth = 400;
 
     /// <summary>「查看作品」缩略图网格：列宽下限 / 最多列数 / 间距（Web <c>.fgrid</c>）。</summary>
     public const double FileMinWidth = 150;

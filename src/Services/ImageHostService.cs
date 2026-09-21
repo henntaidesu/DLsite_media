@@ -38,7 +38,7 @@ public static class ImageHostService
 
     private static readonly object Sync = new();
     private static Dictionary<string, string>? _covers;   // work_id -> /images/<slug>/<name>
-    private static Dictionary<string, string>? _icons;    // maker_id -> /images/<slug>/<name>
+    private static Dictionary<string, string>? _icons;    // external_key -> /images/<slug>/<name>
     private static bool _running;
     private static string _status = "";
     private static CancellationTokenSource? _cts;
@@ -46,8 +46,11 @@ public static class ImageHostService
     /// <summary>图床封面的幂等键：同一作品重复迁移只会在图床上存一份。</summary>
     private static string CoverKey(string workId) => $"work/{workId}/cover";
 
-    /// <summary>图床头像的幂等键：同一作家重复迁移只会在图床上存一份。</summary>
-    private static string IconKey(string makerId) => $"maker/{PawchiveApi.FanboxService}/{makerId}/icon";
+    /// <summary>社团来源：DLsite 社团头像来自 ci-en，与 fanbox 作家头像分属两个命名空间。</summary>
+    public const string DlsiteSource = "dlsite";
+
+    /// <summary>图床头像的幂等键：同一社团重复迁移只会在图床上存一份。</summary>
+    private static string IconKey(string source, string makerId) => $"maker/{source}/{makerId}/icon";
 
     /// <summary>一条已迁移记录：图床上的位置 + 迁移时的本地文件指纹与内容指纹。</summary>
     private sealed record Record(string StoredName, string Path, string Fingerprint, string Sha256);
@@ -75,11 +78,11 @@ public static class ImageHostService
     /// 与封面的动机不同：头像的源在 pawchive（网络）而不是本地 HDD，迁到图床是为了不必反复回源
     /// ——桌面端只有进程内缓存、重启即失效，Web 端每个冷缓存的浏览器都要让服务端再取一次。
     /// </summary>
-    public static string? MakerIconUrl(string makerId, int width = IconWidth)
+    public static string? MakerIconUrl(string source, string makerId, int width = IconWidth)
     {
         if (!Active || makerId.Length == 0)
             return null;
-        var path = IconMap().GetValueOrDefault(makerId);
+        var path = IconMap().GetValueOrDefault(IconKey(source, makerId));
         return path == null ? null : ImageHostClient.BuildUrl(AppConfig.ImageHostBaseUrl, path, width);
     }
 
@@ -129,11 +132,26 @@ public static class ImageHostService
             return _covers ??= LoadPathMap(CoverKind);
     }
 
-    /// <summary>社团头像映射：maker_id -> 图床路径。与封面同样整表驻留内存（社团卡也是成批渲染）。</summary>
+    /// <summary>
+    /// 社团头像映射：external_key -> 图床路径。
+    /// 按 external_key 而不是社团号索引——DLsite 与 fanbox 的社团号各自独立，
+    /// 只有带上来源的键才保证不撞。
+    /// </summary>
     private static Dictionary<string, string> IconMap()
     {
         lock (Sync)
-            return _icons ??= LoadPathMap(IconKind);
+        {
+            if (_icons != null)
+                return _icons;
+            var map = new Dictionary<string, string>(StringComparer.Ordinal);
+            var rows = Db.Select(
+                "SELECT \"external_key\", \"path\" FROM \"image_host\" WHERE \"kind\" = @k",
+                ("@k", IconKind));
+            foreach (var row in rows ?? [])
+                if (row[0] is string key && row[1] is string path && key.Length > 0 && path.Length > 0)
+                    map[key] = path;
+            return _icons = map;
+        }
     }
 
     /// <summary>按 kind 读出「业务 id -> 图床路径」映射（work_id 列对封面存作品号、对头像存作家号）。</summary>
@@ -377,13 +395,15 @@ public static class ImageHostService
     }
 
     /// <summary>
-    /// 把 fanbox 社团头像迁到图床，返回本轮新上传 + 认领的张数。
+    /// 把社团头像迁到图床（fanbox 作家头像来自 pawchive，DLsite 社团头像来自 ci-en），
+    /// 返回本轮新上传 + 认领的张数。
     ///
     /// <b>一个作家在图床上永远只有一张头像</b>，靠四处拦住重复：
     /// <list type="number">
-    /// <item>枚举用 <c>SELECT DISTINCT maker_id</c>：同一作家有几十篇作品也只出现一次。</item>
-    /// <item>external_key 固定为 <c>maker/fanbox/&lt;作家号&gt;/icon</c>，既是 image_host 表的主键，
-    ///       也是图床侧的幂等键——重复上传同一个键不会产生第二份文件。</item>
+    /// <item>枚举用 <c>SELECT DISTINCT maker_id</c>：同一社团有几十篇作品也只出现一次。</item>
+    /// <item>external_key 固定为 <c>maker/&lt;来源&gt;/&lt;社团号&gt;/icon</c>，既是 image_host 表的主键，
+    ///       也是图床侧的幂等键——重复上传同一个键不会产生第二份文件。
+    ///       来源进键里，是因为 DLsite 的 RG 号与 fanbox 的作家号各自独立编号。</item>
     /// <item>本地已有该键的记录就直接跳过，连源站都不取。</item>
     /// <item>本地没记录时先批量 lookup 认领图床上已有的那张，而不是再传一遍。</item>
     /// </list>
@@ -401,32 +421,46 @@ public static class ImageHostService
     private static async Task<int> MigrateMakerIconsAsync(
         string baseUrl, string project, string token, CancellationToken ct)
     {
-        var rows = Db.Select(
-            "SELECT DISTINCT \"maker_id\" FROM \"works\" WHERE \"source\" = @src " +
-            "AND \"state\" = '已品悦' AND \"maker_id\" IS NOT NULL AND \"maker_id\" <> ''",
-            ("@src", FanboxService.SourceName)) ?? [];
-        var makerIds = rows.Select(r => r[0] as string ?? "").Where(id => id.Length > 0).ToList();
-        if (makerIds.Count == 0)
+        // fanbox 作家：头像地址由作家号直接拼出来
+        var targets = new List<(string Source, string MakerId, string Url)>();
+        foreach (var r in Db.Select(
+                     "SELECT DISTINCT \"maker_id\" FROM \"works\" WHERE \"source\" = @src " +
+                     "AND \"state\" = '已品悦' AND \"maker_id\" IS NOT NULL AND \"maker_id\" <> ''",
+                     ("@src", FanboxService.SourceName)) ?? [])
+            if (r[0] as string is { Length: > 0 } fanboxId)
+                targets.Add((PawchiveApi.FanboxService, fanboxId,
+                    PawchiveApi.IconUrl(PawchiveApi.FanboxService, fanboxId)));
+
+        // DLsite 社团：地址来自 ci-en 查表缓存，只有确实查到头像的才有得传
+        foreach (var r in Db.Select(
+                     "SELECT \"maker_id\", \"icon_url\" FROM \"maker_icon\" " +
+                     "WHERE \"icon_url\" IS NOT NULL AND \"icon_url\" <> ''") ?? [])
+            if (r[0] as string is { Length: > 0 } dlsiteId && r[1] as string is { Length: > 0 } iconUrl)
+                targets.Add((DlsiteSource, dlsiteId, iconUrl));
+
+        if (targets.Count == 0)
             return 0;
 
         var known = LoadRecords(IconKind);
-        var pending = makerIds.Where(id => !known.ContainsKey(IconKey(id))).ToList();
+        var pending = targets.Where(t => !known.ContainsKey(IconKey(t.Source, t.MakerId))).ToList();
         if (pending.Count == 0)
             return 0;
 
         // 本地映射丢了也先向图床认领，别把已经在图床上的头像再传一遍
         var hosted = await LookupHostedAsync(
-            baseUrl, project, token, pending.Select(IconKey), known, ct);
+            baseUrl, project, token, pending.Select(t => IconKey(t.Source, t.MakerId)), known, ct);
 
-        using var client = Http.CreateClient(TimeSpan.FromSeconds(20), PawchiveApi.UserAgent);
+        // pawchive 的防护网关拦浏览器 UA，取它的图要用中性 UA；ci-en 用默认客户端即可
+        using var pawchiveClient = Http.CreateClient(TimeSpan.FromSeconds(20), PawchiveApi.UserAgent);
+        using var plainClient = Http.CreateClient(TimeSpan.FromSeconds(20));
         var handled = 0;
         var failed = 0;
-        foreach (var makerId in pending)
+        foreach (var (makerSource, makerId, source) in pending)
         {
             if (ct.IsCancellationRequested || !Active)
                 break;
-            var key = IconKey(makerId);
-            var source = PawchiveApi.IconUrl(PawchiveApi.FanboxService, makerId);
+            var key = IconKey(makerSource, makerId);
+            var client = makerSource == PawchiveApi.FanboxService ? pawchiveClient : plainClient;
 
             // 图床上已有同键的一张：直接认领（头像不比内容，同键即同一作家的头像）
             if (hosted.TryGetValue(key, out var hit) && hit.Path.Length > 0)

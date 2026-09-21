@@ -185,6 +185,16 @@ public static class Db
 
                     -- 社团显示名映射：只改界面上的显示，works.maker_name 这个真名不动。
                     -- 分组、筛选、入库路径全部仍按真名走，本表丢了也只是回到显示真名。
+                    -- DLsite 社团头像（来自 ci-en）的查询结果缓存。
+                    -- icon_url 为空串表示"查过了，该社团没有 ci-en 账号/头像"——与"还没查过"
+                    -- （表里没有这一行）区分开，否则每次都要为没头像的社团重新发一次请求。
+                    CREATE TABLE IF NOT EXISTS "maker_icon" (
+                        "maker_id" text NOT NULL,
+                        "icon_url" text,
+                        "up_time" text,
+                        PRIMARY KEY ("maker_id")
+                    );
+
                     CREATE TABLE IF NOT EXISTS "maker_alias" (
                         "maker_name" text NOT NULL,
                         "alias" text NOT NULL,

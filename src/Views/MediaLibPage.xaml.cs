@@ -540,8 +540,12 @@ public partial class MediaLibPage : UserControl
     /// </param>
     /// <param name="iconHostUrl">该头像在图床上的地址；非空则优先走图床，失败再回退 <paramref name="iconUrl"/>。</param>
     /// <param name="onEdit">非空则在卡片右上角挂一个 🖊 按钮（目前只有社团卡用它改显示名）。</param>
+    /// <param name="avatarSlot">
+    /// 是否留出左侧头像位。社团卡一律传 true：没有头像的社团那一格空着，
+    /// 同一行里的卡片版式才对得齐（名称起始位置一致）。
+    /// </param>
     private Border MakeClickCard(string title, string caption, Action onClick,
-        string iconUrl = "", string iconHostUrl = "", Action? onEdit = null)
+        string iconUrl = "", string iconHostUrl = "", Action? onEdit = null, bool avatarSlot = false)
     {
         // 尺寸交给网格：卡片拉伸填满单元格（宽由 CardGrid 算、高为 ClickCardH），间距也由网格排
         var card = new Border
@@ -567,25 +571,32 @@ public partial class MediaLibPage : UserControl
             Text = caption, Style = (Style)FindResource("CaptionText"), Margin = new Thickness(0, 6, 0, 0),
             TextTrimming = TextTrimming.CharacterEllipsis,
         });
-        if (iconUrl.Length > 0)
+        if (avatarSlot)
         {
-            // 左头像 | 右信息（对齐 Web 的 .group-card flex-direction: row）：
-            // 头像列定宽不被文字挤压，信息列吃掉剩余宽度
+            // 左头像 | 右信息，按 2:8 分栏（对齐 Web 的 .group-card.has-icon）。
+            // 左栏 MinWidth 取头像边长：窄卡片上纯按比例分会让左栏小于头像，把头像挤裁掉
             var row = new Grid();
-            row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            // 82 = 卡高 110 − 上下内距 14×2：头像比卡片小一圈，只留内距那一圈留白
+            row.ColumnDefinitions.Add(new ColumnDefinition
+                { Width = new GridLength(2, GridUnitType.Star), MinWidth = 82 });
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(8, GridUnitType.Star) });
+            // 正方形，边长吃满卡片可用高度 82 = 卡高 110 − 上下内距 14×2。
+            // 卡片高度固定，所以边长只能由高度决定；左栏比它宽的部分留白，靠居中吃掉
+            // 没有头像的社团：这一格留着但什么都不画（底色透明），只占位
             var avatar = new Border
             {
                 Width = 82, Height = 82, CornerRadius = new CornerRadius(6),
-                Margin = new Thickness(0, 0, 12, 0), VerticalAlignment = VerticalAlignment.Center,
-                Background = (Brush)FindResource("BorderBrush"),
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center,
+                Background = iconUrl.Length > 0
+                    ? (Brush)FindResource("BorderBrush")   // 载入中的占位底色
+                    : Brushes.Transparent,
             };
             Grid.SetColumn(info, 1);
             row.Children.Add(avatar);
             row.Children.Add(info);
             content = row;
-            _ = LoadGroupIconAsync(avatar, iconUrl, iconHostUrl);
+            if (iconUrl.Length > 0)
+                _ = LoadGroupIconAsync(avatar, iconUrl, iconHostUrl);
         }
 
         if (onEdit == null)
@@ -699,24 +710,25 @@ public partial class MediaLibPage : UserControl
     private void ShowMakers()
     {
         _level = "makers";
+        DlsiteMakerIcon.Kick();   // 后台补齐还没查过的社团头像（已查过的不会重复请求）
         _currentMaker = null;
         List<object?[]>? rows;
         if (_currentGenre != null)
             rows = Db.Select(
-                "SELECT w.\"maker_name\", COUNT(*), " + FanboxService.MakerIdExpr("w.") + " FROM \"works\" w " +
+                "SELECT w.\"maker_name\", COUNT(*), " + FanboxService.MakerIdExpr("w.") + ", " + DlsiteMakerIcon.MakerIdExpr("w.") + " FROM \"works\" w " +
                 "JOIN \"work_genres\" g ON g.\"work_id\" = w.\"work_id\" " +
                 "WHERE w.\"state\" = '已品悦' AND g.\"genre\" = @g " +
                 "GROUP BY w.\"maker_name\" " + MakerOrderClause("w."),
                 ("@g", _currentGenre));
         else if (_currentType != null)
             rows = Db.Select(
-                "SELECT \"maker_name\", COUNT(*), " + FanboxService.MakerIdExpr("") + " FROM \"works\" " +
+                "SELECT \"maker_name\", COUNT(*), " + FanboxService.MakerIdExpr("") + ", " + DlsiteMakerIcon.MakerIdExpr("") + " FROM \"works\" " +
                 "WHERE \"state\" = '已品悦' AND \"work_type\" = @t " +
                 "GROUP BY \"maker_name\" " + MakerOrderClause(),
                 ("@t", _currentType));
         else
             rows = Db.Select(
-                "SELECT \"maker_name\", COUNT(*), " + FanboxService.MakerIdExpr("") + " FROM \"works\" " +
+                "SELECT \"maker_name\", COUNT(*), " + FanboxService.MakerIdExpr("") + ", " + DlsiteMakerIcon.MakerIdExpr("") + " FROM \"works\" " +
                 "WHERE \"state\" = '已品悦' AND \"library\" = @lib " +
                 "GROUP BY \"maker_name\" " + MakerOrderClause(),
                 ("@lib", _currentLib ?? ""));
@@ -732,9 +744,10 @@ public partial class MediaLibPage : UserControl
             // 显示名走映射；真名只用于分组跳转与筛选
             var display = MakerAliasService.Display(maker);
             var title = display.Length > 0 ? display : I18n.Tr("未知社团");
+            // fanbox 作家头像来自 pawchive，DLsite 社团头像来自 ci-en；都没有就留空位
             var fanboxId = row.Length > 2 ? row[2] as string ?? "" : "";
-            var icon = FanboxService.MakerIconUrl(fanboxId);
-            var iconHost = fanboxId.Length > 0 ? ImageHostService.MakerIconUrl(fanboxId) ?? "" : "";
+            var dlsiteId = row.Length > 3 ? row[3] as string ?? "" : "";
+            var (icon, iconHost) = MakerIcons.Resolve(fanboxId, dlsiteId);
             return new GridCard(() => MakeClickCard(
                 title, I18n.Format(I18n.Tr("{count} 个作品"), ("count", count)),
                 () =>
@@ -742,7 +755,8 @@ public partial class MediaLibPage : UserControl
                     _currentMaker = maker.Length > 0 ? maker : UnknownMaker;
                     ShowWorks();
                 }, icon, iconHost,
-                maker.Length > 0 ? () => EditMakerAlias(maker) : null),
+                maker.Length > 0 ? () => EditMakerAlias(maker) : null,
+                avatarSlot: true),
                 // 搜索过滤同时匹配真名与显示名
                 $"{maker} {display}".ToLowerInvariant());
         }).ToList();
@@ -754,12 +768,13 @@ public partial class MediaLibPage : UserControl
     private void ShowAllMakers()
     {
         _level = "all_makers";
+        DlsiteMakerIcon.Kick();   // 后台补齐还没查过的社团头像（已查过的不会重复请求）
         _currentLib = null;
         _currentGenre = null;
         _currentType = null;
         _currentMaker = null;
         var rows = Db.Select(
-            "SELECT \"maker_name\", COUNT(*), " + FanboxService.MakerIdExpr("") + " FROM \"works\" " +
+            "SELECT \"maker_name\", COUNT(*), " + FanboxService.MakerIdExpr("") + ", " + DlsiteMakerIcon.MakerIdExpr("") + " FROM \"works\" " +
             "WHERE \"state\" = '已品悦' GROUP BY \"maker_name\" " + MakerOrderClause());
         if (rows == null)
             return;
@@ -773,9 +788,10 @@ public partial class MediaLibPage : UserControl
             // 显示名走映射；真名只用于分组跳转与筛选
             var display = MakerAliasService.Display(maker);
             var title = display.Length > 0 ? display : I18n.Tr("未知社团");
+            // fanbox 作家头像来自 pawchive，DLsite 社团头像来自 ci-en；都没有就留空位
             var fanboxId = row.Length > 2 ? row[2] as string ?? "" : "";
-            var icon = FanboxService.MakerIconUrl(fanboxId);
-            var iconHost = fanboxId.Length > 0 ? ImageHostService.MakerIconUrl(fanboxId) ?? "" : "";
+            var dlsiteId = row.Length > 3 ? row[3] as string ?? "" : "";
+            var (icon, iconHost) = MakerIcons.Resolve(fanboxId, dlsiteId);
             return new GridCard(() => MakeClickCard(
                 title, I18n.Format(I18n.Tr("{count} 个作品"), ("count", count)),
                 () =>
@@ -783,7 +799,8 @@ public partial class MediaLibPage : UserControl
                     _currentMaker = maker.Length > 0 ? maker : UnknownMaker;
                     ShowWorks();
                 }, icon, iconHost,
-                maker.Length > 0 ? () => EditMakerAlias(maker) : null),
+                maker.Length > 0 ? () => EditMakerAlias(maker) : null,
+                avatarSlot: true),
                 // 搜索过滤同时匹配真名与显示名
                 $"{maker} {display}".ToLowerInvariant());
         }).ToList();

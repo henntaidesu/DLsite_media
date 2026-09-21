@@ -21,7 +21,7 @@ async function renderLibView(ctx) {
     setSort(MAKER_SORTS, makerSort, v => { makerSort = v; render(); });
     const d = await api(`/api/makers?lib=${enc(ctx.lib)}&sort=${makerSort}`);
     curItems = d.makers.map(m => ({ ...m, _key: `${m.maker} ${m.display || ''}`.trim().toLowerCase() || '未知社团' }));
-    drawGroups(curItems, m => ({ title: makerLabel(m), caption: `${m.count} 个作品`, icon: m.iconUrl || m.icon || '', iconFallback: m.iconUrl ? m.icon : '', onEdit: m.maker ? () => editMakerAlias(m) : null, onClick: () => pushView('works', { lib: ctx.lib, maker: m.maker, label: makerLabel(m) }) }), '个社团');
+    drawGroups(curItems, m => ({ title: makerLabel(m), caption: `${m.count} 个作品`, icon: m.iconUrl || m.icon || '', iconFallback: m.iconUrl ? m.icon : '', avatar: true, onEdit: m.maker ? () => editMakerAlias(m) : null, onClick: () => pushView('works', { lib: ctx.lib, maker: m.maker, label: makerLabel(m) }) }), '个社团');
     prependLibToggle('▦ 显示作品', 'works');
   }
 }
@@ -48,7 +48,7 @@ async function renderAllMakers() {
   setSort(MAKER_SORTS, makerSort, v => { makerSort = v; render(); });
   const d = await api('/api/makers?sort=' + makerSort);
   curItems = d.makers.map(m => ({ ...m, _key: `${m.maker} ${m.display || ''}`.trim().toLowerCase() || '未知社团' }));
-  drawGroups(curItems, m => ({ title: makerLabel(m), caption: `${m.count} 个作品`, icon: m.iconUrl || m.icon || '', iconFallback: m.iconUrl ? m.icon : '', onEdit: m.maker ? () => editMakerAlias(m) : null, onClick: () => pushView('works', { maker: m.maker, label: makerLabel(m) }) }), '个社团');
+  drawGroups(curItems, m => ({ title: makerLabel(m), caption: `${m.count} 个作品`, icon: m.iconUrl || m.icon || '', iconFallback: m.iconUrl ? m.icon : '', avatar: true, onEdit: m.maker ? () => editMakerAlias(m) : null, onClick: () => pushView('works', { maker: m.maker, label: makerLabel(m) }) }), '个社团');
 }
 async function renderMakers(ctx) {
   $('title').textContent = ctx.genre || ctx.type || ctx.lib || '作品社团';
@@ -58,7 +58,7 @@ async function renderMakers(ctx) {
   q.set('sort', makerSort);
   const d = await api('/api/makers?' + q);
   curItems = d.makers.map(m => ({ ...m, _key: `${m.maker} ${m.display || ''}`.trim().toLowerCase() || '未知社团' }));
-  drawGroups(curItems, m => ({ title: makerLabel(m), caption: `${m.count} 个作品`, icon: m.iconUrl || m.icon || '', iconFallback: m.iconUrl ? m.icon : '', onEdit: m.maker ? () => editMakerAlias(m) : null, onClick: () => pushView('works', { ...ctx, maker: m.maker, label: makerLabel(m) }) }), '个社团');
+  drawGroups(curItems, m => ({ title: makerLabel(m), caption: `${m.count} 个作品`, icon: m.iconUrl || m.icon || '', iconFallback: m.iconUrl ? m.icon : '', avatar: true, onEdit: m.maker ? () => editMakerAlias(m) : null, onClick: () => pushView('works', { ...ctx, maker: m.maker, label: makerLabel(m) }) }), '个社团');
 }
 // 社团显示名：设过别名用别名，否则真名；两者都空是"未知社团"
 function makerLabel(m) { return m.display || m.maker || '未知社团'; }

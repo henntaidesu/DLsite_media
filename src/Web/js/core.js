@@ -307,14 +307,18 @@ function drawGroups(items, mapFn, unit) {
   items2.forEach(i => {
     const m = mapFn(i);
     const c = el('div', 'card group-card');
-    // 左侧头像（目前只有 fanbox 社团有）。图床接管该头像时直取图床，取不到再回退站点代理地址；
-    // 都取不到就整个移除，让信息块占满，不留空框
-    if (m.icon) {
-      const ic = el('img', 'gicon'); ic.loading = 'lazy'; ic.src = m.icon;
-      ic.onerror = m.iconFallback
-        ? () => { ic.onerror = () => ic.remove(); ic.src = m.iconFallback; }
-        : () => ic.remove();
-      c.appendChild(ic);
+    // 社团卡一律留出左侧头像位（m.avatar），没有头像的社团那一格就空着——
+    // 这样同一行里有头像和没头像的卡片版式一致，名称起始位置对得上。
+    // 有图时：图床接管就直取图床，取不到回退源站地址；再取不到就移除图片，但位置仍在
+    if (m.avatar) {
+      c.classList.add('avatar-slot');   // 切到 2:8 两栏栅格
+      if (m.icon) {
+        const ic = el('img', 'gicon'); ic.loading = 'lazy'; ic.src = m.icon;
+        ic.onerror = m.iconFallback
+          ? () => { ic.onerror = () => ic.remove(); ic.src = m.iconFallback; }
+          : () => ic.remove();
+        c.appendChild(ic);
+      }
     }
     // 右侧信息块：名称 + 作品数竖排
     const info = el('div', 'ginfo');

@@ -16,38 +16,28 @@ using R18MediaLibrary.Services;
 
 namespace R18MediaLibrary.Views;
 
-/// <summary>作品详情图集里的一张图：站上预览图 + 落到临时目录的本地副本（供看图窗口翻页）。</summary>
+/// <summary>作品详情页尾图流里的一张图（站上的 800px 预览）。</summary>
 public class FanboxImageItem : ObservableBase
 {
     public string Name { get; init; } = "";
     public string ThumbUrl { get; init; } = "";
-    /// <summary>原图直链；源站未归档原图时会 404，详情只展示预览图，下载入库才取原图。</summary>
-    public string FullUrl { get; init; } = "";
-    /// <summary>预览图在临时目录里的本地副本路径，空表示还没下下来。</summary>
-    public string LocalPath { get; set; } = "";
 
     private BitmapImage? _thumb;
-    public BitmapImage? Thumb { get => _thumb; set => Set(ref _thumb, value); }
-
-    private bool _isSelected;
-    public bool IsSelected
+    public BitmapImage? Thumb
     {
-        get => _isSelected;
+        get => _thumb;
         set
         {
-            if (!Set(ref _isSelected, value))
-                return;
-            Raise(nameof(SelBorderBrush));
-            Raise(nameof(SelOpacity));
+            if (Set(ref _thumb, value))
+                Raise(nameof(PlaceholderHeight));
         }
     }
 
-    /// <summary>当前大图对应的缩略图高亮描边（等价 Web 的 .thumbs img.sel）。</summary>
-    public Brush SelBorderBrush => IsSelected
-        ? Application.Current?.TryFindResource("AccentLightBrush") as Brush ?? Brushes.DodgerBlue
-        : Brushes.Transparent;
-
-    public double SelOpacity => IsSelected ? 1.0 : 0.65;
+    /// <summary>
+    /// 还没下下来时这一格的占位高度。整列都塌成 0 高的话会一次性全落进视口、懒加载等于没做；
+    /// 图一到位就归 0，改按图片真实高度排版（等价 Web 的 .fbpage { min-height } + onload 清零）。
+    /// </summary>
+    public double PlaceholderHeight => _thumb is null ? 320 : 0;
 }
 
 /// <summary>FANBOX 搜索结果里的一张卡片：作家卡（artist）或作家主页的作品卡（post）。</summary>
@@ -159,16 +149,18 @@ public partial class FanboxSearchView : UserControl
 
     // 作品详情
     private readonly ObservableCollection<FanboxImageItem> _detailImages = [];
+    // 图流的懒加载：只下滚到跟前的图。_detailQueued 记已排过队的，避免滚动事件重复入队
+    private readonly Queue<FanboxImageItem> _detailPending = new();
+    private readonly HashSet<FanboxImageItem> _detailQueued = [];
+    private bool _detailPumping;
+    private const int DetailEagerPages = 2;        // 首屏那几张不等滚动事件，渲染完就开始下
+    private const double DetailLookahead = 1.0;    // 视口上下各预取一屏
     private string _detailPostId = "";
     private string _detailState = "";
     private int _detailGen;     // 详情请求代际：与 _generation 分开，看详情不该作废主页的分页
 
     // 作家监控（列表与间隔在系统设置里，这里只管作家主页那颗按钮）
     private bool _watched;                      // 当前作家是否已在监控中
-
-    /// <summary>预览图的本地临时副本目录：看图窗口按路径翻页，故要先落盘。</summary>
-    private static string PreviewCacheDir =>
-        Path.Combine(Path.GetTempPath(), "R-18MediaLibrary", "fanbox-preview");
 
     private static readonly Regex ArtistUrlRe = new(@"/fanbox/user/(\d+)", RegexOptions.IgnoreCase);
 
@@ -178,16 +170,38 @@ public partial class FanboxSearchView : UserControl
     /// <summary>「返回作家列表」按钮是否应该显示。</summary>
     public event Action<bool>? BackAvailabilityChanged;
 
+    /// <summary>详情页「下载」按钮（在宿主的搜索栏上）需要重新取一次文案/可用性。</summary>
+    public event Action? DetailDownloadChanged;
+
     /// <summary>当前是否可返回上一层（宿主切回本来源时用它恢复返回按钮）。</summary>
     public bool CanGoBack =>
         _level == "detail" || (_level == "posts" && _fromArtists);
 
-    /// <summary>返回按钮文案：按当前层级切换（对齐 Web fbUpdateBackBtn）。</summary>
-    public string BackLabel => _level switch
+    /// <summary>返回按钮文案：两级都只写「返回」，回哪一层看当前层级（对齐 Web fbUpdateToolbarBtns）。</summary>
+    public string BackLabel => I18n.Tr("返回");
+
+    // ---------- 详情页「下载」（按钮在宿主 SearchPage 的搜索栏上，查询 与 返回 之间）----------
+
+    /// <summary>只在作品详情层显示。</summary>
+    public bool CanDownloadDetail => _level == "detail" && _detailPostId.Length > 0;
+
+    /// <summary>已入库/下载中时转成状态文案（同 Web 的工具栏「下载」）。</summary>
+    public string DetailDownloadLabel => _detailState switch
     {
-        "detail" => I18n.Tr("← 返回作品列表"),
-        _ => I18n.Tr("← 返回作家列表"),
+        "已品悦" => I18n.Tr("已下载"),
+        "下载中" or "已下载" => _detailState,
+        _ => I18n.Tr("下载"),
     };
+
+    /// <summary>已入库/下载中的作品不必再下。</summary>
+    public bool DetailDownloadEnabled => _detailState is not ("已品悦" or "下载中" or "已下载");
+
+    /// <summary>宿主搜索栏的「下载」：入队当前详情这一篇。</summary>
+    public void DownloadDetail()
+    {
+        if (_detailPostId.Length > 0)
+            _ = EnqueueAsync([_detailPostId]);
+    }
 
     /// <summary>宿主的返回按钮：按当前层级回上一层。</summary>
     public void GoBack()
@@ -234,9 +248,8 @@ public partial class FanboxSearchView : UserControl
         SelectBar.Visibility = level == "posts" ? Visibility.Visible : Visibility.Collapsed;
         CardList.Visibility = level is "artists" or "posts" ? Visibility.Visible : Visibility.Collapsed;
         DetailPane.Visibility = level == "detail" ? Visibility.Visible : Visibility.Collapsed;
-        // 操作条在滚动区之外（第 0 行），随层级与详情面板同步显隐
-        DetailBar.Visibility = DetailPane.Visibility;
         BackAvailabilityChanged?.Invoke(CanGoBack);
+        DetailDownloadChanged?.Invoke();
     }
 
     // ---------- 搜索 ----------
@@ -414,7 +427,7 @@ public partial class FanboxSearchView : UserControl
                     Selectable = state.Length == 0 && (p.Files.Count > 0 || drive > 0),
                 });
             }
-            SetStatus(PostCountText());
+            SetStatus(ArtistLineText());
             _ = LoadThumbnailsAsync(generation);
         }
         finally
@@ -451,18 +464,18 @@ public partial class FanboxSearchView : UserControl
 
     // ---------- 作品详情 ----------
 
-    /// <summary>从详情返回作家主页：网格与已翻页数据都还在，恢复计数行即可。</summary>
+    /// <summary>从详情返回作家主页：网格与已翻页数据都还在，恢复标题行即可。</summary>
     private void GoBackToPosts()
     {
         ShowLevel("posts");
-        SetStatus(PostCountText());
+        SetStatus(ArtistLineText());
     }
 
-    /// <summary>作家主页的计数行文案（加载完与从详情返回时共用同一处）。</summary>
-    private string PostCountText() =>
-        $"{(_artistName.Length > 0 ? _artistName : _artistId)}　" +
-        I18n.Format(I18n.Tr("已加载 {n} 篇作品"), ("n", _posts.Count)) +
-        (_hasMore ? I18n.Tr("（下拉加载更多）") : "");
+    /// <summary>
+    /// 作家主页的标题行：只写这是谁的主页。
+    /// 已加载多少篇不显示——下拉到底自动续页，这个数字随时在变、对用户也没用。
+    /// </summary>
+    private string ArtistLineText() => _artistName.Length > 0 ? _artistName : _artistId;
 
     /// <summary>点作品卡进入：拉取正文与附件清单并渲染。</summary>
     private async Task OpenPostAsync(FanboxCardItem card)
@@ -471,13 +484,16 @@ public partial class FanboxSearchView : UserControl
         _detailPostId = card.Id;
         _detailState = card.State;
         ShowLevel("detail");
-        SetStatus(card.Title);
+        SetStatus("");   // 标题就在下面的详情里，计数行不再重复一遍
 
         // 先清空上一篇的内容，免得新旧混显
         DetailTitle.Text = card.Title;
-        DetailMainImage.Source = null;
+        DetailCoverImage.Source = null;
         _detailImages.Clear();
-        DetailThumbs.ItemsSource = _detailImages;
+        _detailPending.Clear();
+        _detailQueued.Clear();
+        DetailPages.ItemsSource = _detailImages;
+        DetailPagesHeader.Visibility = Visibility.Collapsed;
         DetailFields.Children.Clear();
         DetailOthers.ItemsSource = null;
         DetailLinks.Children.Clear();
@@ -499,7 +515,7 @@ public partial class FanboxSearchView : UserControl
             return;
         }
         RenderDetail(post);
-        _ = LoadDetailImagesAsync(generation);
+        StartDetailImages(generation);
     }
 
     /// <summary>渲染详情：标题 + 字段 + 正文 + 其他附件 + 图集占位（图片随后异步填充）。</summary>
@@ -509,9 +525,7 @@ public partial class FanboxSearchView : UserControl
         var busy = _detailState is "下载中" or "已下载";
 
         DetailTitle.Text = post.Title.Length > 0 ? post.Title : post.Id;
-        DetailDownloadButton.Content = done ? I18n.Tr("已下载")
-            : busy ? _detailState : I18n.Tr("下载本篇");
-        DetailDownloadButton.IsEnabled = !done && !busy;
+        DetailDownloadChanged?.Invoke();   // 「下载」按钮在宿主搜索栏上，由它重新取文案/可用性
 
         var images = post.Files.Where(f => PawchiveApi.IsImageName(f.Name)).ToList();
         var others = post.Files.Where(f => !PawchiveApi.IsImageName(f.Name)).ToList();
@@ -546,12 +560,16 @@ public partial class FanboxSearchView : UserControl
             {
                 Name = f.Name,
                 ThumbUrl = PawchiveApi.ThumbUrl(f.Path),
-                FullUrl = PawchiveApi.FileUrl(f.Path, f.Name),
             });
         if (images.Count == 0)
         {
             DetailNoImage.Text = I18n.Tr("这篇没有图片");
             DetailNoImage.Visibility = Visibility.Visible;
+        }
+        else
+        {
+            DetailPagesHeader.Text = I18n.Format(I18n.Tr("全部图片（{n} 张）"), ("n", images.Count));
+            DetailPagesHeader.Visibility = Visibility.Visible;
         }
     }
 
@@ -631,86 +649,117 @@ public partial class FanboxSearchView : UserControl
     /// 一律 404（见 DownloadEngine 的预览图回退）。要原图请下载入库。
     /// 预览图同时在临时目录存一份本地副本，供看图窗口按路径翻页。
     /// </summary>
-    private async Task LoadDetailImagesAsync(int generation)
-    {
-        var dir = Path.Combine(PreviewCacheDir, _detailPostId);
-        try { Directory.CreateDirectory(dir); }
-        catch (IOException) { dir = ""; }
-        catch (UnauthorizedAccessException) { dir = ""; }
+    // ---------- 页尾图流的懒加载 ----------
+    //
+    // 只下载滚到跟前的图：一篇动辄三四十张，进详情就整篇拉下来会把带宽占满、首屏反而最慢。
+    // 首屏那几张（DetailEagerPages）不等滚动事件，渲染完就开始下；其余由 DetailPane 的
+    // ScrollChanged 按可见性补队（等价 Web 的 IntersectionObserver + rootMargin）。
 
-        using var client = Http.CreateClient(TimeSpan.FromSeconds(20), PawchiveApi.UserAgent);
+    /// <summary>详情渲染完：先把首屏那几张排进队，再等布局完成按可见性补一批。</summary>
+    private void StartDetailImages(int generation)
+    {
+        for (var i = 0; i < Math.Min(DetailEagerPages, _detailImages.Count); i++)
+            EnqueueDetailImage(_detailImages[i], generation);
+        // 容器要等一轮布局才生成，布局完再按可见性补队
+        Dispatcher.BeginInvoke(new Action(QueueVisibleDetailImages),
+            System.Windows.Threading.DispatcherPriority.Loaded);
+    }
+
+    private void DetailPane_ScrollChanged(object sender, ScrollChangedEventArgs e)
+    {
+        if (_level == "detail")
+            QueueVisibleDetailImages();
+    }
+
+    /// <summary>把视口上下一屏范围内、还没下的图排进队（每张图加载完会撑高内容、再次触发本方法）。</summary>
+    private void QueueVisibleDetailImages()
+    {
+        if (_level != "detail" || _detailImages.Count == 0)
+            return;
+        var viewport = DetailPane.ViewportHeight;
+        if (viewport <= 0)
+            return;
+        var margin = viewport * DetailLookahead;
+        var generation = _detailGen;
         for (var i = 0; i < _detailImages.Count; i++)
         {
-            if (generation != _detailGen)
-                return;
             var item = _detailImages[i];
+            if (item.Thumb != null || _detailQueued.Contains(item))
+                continue;
+            if (DetailPages.ItemContainerGenerator.ContainerFromIndex(i) is not FrameworkElement cell)
+                continue;
+            double y;
             try
             {
-                var bytes = await client.GetByteArrayAsync(item.ThumbUrl);
-                if (generation != _detailGen)
-                    return;
-                if (dir.Length > 0)
-                {
-                    // 站点预览图一律重编码为 jpeg（URL 后缀仍是原扩展名），本地副本按序号命名
-                    var local = Path.Combine(dir, (i + 1).ToString("D3") + ".jpg");
-                    try
-                    {
-                        await File.WriteAllBytesAsync(local, bytes);
-                        item.LocalPath = local;
-                    }
-                    catch (IOException) { }
-                }
-                var image = new BitmapImage();
-                using (var ms = new MemoryStream(bytes))
-                {
-                    image.BeginInit();
-                    image.CacheOption = BitmapCacheOption.OnLoad;
-                    image.StreamSource = ms;
-                    image.EndInit();
-                }
-                image.Freeze();
-                item.Thumb = image;
-                if (i == 0)
-                    SelectDetailImage(item);
+                y = cell.TransformToAncestor(DetailPane).Transform(default).Y;
             }
-            catch (Exception e) when (e is HttpRequestException or TaskCanceledException
-                                          or NotSupportedException or ArgumentException)
+            catch (InvalidOperationException)
             {
-                // 单张失败不影响其它
+                continue;   // 这一格还没排完版，等下一次滚动/布局再说
             }
+            if (y > viewport + margin || y + cell.ActualHeight < -margin)
+                continue;
+            EnqueueDetailImage(item, generation);
         }
     }
 
-    /// <summary>把某张图设为大图，并把缩略图条的高亮挪过去。</summary>
-    private void SelectDetailImage(FanboxImageItem item)
+    private void EnqueueDetailImage(FanboxImageItem item, int generation)
     {
-        foreach (var x in _detailImages)
-            x.IsSelected = ReferenceEquals(x, item);
-        DetailMainImage.Source = item.Thumb;
-    }
-
-    private void DetailThumb_Click(object sender, MouseButtonEventArgs e)
-    {
-        if ((sender as FrameworkElement)?.DataContext is FanboxImageItem item)
-            SelectDetailImage(item);
-    }
-
-    /// <summary>点大图：用程序内看图窗口翻看这篇的全部预览图（对齐 Web 的灯箱）。</summary>
-    private void DetailMainImage_Click(object sender, MouseButtonEventArgs e)
-    {
-        var paths = _detailImages.Where(x => x.LocalPath.Length > 0).Select(x => x.LocalPath).ToList();
-        if (paths.Count == 0)
+        if (!_detailQueued.Add(item))
             return;
-        var current = _detailImages.FirstOrDefault(x => x.IsSelected);
-        var index = current is null ? 0 : Math.Max(0, paths.IndexOf(current.LocalPath));
-        new ImageViewerDialog(paths, index) { Owner = Window.GetWindow(this) }.ShowDialog();
+        _detailPending.Enqueue(item);
+        if (!_detailPumping)
+            _ = PumpDetailImagesAsync(generation);
     }
 
-    /// <summary>详情页「下载本篇」。</summary>
-    private void DetailDownload_Click(object sender, RoutedEventArgs e)
+    /// <summary>串行下载队列里的图：并发拉几十张只会互相抢带宽，看的人始终只等最上面那张。</summary>
+    private async Task PumpDetailImagesAsync(int generation)
     {
-        if (_detailPostId.Length > 0)
-            _ = EnqueueAsync([_detailPostId]);
+        _detailPumping = true;
+        try
+        {
+            // pawchive 的防护网关拦浏览器 UA，取预览图同样要用中性 UA
+            using var client = Http.CreateClient(TimeSpan.FromSeconds(20), PawchiveApi.UserAgent);
+            while (_detailPending.Count > 0)
+            {
+                if (generation != _detailGen)
+                    return;
+                var item = _detailPending.Dequeue();
+                await LoadDetailImageAsync(client, item, generation);
+            }
+        }
+        finally
+        {
+            _detailPumping = false;
+        }
+    }
+
+    private async Task LoadDetailImageAsync(HttpClient client, FanboxImageItem item, int generation)
+    {
+        try
+        {
+            var bytes = await client.GetByteArrayAsync(item.ThumbUrl);
+            if (generation != _detailGen)
+                return;
+            var image = new BitmapImage();
+            using (var ms = new MemoryStream(bytes))
+            {
+                image.BeginInit();
+                image.CacheOption = BitmapCacheOption.OnLoad;
+                image.StreamSource = ms;
+                image.EndInit();
+            }
+            image.Freeze();
+            item.Thumb = image;
+            // 首图顺带当封面（上半那格），省一次重复下载
+            if (ReferenceEquals(item, _detailImages.FirstOrDefault()))
+                DetailCoverImage.Source = image;
+        }
+        catch (Exception e) when (e is HttpRequestException or TaskCanceledException
+                                      or NotSupportedException or ArgumentException)
+        {
+            // 单张失败不影响其它；失败的那格留占位底色
+        }
     }
 
     // ---------- 选择与下载 ----------
@@ -808,12 +857,11 @@ public partial class FanboxSearchView : UserControl
                 Thumb = _cards[i].Thumb,
             };
         }
-        // 正停在被入队作品的详情页时，「下载本篇」同步转为禁用的状态按钮
+        // 正停在被入队作品的详情页时，搜索栏那颗「下载」同步转为禁用的状态按钮
         if (_level == "detail" && wanted.Contains(_detailPostId))
         {
             _detailState = "下载中";
-            DetailDownloadButton.Content = _detailState;
-            DetailDownloadButton.IsEnabled = false;
+            DetailDownloadChanged?.Invoke();
         }
         UpdateSelectInfo();
         InAppDialog.Info(this,

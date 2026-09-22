@@ -37,12 +37,15 @@ function renderSearchArea() {
   autoAll.title = '开启后自动检测网盘并加入下载，无需逐个点击';
   autoAll.onclick = () => toggleAutoAll(autoAll);
   const backList = el('button', 'icon-btn', '返回作品列表'); backList.id = 'backListBtn'; backList.style.display = 'none'; backList.onclick = goBackToMaker;
-  const fbBack = el('button', 'icon-btn', '返回作家列表'); fbBack.id = 'fbBackBtn'; fbBack.style.display = 'none'; fbBack.onclick = fbGoBackToArtists;
+  // FANBOX 详情页的「下载」：常驻工具栏，排在 查询 与 返回 之间（详情页自己不再另起一条操作条）
+  const fbDl = el('button', 'icon-btn primary', '下载'); fbDl.id = 'fbDlPostBtn'; fbDl.style.display = 'none';
+  fbDl.onclick = fbDownloadDetail;
+  const fbBack = el('button', 'icon-btn', '返回'); fbBack.id = 'fbBackBtn'; fbBack.style.display = 'none'; fbBack.onclick = fbGoBackToArtists;
   // FANBOX 作家监控没有工具栏入口：列表与间隔在「系统设置 → FANBOX 作家监控」里管，
   // 这里只保留作家主页选择条上的「+ 监控作家」（加监控本就要先选到作家）
   const ehBack = el('button', 'icon-btn', '返回搜索结果'); ehBack.id = 'ehBackBtn'; ehBack.style.display = 'none'; ehBack.onclick = ehGoBackToList;
 
-  bar.append(src, inp, btn, autoAll, backList, fbBack, ehBack);
+  bar.append(src, inp, btn, autoAll, backList, fbDl, fbBack, ehBack);
   host.appendChild(bar);
 
   // DLsite：社团网格与帖子列表分两个 pane（进帖子列表时只隐藏社团 pane，保留 DOM 与后台扫描，返回即缓存恢复）
@@ -81,9 +84,10 @@ function applySearchSource() {
   const autoAll = $('autoAllBtn'); if (autoAll) autoAll.style.display = (dl && makerState) ? '' : 'none';
   const backList = $('backListBtn'); if (backList) backList.style.display = 'none';
   const fbBack = $('fbBackBtn'); if (fbBack) fbBack.style.display = 'none';
+  const fbDl = $('fbDlPostBtn'); if (fbDl) fbDl.style.display = 'none';
   const ehBack = $('ehBackBtn'); if (ehBack) ehBack.style.display = 'none';
   if (dl) updateBackListBtn();
-  else if (fbOn) fbUpdateBackBtn();
+  else if (fbOn) fbUpdateToolbarBtns();
   else ehUpdateBackBtn();
 }
 

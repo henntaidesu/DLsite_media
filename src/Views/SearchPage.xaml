@@ -22,6 +22,7 @@
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
                 <ComboBox x:Name="SourceBox" MinWidth="104" Margin="0,0,8,0" VerticalContentAlignment="Center"
                           SelectionChanged="SourceBox_SelectionChanged" />
@@ -32,11 +33,15 @@
                         Click="BackButton_Click" Content="← 返回结果" />
                 <Button x:Name="AutoDownloadButton" Grid.Column="4" Margin="8,0,0,0" MinWidth="110"
                         Visibility="Collapsed" Click="AutoDownloadToggle_Click" Content="自动下载：关" />
-                <Button x:Name="FanboxBackButton" Grid.Column="5" Margin="8,0,0,0" MinWidth="120"
-                        Visibility="Collapsed" Click="FanboxBack_Click" Content="← 返回作家列表" />
+                <!-- FANBOX 详情页的「下载」：排在 查询 与 返回 之间（详情页自己不再另起一条操作条） -->
+                <Button x:Name="FanboxDownloadButton" Grid.Column="5" Margin="8,0,0,0" MinWidth="90"
+                        Visibility="Collapsed" Style="{StaticResource AccentButton}"
+                        Click="FanboxDownload_Click" Content="下载" />
+                <Button x:Name="FanboxBackButton" Grid.Column="6" Margin="8,0,0,0" MinWidth="90"
+                        Visibility="Collapsed" Click="FanboxBack_Click" Content="返回" />
                 <!-- 作家监控的列表与间隔在「系统设置 → FANBOX 作家监控」里管，这里不再放入口；
                      添加监控仍在作家主页的选择条上（「+ 监控作家」） -->
-                <Button x:Name="EhentaiBackButton" Grid.Column="6" Margin="8,0,0,0" MinWidth="120"
+                <Button x:Name="EhentaiBackButton" Grid.Column="7" Margin="8,0,0,0" MinWidth="120"
                         Visibility="Collapsed" Click="EhentaiBack_Click" Content="← 返回搜索结果" />
             </Grid>
         </Border>

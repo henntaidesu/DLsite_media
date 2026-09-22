@@ -35,16 +35,6 @@
             </Grid>
         </Border>
 
-        <!-- 详情操作条与 SelectBar 同占第 0 行（两者按层级互斥显示）。
-             放在滚动区之外，才能像 Web 的 .toolbar 一样常驻页顶、不被内容顶走。 -->
-        <Border x:Name="DetailBar" Grid.Row="0" Style="{StaticResource ToolbarCard}" Visibility="Collapsed">
-            <StackPanel Orientation="Horizontal">
-                <Button x:Name="DetailDownloadButton" MinWidth="110"
-                        Style="{StaticResource AccentButton}"
-                        Click="DetailDownload_Click" Content="下载本篇" />
-            </StackPanel>
-        </Border>
-
         <Grid Grid.Row="1">
             <!-- 作家卡 / 作品卡共用同一个虚拟化换行网格（按当前层级填不同内容） -->
             <ListBox x:Name="CardList"
@@ -164,10 +154,11 @@
                 </ListBox.ItemTemplate>
             </ListBox>
 
-            <!-- 作品详情（对齐 Web 的 fbDetailPane）：图集 + 字段 + 正文 + 其他附件。
-                 结构照搬媒体库详情页（Web .detail > .dtop > .gallery + .fields）；
+            <!-- 作品详情（对齐 Web 的 fbDetailPane）：封面+字段 → 正文 → 附件/网盘 → 页尾整篇图流。
+                 上半结构照搬媒体库详情页（Web .detail > .dtop > .gallery + .fields）；
+                 看图不开弹窗：整篇的图竖排铺在页尾，滚动即读（同 Web 的 .fbpages）。
                  顶部「下载本篇」操作条见上面的 DetailBar（在滚动区之外，常驻页顶）。 -->
-            <ScrollViewer x:Name="DetailPane" Visibility="Collapsed"
+            <ScrollViewer x:Name="DetailPane" Visibility="Collapsed" ScrollChanged="DetailPane_ScrollChanged"
                           VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
                 <StackPanel Margin="0,0,8,0">
                     <Border Style="{StaticResource Card}" Padding="16">
@@ -180,35 +171,14 @@
                                     <ColumnDefinition Width="1.6*" />
                                 </Grid.ColumnDefinitions>
 
-                                <!-- 图集：大图 + 缩略图条 -->
+                                <!-- 封面：只是张封面，内容在页尾的图流里，故不可点 -->
                                 <StackPanel>
                                     <Border Background="#15151A" CornerRadius="8" MinHeight="140">
-                                        <Image x:Name="DetailMainImage" Stretch="Uniform" MaxHeight="460"
-                                               Cursor="Hand" MouseLeftButtonUp="DetailMainImage_Click" />
+                                        <Image x:Name="DetailCoverImage" Stretch="Uniform" MaxHeight="460" />
                                     </Border>
                                     <TextBlock x:Name="DetailNoImage" Text="这篇没有图片" Visibility="Collapsed"
                                                Style="{StaticResource CaptionText}" Margin="0,10,0,0"
                                                HorizontalAlignment="Center" />
-                                    <ScrollViewer Margin="0,8,0,0" HorizontalScrollBarVisibility="Auto"
-                                                  VerticalScrollBarVisibility="Disabled">
-                                        <ItemsControl x:Name="DetailThumbs">
-                                            <ItemsControl.ItemsPanel>
-                                                <ItemsPanelTemplate>
-                                                    <StackPanel Orientation="Horizontal" />
-                                                </ItemsPanelTemplate>
-                                            </ItemsControl.ItemsPanel>
-                                            <ItemsControl.ItemTemplate>
-                                                <DataTemplate>
-                                                    <Border Margin="0,0,6,0" CornerRadius="5" BorderThickness="2"
-                                                            BorderBrush="{Binding SelBorderBrush}"
-                                                            Opacity="{Binding SelOpacity}">
-                                                        <Image Source="{Binding Thumb}" Height="54" Stretch="Uniform"
-                                                               Cursor="Hand" MouseLeftButtonUp="DetailThumb_Click" />
-                                                    </Border>
-                                                </DataTemplate>
-                                            </ItemsControl.ItemTemplate>
-                                        </ItemsControl>
-                                    </ScrollViewer>
                                 </StackPanel>
 
                                 <!-- 字段（作家 / 发布 / 标签 / 文件 / 状态） -->
@@ -240,6 +210,24 @@
                             <StackPanel x:Name="DetailLinks" />
                             <TextBlock x:Name="DetailLinksNote" TextWrapping="Wrap" Margin="0,8,0,0"
                                        Visibility="Collapsed" Style="{StaticResource CaptionText}" />
+
+                            <!-- 全部图片：竖排连读，放在最后——上面的信息与操作看完就一路滚到底，
+                                 中间不再被别的区块打断（同 Web 的页尾图流）。
+                                 未加载的格子留 320 占位高度，图到位后按真实高度排（见 PlaceholderHeight）。 -->
+                            <TextBlock x:Name="DetailPagesHeader" FontSize="17" FontWeight="Medium"
+                                       Margin="0,22,0,10" Visibility="Collapsed" />
+                            <ItemsControl x:Name="DetailPages" HorizontalAlignment="Center">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Border Background="{StaticResource WindowBrush}" CornerRadius="8"
+                                                MinHeight="{Binding PlaceholderHeight}" MaxWidth="900"
+                                                Margin="0,0,0,10">
+                                            <!-- DownOnly：预览图长边约 800px，撑到格宽只会糊，只缩不放（等价 Web 的 max-width:100%） -->
+                                            <Image Source="{Binding Thumb}" Stretch="Uniform" StretchDirection="DownOnly" />
+                                        </Border>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
                         </StackPanel>
                     </Border>
                 </StackPanel>

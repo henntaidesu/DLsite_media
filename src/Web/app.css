@@ -188,6 +188,14 @@
              padding: 7px 10px; font-size: 13px; word-break: break-all; }
   /* 清单下方的一句说明（如「网盘文件会随本篇一起下载」），不是空状态，不占整屏 */
   .fb-note { color: var(--muted); font-size: 12.5px; margin-top: 8px; }
+  /* FANBOX 详情页尾的整篇图流：竖排连读，一路滚到底，不再点开灯箱。
+     未加载的格子留 320px 占位高度——整列塌成 0 高的话会一次性全落进视口，懒加载就白做了；
+     图一到位由脚本把这段高度撤掉，改按图片真实高度排。 */
+  .fbpages { display: flex; flex-direction: column; align-items: center; gap: 10px; }
+  .fbpage { width: 100%; max-width: 900px; min-height: 320px; border-radius: 8px;
+            background: var(--surface2); display: flex; align-items: center; justify-content: center; }
+  /* 不放大：预览图长边约 800px，竖图更窄，硬撑到格宽只会糊。按原始尺寸显示、超宽才缩 */
+  .fbpage img { max-width: 100%; height: auto; display: block; border-radius: 8px; }
   /* 文本占卡片高度的 1/3；min-height:0 允许收缩，超出按行夹取隐藏 */
   .card .wt { flex: 1 1 0; min-height: 0; padding: 8px 10px 10px; font-size: 13.5px; font-weight: 500;
               display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
@@ -199,6 +207,8 @@
   @media (max-width: 720px) { .dtop { grid-template-columns: minmax(0, 1fr); } }
   .gallery { min-width: 0; }
   .gallery img.main { width: 100%; max-width: 100%; border-radius: 8px; background: #15151a; cursor: zoom-in; display: block; }
+  /* FANBOX 的封面只是张封面（内容在页尾的图流里），点不开东西，就别给放大镜光标 */
+  .gallery img.main.fbcover { cursor: default; }
   .thumbs { display: flex; gap: 6px; overflow-x: auto; margin-top: 8px; }
   .thumbs img { height: 54px; border-radius: 5px; cursor: pointer; opacity: .65; border: 2px solid transparent; }
   .thumbs img.sel { opacity: 1; border-color: var(--accent); }

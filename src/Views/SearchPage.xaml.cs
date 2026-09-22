@@ -321,11 +321,12 @@ public partial class SearchPage : UserControl
         };
         FanboxView.BackAvailabilityChanged += available =>
         {
-            // 文案随层级变（详情 → 返回作品列表；作家主页 → 返回作家列表）
             FanboxBackButton.Content = FanboxView.BackLabel;
             FanboxBackButton.Visibility =
                 available && _source == SourceFanbox ? Visibility.Visible : Visibility.Collapsed;
         };
+        // 详情页的「下载」也在本页的搜索栏上，文案/可用性随作品状态变
+        FanboxView.DetailDownloadChanged += SyncFanboxDownloadButton;
 
         // E-Hentai 结果区的计数与返回按钮同样由本页的搜索栏统一呈现
         EhentaiView.StatusChanged += text =>
@@ -389,6 +390,7 @@ public partial class SearchPage : UserControl
         AutoDownloadButton.Visibility = Visibility.Collapsed;
         BackButton.Visibility = Visibility.Collapsed;
         FanboxBackButton.Visibility = Visibility.Collapsed;
+        FanboxDownloadButton.Visibility = Visibility.Collapsed;
         EhentaiBackButton.Visibility = Visibility.Collapsed;
         CountText.Visibility = Visibility.Collapsed;
 
@@ -417,6 +419,17 @@ public partial class SearchPage : UserControl
         CountText.Visibility = CountText.Text.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
         FanboxBackButton.Content = FanboxView.BackLabel;
         FanboxBackButton.Visibility = FanboxView.CanGoBack ? Visibility.Visible : Visibility.Collapsed;
+        SyncFanboxDownloadButton();
+    }
+
+    /// <summary>把 FANBOX 详情页那颗「下载」的文案/可用性/显隐同步到搜索栏（只在详情层出现）。</summary>
+    private void SyncFanboxDownloadButton()
+    {
+        FanboxDownloadButton.Content = FanboxView.DetailDownloadLabel;
+        FanboxDownloadButton.IsEnabled = FanboxView.DetailDownloadEnabled;
+        FanboxDownloadButton.Visibility =
+            _source == SourceFanbox && FanboxView.CanDownloadDetail
+                ? Visibility.Visible : Visibility.Collapsed;
     }
 
     /// <summary>各来源的输入框占位提示（对齐 Web 的 SEARCH_SOURCES.placeholder）。</summary>
@@ -431,6 +444,7 @@ public partial class SearchPage : UserControl
     {
         SearchButton.Content = I18n.Tr("查询");
         FanboxBackButton.Content = FanboxView.BackLabel;
+        FanboxDownloadButton.Content = FanboxView.DetailDownloadLabel;
         EhentaiBackButton.Content = EhentaiView.BackLabel;
         BackButton.Content = I18n.Tr("← 返回社团作品");
         LoadingText.Text = I18n.Tr("正在查询…");
@@ -470,6 +484,9 @@ public partial class SearchPage : UserControl
 
     /// <summary>搜索栏返回按钮：按 FANBOX 当前层级回上一层（详情 → 作品列表 → 作家列表）。</summary>
     private void FanboxBack_Click(object sender, RoutedEventArgs e) => FanboxView.GoBack();
+
+    /// <summary>搜索栏「下载」：入队 FANBOX 详情页当前这一篇。</summary>
+    private void FanboxDownload_Click(object sender, RoutedEventArgs e) => FanboxView.DownloadDetail();
 
     /// <summary>由系统设置页的监控卡「打开主页」触发：切到 FANBOX 来源并直接进这位作家的主页。</summary>
     public void OpenFanboxArtist(string artistId, string artistName)

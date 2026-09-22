@@ -17,6 +17,8 @@ let fbWatched = false;      // 当前作家是否已在监控中（作家主页�
 // 详情请求单独一套代际：看详情不应作废作家主页的在途分页与下拉监听（返回后还要继续翻页）
 let fbDetailGen = 0;
 let fbGridScroll = 0;       // 进详情前作品网格的滚动位置，返回时恢复
+let fbPageIo = null;        // 详情页图流的懒加载观察器（滚到跟前才给图贴 src）
+let fbDetail = null;        // 当前详情页的作品 { id, state }，工具栏「下载」据此定文案
 
 const fbImg = (url) => '/api/fanbox/image?url=' + enc(url);
 
@@ -37,36 +39,54 @@ function fbResetState() {
   if (fbPaging && fbPaging.io) fbPaging.io.disconnect();
   fbPaging = null;
   fbArtist = null; fbPosts = []; fbSel = new Set(); fbFromArtists = false;
-  fbLevel = 'artists'; fbGridScroll = 0; fbWatched = false;
+  fbLevel = 'artists'; fbGridScroll = 0; fbWatched = false; fbDetail = null;
+  fbStopPageIo();
   fbGen++; fbDetailGen++;
 }
 
 function fbShowPane(level) {
   fbLevel = level;
+  if (level !== 'detail') { fbStopPageIo(); fbDetail = null; }   // 离开详情就别再为看不见的图发请求
   $('fbArtistPane').style.display = level === 'artists' ? '' : 'none';
   $('fbPostPane').style.display = level === 'posts' ? '' : 'none';
   $('fbDetailPane').style.display = level === 'detail' ? '' : 'none';
-  fbUpdateBackBtn();
+  fbUpdateToolbarBtns();
 }
 
 const fbShowArtistPane = () => fbShowPane('artists');
 const fbShowPostPane = () => fbShowPane('posts');
 const fbShowDetailPane = () => fbShowPane('detail');
 
-// 工具栏返回按钮：作品详情 → 返回作品列表；作家主页 → 返回作家列表（仅从作家结果点进来时）。
-// 文案随层级切换，位置/样式同 DLsite 的「返回作品列表」。
-function fbUpdateBackBtn() {
+// 工具栏上属于 FANBOX 的两颗按钮（下载 / 返回）按当前层级归位。
+// 返回：详情 → 回作品列表，作家主页 → 回作家列表（仅从作家结果点进来时才有得回），文案一律「返回」。
+// 下载：只在详情页出现，已入库/下载中转成禁用的状态按钮。
+function fbUpdateToolbarBtns() {
   const b = $('fbBackBtn');
-  if (!b) return;
-  if (fbLevel === 'detail') {
-    b.textContent = '返回作品列表';
-    b.onclick = fbGoBackToPosts;
-    b.style.display = '';
-    return;
+  if (b) {
+    b.textContent = '返回';
+    b.onclick = fbLevel === 'detail' ? fbGoBackToPosts : fbGoBackToArtists;
+    b.style.display = (fbLevel === 'detail' || (fbLevel === 'posts' && fbFromArtists)) ? '' : 'none';
   }
-  b.textContent = '返回作家列表';
-  b.onclick = fbGoBackToArtists;
-  b.style.display = (fbLevel === 'posts' && fbFromArtists) ? '' : 'none';
+  const d = $('fbDlPostBtn');
+  if (!d) return;
+  if (fbLevel !== 'detail' || !fbDetail) { d.style.display = 'none'; return; }
+  const done = fbDetail.state === '已品悦';
+  const busy = fbDetail.state === '下载中' || fbDetail.state === '已下载';
+  d.style.display = '';
+  d.textContent = done ? '已下载' : (busy ? fbDetail.state : '下载');
+  d.disabled = done || busy;
+  d.classList.toggle('primary', !done && !busy);
+}
+
+// 工具栏「下载」：只入队当前详情这一篇
+async function fbDownloadDetail() {
+  const btn = $('fbDlPostBtn');
+  if (!fbDetail || !btn || btn.disabled) return;
+  await fbDownloadOne(fbDetail.id, btn);
+  // 入队成功时 fbEnqueue 会把 fbPosts 里的状态改成「下载中」，按钮跟着转成禁用态
+  const p = fbPosts.find(x => x.id === fbDetail.id);
+  if (p && p.state) fbDetail.state = p.state;
+  fbUpdateToolbarBtns();
 }
 
 function fbGoBackToArtists() {
@@ -74,17 +94,17 @@ function fbGoBackToArtists() {
   $('count').textContent = '';
 }
 
-// 从详情返回作家主页：网格与已翻页数据都还在 DOM 里，恢复计数行与滚动位置即可
+// 从详情返回作家主页：网格与已翻页数据都还在 DOM 里，恢复标题行与滚动位置即可
 function fbGoBackToPosts() {
   fbShowPostPane();
-  fbUpdatePostCount();
+  fbUpdateArtistLine();
   window.scrollTo(0, fbGridScroll);
 }
 
-function fbUpdatePostCount() {
-  const who = (fbArtist && (fbArtist.name || fbArtist.id)) || '';
-  const more = fbPaging && fbPaging.hasMore ? '（下拉加载更多）' : '';
-  $('count').textContent = `${who}　已加载 ${fbPosts.length} 篇作品${more}`;
+// 作家主页的标题行：只写这是谁的主页。
+// 已加载多少篇不显示——下拉到底自动续页，这个数字随时在变、对用户也没用。
+function fbUpdateArtistLine() {
+  $('count').textContent = (fbArtist && (fbArtist.name || fbArtist.id)) || '';
 }
 
 // ---------- 搜索作家 ----------
@@ -190,7 +210,7 @@ async function fbFetchPosts(gen, offset) {
   if (offset === 0) { fbWatched = !!d.watched; fbUpdateWatchBtn(); }
   if (fbPaging) { fbPaging.offset = offset + (d.posts || []).length; fbPaging.hasMore = !!d.hasMore; }
   fbPosts = fbPosts.concat(d.posts || []);
-  fbUpdatePostCount();
+  fbUpdateArtistLine();
   return d.posts || [];
 }
 
@@ -290,15 +310,45 @@ function fbUpdateSelInfo() {
 
 // ---------- 作品详情 ----------
 
-// 原图（file.<host>）对"只归档了预览"的投稿会 404（站点只存了预览图）：
-// 灯箱里遇到这种图自动回退到 800px 预览图，而不是留一个碎图标。
-const fbFullFallback = new Map();
-if ($('lbimg')) {
-  $('lbimg').addEventListener('error', () => {
-    const img = $('lbimg');
-    const alt = fbFullFallback.get(img.getAttribute('src') || '');
-    if (alt) img.src = alt;
+// 看图不走灯箱：整篇的图直接竖排铺在详情页页尾，滚动即读（同 E-Hentai 详情页把整本铺在页尾的做法）。
+// 图一律用 800px 预览：原图动辄几 MB，而且站点只归档了预览的投稿（has_full=false）取原图直接 404。
+const FB_EAGER_PAGES = 2;   // 首屏那几张不等观察器，进详情就开始下
+
+function fbStopPageIo() {
+  if (fbPageIo) { fbPageIo.disconnect(); fbPageIo = null; }
+}
+
+// 竖排图流：首屏的几张直接给 src，其余滚到跟前才贴。
+// 一篇动辄三四十张，进详情就全下会把带宽占满，首屏反而最慢。
+function fbBuildPages(imgs) {
+  fbStopPageIo();
+  const box = el('div', 'fbpages');
+  fbPageIo = new IntersectionObserver(es => {
+    es.forEach(e => {
+      if (!e.isIntersecting) return;
+      fbLoadPage(e.target);
+      if (fbPageIo) fbPageIo.unobserve(e.target);
+    });
+  }, { rootMargin: '600px' });   // 提前一屏开始取，滚到跟前时多半已就位
+  imgs.forEach((im, i) => {
+    const cell = el('div', 'fbpage');
+    const img = el('img');
+    img.alt = im.name || String(i + 1);
+    img.dataset.src = fbImg(im.thumb);
+    // 未加载的格子要留一段高度：整列都塌成 0 高的话会一次性全落进视口，懒加载等于没做。
+    // 图一到位就撤掉这段占位高度，按图片真实高度排版。
+    img.onload = () => { cell.style.minHeight = '0'; };
+    cell.appendChild(img);
+    box.appendChild(cell);
+    if (i < FB_EAGER_PAGES) fbLoadPage(img); else fbPageIo.observe(img);
   });
+  return box;
+}
+
+function fbLoadPage(img) {
+  if (!img.dataset.src) return;
+  img.src = img.dataset.src;
+  delete img.dataset.src;
 }
 
 // 点作品卡进入：拉取正文与附件清单并渲染
@@ -308,7 +358,7 @@ async function fbOpenPost(post) {
   fbShowDetailPane();
   const box = $('fbDetailPane');
   box.innerHTML = '<div class="empty"><span class="spin"></span> 正在获取作品内容…</div>';
-  $('count').textContent = post.title || post.id;
+  $('count').textContent = '';   // 标题就在下面的详情里，顶上不再重复一遍
   window.scrollTo(0, 0);
 
   const q = new URLSearchParams();
@@ -327,22 +377,9 @@ function fbRenderPost(box, d) {
   const done = d.state === '已品悦';
   const busy = d.state === '下载中' || d.state === '已下载';
 
-  // 顶部操作条：下载本篇 / 已下载状态
-  const bar = el('div', 'toolbar');
-  if (done || busy) {
-    const b = el('button', 'icon-btn', done ? '已下载' : d.state); b.disabled = true;
-    bar.appendChild(b);
-  } else {
-    const b = el('button', 'icon-btn primary', '下载本篇');
-    b.onclick = async () => {
-      await fbDownloadOne(d.id, b);
-      // 入队成功时 fbEnqueue 会把 fbPosts 里的状态改成「下载中」，详情按钮跟着转成禁用态
-      const p = fbPosts.find(x => x.id === d.id);
-      if (p && p.state) { b.textContent = p.state; b.disabled = true; b.classList.remove('primary'); }
-    };
-    bar.appendChild(b);
-  }
-  box.appendChild(bar);
+  // 下载这一篇的按钮在共用工具栏上（查询 与 返回 之间），详情页自己不再另起一条操作条
+  fbDetail = { id: d.id, state: d.state || '' };
+  fbUpdateToolbarBtns();
 
   const root = el('div', 'detail');
   root.appendChild(el('h1', null, d.title || d.id));
@@ -351,28 +388,10 @@ function fbRenderPost(box, d) {
   const imgs = d.images || [];
   const gallery = el('div', 'gallery');
   if (imgs.length) {
-    // 主图与缩略图条都用 800px 预览（快且一定存在）；点开灯箱才取原图，失败回退预览
-    const fulls = imgs.map(im => fbImg(im.full));
-    imgs.forEach((im, i) => fbFullFallback.set(fulls[i], fbImg(im.thumb)));
-    const main = el('img', 'main');
+    // 上半只摆一张封面（首图的 800px 预览），正经看图在页尾的图流里，点封面不再开灯箱
+    const main = el('img', 'main fbcover');
     main.src = fbImg(imgs[0].thumb);
-    main.onclick = () => LB.open(fulls, 0);
     gallery.appendChild(main);
-    if (imgs.length > 1) {
-      const thumbs = el('div', 'thumbs');
-      imgs.forEach((im, i) => {
-        const t = el('img'); t.src = fbImg(im.thumb); t.loading = 'lazy';
-        if (i === 0) t.className = 'sel';
-        t.onclick = () => {
-          main.src = fbImg(im.thumb);
-          main.onclick = () => LB.open(fulls, i);
-          thumbs.querySelectorAll('img').forEach(x => x.classList.remove('sel'));
-          t.classList.add('sel');
-        };
-        thumbs.appendChild(t);
-      });
-      gallery.appendChild(thumbs);
-    }
   } else {
     gallery.appendChild(el('div', 'empty', '这篇没有图片'));
   }
@@ -425,6 +444,12 @@ function fbRenderPost(box, d) {
     });
     root.appendChild(list);
     root.appendChild(el('div', 'fb-note', '下载本篇时会一并下载网盘里的文件，完成后按设置自动解压'));
+  }
+
+  // 全部图片放在最后：上面的信息与操作看完就是一路滚到底连读，中间不再被别的区块打断
+  if (imgs.length) {
+    root.appendChild(el('h1', 'fb-subtitle', `全部图片（${imgs.length} 张）`));
+    root.appendChild(fbBuildPages(imgs));
   }
   box.appendChild(root);
 }

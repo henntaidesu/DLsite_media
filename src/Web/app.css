@@ -2,6 +2,8 @@
     --bg: #1b1b1f; --surface: #26262b; --surface2: #2f2f36; --line: #3a3a42;
     --text: #e8e8ea; --muted: #9a9aa3; --accent: #6aa3ff; --accent-dim: #4a78c0;
     --radius: 10px; --nav-w: 210px;
+    /* 页面左右内边距（工具栏卡片封住空隙时要按它外扩），以及卡片与顶栏/内容之间的空隙 */
+    --pad: max(12px, env(safe-area-inset-left)); --bar-gap: 10px;
   }
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
   html, body { margin: 0; height: 100%; }
@@ -71,20 +73,31 @@
   .layout-mobile #search { order: 5; flex-basis: 100%; }
   .layout-mobile #sort { order: 6; }
 
-  main { padding: 12px max(12px, env(safe-area-inset-left)) 40px; }
+  main { padding: 12px var(--pad) 40px; }
   .count { color: var(--muted); font-size: 13px; margin: 4px 2px 12px; }
-  /* 页内工具栏与顶栏一样常驻页顶，不随内容滚走。
+  /* 页内工具栏：一张常驻页顶的悬浮卡片，不随内容滚走。
      top 不能写死：顶栏在窄屏会换行、详情页还会多出一排操作按钮，高度不固定；
-     且一页可能叠两条（搜索栏 + 选择条）。故由 syncStickyBars() 实测后逐条写入 --topbar-h / 各条的 top。
-     左右负外边距把底色铺满 main 的左右内边距，内容从条的下沿整齐消失。 */
+     且一页可能叠两条（搜索栏 + 选择条）——叠起来要拼成同一张卡，中间不留缝也不重复描边。
+     故由 syncStickyBars() 实测后逐条写入 top，并按所处位置标 bar-lead / stack-top|mid|bot。 */
   .toolbar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center;
              position: sticky; top: var(--topbar-h, 52px); z-index: 20;
-             background: var(--bg); border-bottom: 1px solid var(--line);
-             margin: 0 calc(-1 * max(12px, env(safe-area-inset-left))) 12px;
-             padding: 8px max(12px, env(safe-area-inset-left)); }
+             background: var(--surface); border: 1px solid var(--line);
+             border-radius: var(--radius); box-shadow: 0 6px 16px rgba(0,0,0,.35);
+             margin: 0 0 var(--bar-gap); padding: 8px 10px; }
+  /* 叠起来的那几条：接缝处去掉圆角与上边框（用上一条的下边框当分隔线），首尾各圆一半 */
+  .toolbar.stack-top { border-bottom-left-radius: 0; border-bottom-right-radius: 0; margin-bottom: 0; }
+  .toolbar.stack-mid { border-radius: 0; border-top: none; margin-bottom: 0; }
+  .toolbar.stack-bot { border-top-left-radius: 0; border-top-right-radius: 0; border-top: none; }
+  /* 投影只由整叠最下面那条投，否则段与段之间会叠出一道暗边 */
+  .toolbar.stack-top, .toolbar.stack-mid { box-shadow: none; }
+  /* 卡片与顶栏之间留一道空隙（悬浮观感）；空隙要用页面底色封住，否则滚动时内容会从缝里透出来。
+     左右各外扩 main 的内边距，把整行封严。 */
+  .toolbar.bar-lead::before { content: ''; position: absolute; bottom: calc(100% + 1px);
+                              left: calc(-1 * var(--pad)); right: calc(-1 * var(--pad));
+                              height: var(--bar-gap); background: var(--bg); }
   /* 分区内部的行内工具栏（系统设置的「媒体库」分区）不是页面顶栏，不参与顶置 */
-  .toolbar.inline { position: static; background: none; border-bottom: none;
-                    margin: 0 0 12px; padding: 0; }
+  .toolbar.inline { position: static; background: none; border: none; box-shadow: none;
+                    border-radius: 0; margin: 0 0 12px; padding: 0; }
 
   .grid { display: grid; gap: 12px; justify-content: start; }
   /* 列宽下限取 max(150px, 单行 8 列时每列的宽度)：一行最多 8 张，窄屏自动减列；
@@ -316,8 +329,12 @@
      （桌面端那一行是 DockPanel，空间不够时也是压缩这一格） */
   .frow > .grow { flex: 1 1 160px; min-width: 96px; }
   .frow input, .frow select { flex: none; }
-  .frow textarea { min-height: 84px; resize: vertical; font-family: inherit; line-height: 1.6; width: 100%; }
-  /* 多行输入那一行：标签与控件顶对齐（桌面端 VerticalAlignment=Top） */
+  /* 解压密码库：一个输入框一条密码，末行是「＋」新增（settings.js）。
+     .frow input 的 flex:none 要在这里翻回来，否则输入框会缩成内容宽 */
+  .pwlist { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
+  .pwrow { display: flex; align-items: center; gap: 6px; width: 100%; }
+  .frow .pwrow input { flex: 1 1 auto; min-width: 0; }
+  /* 密码库那一行：标签与控件顶对齐（桌面端 VerticalAlignment=Top） */
   .frow.top { align-items: flex-start; }
   .frow.top > label { padding-top: 9px; }
   .ro { color: var(--muted); font-size: 13px; word-break: break-all; }

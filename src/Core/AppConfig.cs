@@ -58,6 +58,7 @@ public static class AppConfig
         ["ehentai"] = new()
         {
             ["host"] = "e-hentai.org", ["member_id"] = "", ["pass_hash"] = "", ["igneous"] = "",
+            ["username"] = "",
             ["original"] = "True",
         },
         // 图床存储（自建 Image_hosting 服务）：开启后作品卡封面由图床直供，不再逐张唤醒 HDD
@@ -377,6 +378,12 @@ public static class AppConfig
         }
         set => Write("ehentai", "host", value.Trim());
     }
+
+    /// <summary>
+    /// 站点账号名。只为「登录并获取 Cookie」按钮回填输入框而存，鉴权一律用下面三个 cookie。
+    /// 密码有意不存：cookie 本身就是长期凭据，留一份明文口令没有额外用处。
+    /// </summary>
+    public static string EhentaiUsername => (Read("ehentai", "username", "") ?? "").Trim();
 
     /// <summary>登录 cookie 的 ipb_member_id（浏览器登录后从 Cookie 里复制）。</summary>
     public static string EhentaiMemberId => (Read("ehentai", "member_id", "") ?? "").Trim();

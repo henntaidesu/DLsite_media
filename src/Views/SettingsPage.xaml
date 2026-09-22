@@ -42,16 +42,12 @@
                                    MinWidth="0" Margin="24,0,12,0" />
                         <TextBox x:Name="SpeedLimitBox" Width="80" LostFocus="SpeedLimitBox_LostFocus" />
                     </StackPanel>
-                    <!-- 解压密码库：对齐 Web 设置页 下载 分区的同名多行输入（settings.js） -->
+                    <!-- 解压密码库：一个输入框一个密码，末尾「＋」新增一条（对齐 Web settings.js）。
+                         行由代码后台的 RebuildUnzipPwdRows 生成，存库时仍是「一行一个」的老格式 -->
                     <DockPanel Margin="0,4">
                         <TextBlock x:Name="UnzipPwdLabel" Text="解压密码库" Style="{StaticResource FieldLabel}"
                                    DockPanel.Dock="Left" VerticalAlignment="Top" Margin="0,6,12,0" />
-                        <StackPanel>
-                            <TextBox x:Name="UnzipPwdBox" AcceptsReturn="True" MinHeight="84" MaxHeight="160"
-                                     VerticalScrollBarVisibility="Auto" LostFocus="UnzipPwdBox_LostFocus" />
-                            <TextBlock x:Name="UnzipPwdHint" Text="一行一个密码，解压加密压缩包时按顺序尝试"
-                                       Style="{StaticResource CaptionText}" Margin="0,4,0,0" />
-                        </StackPanel>
+                        <StackPanel x:Name="UnzipPwdList" />
                     </DockPanel>
                 </StackPanel>
             </GroupBox>
@@ -88,8 +84,6 @@
                 <StackPanel>
                     <!-- 每个已知作品类型一行（动态生成）：类型名（代码）+ 来源下拉 -->
                     <WrapPanel x:Name="SearchSourcePanel" />
-                    <TextBlock x:Name="SearchSourceHint" Text="未列出的作品类型归为「其他」，仅使用 anime-sharing"
-                               Style="{StaticResource CaptionText}" Margin="0,6,0,0" />
                 </StackPanel>
             </GroupBox>
 
@@ -136,6 +130,19 @@
                         <Button x:Name="EhTestButton" Content="连接测试" Margin="16,0,0,0"
                                 Click="EhTestButton_Click" />
                     </StackPanel>
+                    <!-- 账号登录：成功后自动填好下面三个 cookie（密码只用一次、不保存） -->
+                    <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                        <TextBlock x:Name="EhUserLabel" Text="账号" Style="{StaticResource FieldLabel}" />
+                        <TextBox x:Name="EhUserBox" Width="200" VerticalContentAlignment="Center"
+                                 LostFocus="EhUserBox_LostFocus" />
+                        <TextBlock x:Name="EhPassLabel" Text="密码" Style="{StaticResource FieldLabel}"
+                                   MinWidth="0" Margin="24,0,12,0" />
+                        <PasswordBox x:Name="EhPassBox" Width="200" VerticalContentAlignment="Center" />
+                        <Button x:Name="EhLoginButton" Content="登录并获取 Cookie" Margin="16,0,0,0"
+                                Style="{StaticResource AccentButton}" Click="EhLoginButton_Click" />
+                        <Button x:Name="EhLogoutButton" Content="退出登录" Margin="8,0,0,0"
+                                Click="EhLogoutButton_Click" />
+                    </StackPanel>
                     <!-- 登录 cookie 三项同一行 -->
                     <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
                         <TextBlock x:Name="EhMemberLabel" Text="member_id" Style="{StaticResource FieldLabel}" />
@@ -150,9 +157,14 @@
                         <TextBox x:Name="EhIgneousBox" Width="200" VerticalContentAlignment="Center"
                                  LostFocus="EhIgneousBox_LostFocus" />
                     </StackPanel>
-                    <TextBlock x:Name="EhHint" Style="{StaticResource CaptionText}" Margin="0,6,0,0"
-                               Text="从浏览器登录后的 Cookie 中复制；exhentai(里站) 三项缺一不可，e-hentai(表站) 可匿名浏览。原图需登录，未登录会自动改下站点显示图" />
                 </StackPanel>
+            </GroupBox>
+
+            <!-- FANBOX 作家监控（对齐 Web 设置页 renderFanboxWatchSection）：原先的入口是
+                 作品搜索工具栏的「⏱ 监控」，2026-09-22 起移到设置页；区块由 FanboxWatchSettings 在代码后台注入。
+                 添加监控仍在 作品搜索 → FANBOX 的作家主页（「+ 监控作家」） -->
+            <GroupBox x:Name="FanboxWatchGroup" Header="FANBOX 作家监控">
+                <ContentControl x:Name="FanboxWatchHost" />
             </GroupBox>
 
             <!-- 系统（顺序对齐 Web：系统在外部访问之前，settings.js）。关闭按钮为桌面独有项 -->
@@ -211,9 +223,6 @@
                     </DockPanel>
                     <TextBlock x:Name="ImageHostStatusLabel" Margin="0,6,0,0"
                                Foreground="{StaticResource CaptionBrush}" TextWrapping="Wrap" />
-                    <TextBlock x:Name="ImageHostHint" Style="{StaticResource CaptionText}" Margin="0,6,0,0"
-                               TextWrapping="Wrap"
-                               Text="开启后作品卡封面由图床提供，未迁移的封面自动回退本地硬盘。迁移只复制不删除本地原图（它也是详情页的第一张图）；同一个作品重复迁移会被跳过，中断后再点一次即可续传。手机要看到图，服务地址须填电脑的局域网地址（不能是 127.0.0.1），并在图床「系统设置 → 附加访问主机名」里放行该地址。" />
                 </StackPanel>
             </GroupBox>
 
@@ -254,9 +263,6 @@
                                  Minimum="0" Maximum="100" Visibility="Collapsed" />
                     <TextBlock x:Name="TransStatusLabel" Margin="0,6,0,0"
                                Foreground="{StaticResource CaptionBrush}" TextWrapping="Wrap" />
-                    <TextBlock x:Name="TransHint" Style="{StaticResource CaptionText}" Margin="0,6,0,0"
-                               TextWrapping="Wrap"
-                               Text="把漫画页里的日文识别出来、翻好再贴回图上，只对图片平铺型作品（E-Hentai 画廊 / FANBOX 投稿）生效。需要先下载模型依赖，下齐之前无法启用；不下载则完全不影响其它功能。译文图存在作品目录的 translated 子目录里，原图不动。模型有好几个 GB，建议把模型目录指到空间宽裕的盘；下载支持断点续传，中断后再点一次「下载依赖」即可接着下。" />
                 </StackPanel>
             </GroupBox>
 

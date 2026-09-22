@@ -142,22 +142,37 @@ function applyLayout() {
 window.addEventListener('resize', applyLayout);
 
 // ---------- 顶栏 + 页内工具栏常驻页顶 ----------
-// 顶栏高度不固定（窄屏换行、详情页多一排操作按钮），页内工具栏又要正好叠在它下面，
-// 所以只能实测：按文档顺序取当前可见的工具栏，逐条把 top 设成「顶栏高 + 之前各条高度之和」，
+// 顶栏高度不固定（窄屏换行、详情页多一排操作按钮），页内工具栏（一张悬浮卡片）又要正好停在它下面，
+// 所以只能实测：按文档顺序取当前可见的工具栏，逐条把 top 设成「顶栏高 + 空隙 + 之前各条高度之和」，
 // 最后把总高写进 --bars-h 供表头一类的二级吸顶元素使用（已下载表的 .dt th）。
-// 写入前先比对旧值：值没变就不写，否则下面的 MutationObserver 会被自己的写入再次唤醒、来回打转。
+// 一页可能叠两条（搜索栏 + 选择条），故再按位置打 stack-top/mid/bot，让整叠拼成同一张卡（样式见 app.css）。
+// 写入前先比对旧值：值没变就不写（class 同理），否则下面的 MutationObserver 会被自己的写入再次唤醒、来回打转。
 function syncStickyBars() {
   const root = document.documentElement, head = document.querySelector('header');
+  const gap = parseFloat(getComputedStyle(root).getPropertyValue('--bar-gap')) || 10;
   let top = head ? Math.round(head.getBoundingClientRect().height) : 0;
   const setVar = (k, v) => { if (root.style.getPropertyValue(k) !== v) root.style.setProperty(k, v); };
+  const setCls = (e, c, on) => { if (e.classList.contains(c) !== on) e.classList.toggle(c, on); };
   setVar('--topbar-h', top + 'px');
-  document.querySelectorAll('#content .toolbar:not(.inline)').forEach(bar => {
-    // 藏起来的结果面板（切换搜索来源时的另两套）里的工具栏不占位
-    if (!bar.offsetParent) { if (bar.style.top) bar.style.top = ''; return; }
+  const all = Array.from(document.querySelectorAll('#content .toolbar:not(.inline)'));
+  // 藏起来的结果面板（切换搜索来源时的另两套）里的工具栏不占位，也不参与拼卡
+  const bars = all.filter(b => b.offsetParent);
+  all.forEach(b => {
+    const i = bars.indexOf(b);
+    if (i < 0 && b.style.top) b.style.top = '';
+    setCls(b, 'bar-lead', i === 0);                                  // 只有最上面那条负责封住与顶栏之间的空隙
+    setCls(b, 'stack-top', i === 0 && bars.length > 1);
+    setCls(b, 'stack-mid', i > 0 && i < bars.length - 1);
+    setCls(b, 'stack-bot', i > 0 && i === bars.length - 1);
+  });
+  if (bars.length) top += gap;   // 卡片与顶栏之间的空隙
+  bars.forEach(bar => {
     const v = top + 'px';
     if (bar.style.top !== v) bar.style.top = v;
     top += Math.round(bar.getBoundingClientRect().height);
   });
+  // --bars-h 就取整叠卡片的下沿（不含下外边距）：已下载表的表头正好贴着卡片底边吸住，
+  // 顺带把那道外边距盖上，内容不会从卡片与表头之间的缝里透出来。
   setVar('--bars-h', top + 'px');
 }
 let _stickyRaf = 0;
@@ -180,6 +195,7 @@ function selectSection(key) {
   buildTabs();
   $('search').hidden = !s.root;
   $('sort').hidden = true;
+  $('libToggle').hidden = true;   // 媒体库的「显示作品/显示社团」只属于卡片区，换分区必须收起（否则会跟到搜索/下载页上）
   $('back').hidden = true;
   $('count').textContent = '';
   $('content').innerHTML = '';

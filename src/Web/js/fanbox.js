@@ -4,16 +4,16 @@
 //   fbArtistPane 作家搜索结果（只有一个结果时直接进主页）
 //   fbPostPane   作家主页：作品网格 + 卡内按钮选择 + 批量下载
 //   fbDetailPane 单篇作品内容：正文 + 图集（灯箱）+ 附件清单 + 下载本篇
-//   fbWatchPane  作家监控：轮询间隔设置 + 有新作品自动下载（工具栏「⏱ 监控」进入）
+// 作家监控（有新作品自动下载）的列表与间隔设置不在这里，在「系统设置 → FANBOX 作家监控」（settings.js）；
+// 本模块只留作家主页选择条上的「+ 监控作家」，以及被设置页「打开主页」调用的 fbGotoArtist。
 let fbArtist = null;        // 当前作家 { id, name, publicId }
 let fbPosts = [];           // 作家主页已加载的作品（跨分页累积）
 let fbSel = new Set();      // 选中待下载的作品号
 let fbPaging = null;        // { offset, hasMore, loading, io }
 let fbGen = 0;              // 请求代际：新一轮搜索/换作家即作废在途请求
 let fbFromArtists = false;  // 当前主页是否从作家列表点进来（决定「返回作家列表」是否显示）
-let fbLevel = 'artists';    // 当前层级：artists / posts / detail / watch
+let fbLevel = 'artists';    // 当前层级：artists / posts / detail
 let fbWatched = false;      // 当前作家是否已在监控中（作家主页按钮据此切文案）
-let fbWatchReturn = 'artists';  // 进监控面板前所处的层级，返回时回到那里
 // 详情请求单独一套代际：看详情不应作废作家主页的在途分页与下拉监听（返回后还要继续翻页）
 let fbDetailGen = 0;
 let fbGridScroll = 0;       // 进详情前作品网格的滚动位置，返回时恢复
@@ -29,8 +29,7 @@ function fbBuildPanes(host) {
   const ap = el('div'); ap.id = 'fbArtistPane';
   const pp = el('div'); pp.id = 'fbPostPane'; pp.style.display = 'none';
   const dp = el('div'); dp.id = 'fbDetailPane'; dp.style.display = 'none';
-  const wp = el('div'); wp.id = 'fbWatchPane'; wp.style.display = 'none';
-  wrap.append(ap, pp, dp, wp);
+  wrap.append(ap, pp, dp);
   host.appendChild(wrap);
 }
 
@@ -38,8 +37,7 @@ function fbResetState() {
   if (fbPaging && fbPaging.io) fbPaging.io.disconnect();
   fbPaging = null;
   fbArtist = null; fbPosts = []; fbSel = new Set(); fbFromArtists = false;
-  fbLevel = 'artists'; fbGridScroll = 0; fbWatched = false; fbWatchReturn = 'artists';
-  fbStopWatchPoll();
+  fbLevel = 'artists'; fbGridScroll = 0; fbWatched = false;
   fbGen++; fbDetailGen++;
 }
 
@@ -48,8 +46,6 @@ function fbShowPane(level) {
   $('fbArtistPane').style.display = level === 'artists' ? '' : 'none';
   $('fbPostPane').style.display = level === 'posts' ? '' : 'none';
   $('fbDetailPane').style.display = level === 'detail' ? '' : 'none';
-  $('fbWatchPane').style.display = level === 'watch' ? '' : 'none';
-  if (level !== 'watch') fbStopWatchPoll();
   fbUpdateBackBtn();
 }
 
@@ -62,12 +58,6 @@ const fbShowDetailPane = () => fbShowPane('detail');
 function fbUpdateBackBtn() {
   const b = $('fbBackBtn');
   if (!b) return;
-  if (fbLevel === 'watch') {
-    b.textContent = '返回搜索结果';
-    b.onclick = fbGoBackFromWatch;
-    b.style.display = '';
-    return;
-  }
   if (fbLevel === 'detail') {
     b.textContent = '返回作品列表';
     b.onclick = fbGoBackToPosts;
@@ -493,146 +483,19 @@ async function fbEnqueue(ids, btn) {
 }
 
 // ---------- 作家监控（有新作品自动下载） ----------
+// 监控列表、轮询间隔与总开关都在「系统设置 → FANBOX 作家监控」（settings.js 的 renderFanboxWatchSection），
+// 本模块只留两处：作家主页选择条上的「+ 监控作家 / ✓ 已监控」，以及设置页「打开主页」回跳到这里。
 // 数据在服务端的 fanbox_watch 表里，后台按各作家自己的间隔轮询 pawchive：
 // 发现比"添加监控那一刻"更新的投稿，就按该作家设定的媒体库自动入队下载。
 // 判"新"看的是投稿的发布时间而不是"本地有没有这篇"，所以手动删掉的作品不会被一次次下回来。
 
-// 轮询间隔档位（分钟 → 文案）；服务端 FanboxWatchService.IntervalChoices 是同一组
-const FB_WATCH_INTERVALS = [
-  [30, '30 分钟'], [60, '1 小时'], [120, '2 小时'], [360, '6 小时'],
-  [720, '12 小时'], [1440, '24 小时'], [4320, '3 天'],
-];
-let fbWatchPoll = null;
-
-function fbStopWatchPoll() {
-  if (fbWatchPoll) { clearInterval(fbWatchPoll); fbWatchPoll = null; }
-}
-
-// 工具栏「⏱ 监控」：进入监控面板（记住来时的层级，返回时回到那里）
-async function fbOpenWatchPane() {
-  if (fbLevel !== 'watch') fbWatchReturn = fbLevel;
-  fbShowPane('watch');
-  window.scrollTo(0, 0);
-  await fbRenderWatches();
-}
-
-function fbGoBackFromWatch() {
-  const back = fbWatchReturn === 'watch' ? 'artists' : fbWatchReturn;
-  fbShowPane(back);
-  if (back === 'posts') fbUpdatePostCount();
-  else $('count').textContent = '';
-}
-
-async function fbRenderWatches() {
-  const box = $('fbWatchPane');
-  if (!box) return;
-  if (!box.childElementCount) box.innerHTML = '<div class="empty"><span class="spin"></span> 加载中…</div>';
-  let d;
-  try { d = await api('/api/fanbox/watches'); } catch (e) { return; }
-  if (fbLevel !== 'watch') return;
-  box.innerHTML = '';
-  $('count').textContent = d.summary || '';
-
-  // 操作条：总开关 / 立即检查全部 / 新建监控时的默认间隔
-  const bar = el('div', 'toolbar');
-  const sw = el('button', 'icon-btn' + (d.enabled ? ' on' : ''), '自动监控：' + (d.enabled ? '开' : '关'));
-  sw.title = '关闭后仅停止后台自动轮询，「立即检查」仍可用';
-  sw.onclick = async () => { await apiPost('/api/fanbox/watch/config', { enabled: !d.enabled }); fbRenderWatches(); };
-  const checkAll = el('button', 'icon-btn', '立即检查全部');
-  checkAll.disabled = !d.watches.length;
-  checkAll.onclick = async () => { await apiPost('/api/fanbox/watch/check', {}); fbStartWatchPoll(); };
-  const iv = fbIntervalSelect(d.interval, v => apiPost('/api/fanbox/watch/config', { interval: v }));
-  bar.append(sw, checkAll, el('span', 'ro', '默认间隔'), iv);
-  box.appendChild(bar);
-
-  const status = el('div', 'note'); status.id = 'fbWatchStatus';
-  status.textContent = d.busy ? '⏳ ' + (d.status || '正在检查…') : '';
-  box.appendChild(status);
-
-  if (!d.watches.length) {
-    box.appendChild(el('div', 'empty', '还没有监控任何作家。搜到作家后进入作家主页，点「+ 监控作家」即可添加。'));
-    return;
-  }
-  d.watches.forEach(w => box.appendChild(fbWatchCard(w)));
-  box.appendChild(el('div', 'note',
-    '监控在本程序运行期间后台轮询，发现新作品即按该作家设定的媒体库自动加入下载队列；程序关闭时暂停，下次启动继续。'));
-  if (d.busy) fbStartWatchPoll();
-}
-
-// 一位作家一张卡（沿用媒体库管理的 .libcard 版式）
-function fbWatchCard(w) {
-  const card = el('div', 'libcard');
-  const head = el('div', 'lh');
-  head.appendChild(el('span', 'nm', w.name));
-  const sub = [];
-  if (!w.enabled) sub.push('已暂停');
-  sub.push(w.lastCheck ? '上次检查 ' + w.lastCheck : '尚未检查过');
-  if (w.next) sub.push('下次 ' + w.next);
-  if (w.downloaded) sub.push(`累计自动下载 ${w.downloaded} 篇`);
-  head.appendChild(el('span', 'ct', sub.join(' · ')));
-
-  const now = el('button', 'mini', '立即检查');
-  now.onclick = async () => { await apiPost('/api/fanbox/watch/check', { id: w.id }); fbStartWatchPoll(); };
-  const toggle = el('button', 'mini', w.enabled ? '暂停' : '启用');
-  toggle.onclick = async () => { await apiPost('/api/fanbox/watch/update', { id: w.id, enabled: !w.enabled }); fbRenderWatches(); };
-  const open = el('button', 'mini', '打开主页');
-  open.onclick = () => fbOpenWatchedArtist(w);
-  const del = el('button', 'mini danger', '删除');
-  del.onclick = async () => {
-    if (!await uiConfirm(`不再监控「${w.name}」？\n已经下载的作品不受影响。`, { danger: true })) return;
-    await apiPost('/api/fanbox/watch/update', { id: w.id, remove: true });
-    if (fbArtist && fbArtist.id === w.id) { fbWatched = false; fbUpdateWatchBtn(); }
-    fbRenderWatches();
-  };
-  head.append(now, toggle, open, del);
-  card.appendChild(head);
-
-  const row = el('div', 'librow');
-  row.appendChild(el('span', null, '轮询间隔'));
-  row.appendChild(fbIntervalSelect(w.interval, async v => {
-    await apiPost('/api/fanbox/watch/update', { id: w.id, interval: v });
-    fbRenderWatches();
-  }));
-  row.appendChild(el('span', 'fp', w.lib ? `自动下载到媒体库「${w.lib}」` : '自动下载到缓存目录'));
-  card.appendChild(row);
-
-  if (w.lastResult) {
-    const res = el('div', 'librow');
-    res.appendChild(el('span', 'fp', '上次结果：' + w.lastResult));
-    card.appendChild(res);
-  }
-  return card;
-}
-
-// 监控列表里的「打开主页」：直接进这位作家的作品网格（等同于搜到他再点进去）
-function fbOpenWatchedArtist(w) {
-  fbWatchReturn = 'artists';
-  fbOpenArtist({ id: w.id, name: w.name, publicId: '' }, false);
-}
-
-function fbIntervalSelect(val, on) {
-  const s = el('select');
-  s.style.width = '110px';
-  const opts = FB_WATCH_INTERVALS.slice();
-  // 服务端存的值不在档位里（例如手工改过库）时补一档，免得下拉把它悄悄改掉
-  if (!opts.some(o => o[0] === val)) opts.unshift([val, val + ' 分钟']);
-  opts.forEach(([v, t]) => { const o = el('option', null, t); o.value = v; s.appendChild(o); });
-  s.value = String(val);
-  s.onchange = () => on(parseInt(s.value, 10));
-  return s;
-}
-
-// 检查进行中时每 1.5s 刷新一次状态，检查结束即停并重绘（同媒体库扫描/图床迁移的做法）
-function fbStartWatchPoll() {
-  fbStopWatchPoll();
-  fbWatchPoll = setInterval(async () => {
-    const box = $('fbWatchStatus');
-    if (!box || !document.body.contains(box) || fbLevel !== 'watch') { fbStopWatchPoll(); return; }
-    let s;
-    try { s = await api('/api/fanbox/watches'); } catch (e) { return; }
-    box.textContent = s.busy ? '⏳ ' + (s.status || '正在检查…') : '';
-    if (!s.busy) { fbStopWatchPoll(); fbRenderWatches(); }
-  }, 1500);
+// 设置页监控卡的「打开主页」：跨分区切到 作品搜索 → FANBOX，并直接进这位作家的作品网格
+function fbGotoArtist(id, name) {
+  selectSection('search');
+  const sel = $('srcSel');
+  if (sel) sel.value = 'fanbox';
+  setSearchSource('fanbox');
+  fbOpenArtist({ id, name: name || '', publicId: '' }, false);
 }
 
 // ---------- 作家主页的监控开关 ----------

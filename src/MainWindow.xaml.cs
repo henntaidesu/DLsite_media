@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.ComponentModel;
 using System.Runtime.InteropServices;
 using System.Windows;
@@ -32,6 +32,25 @@ public partial class MainWindow : Window
     private SettingsPage? _settingsPage;
 
     private SearchPage SearchPage => _searchPage ??= new SearchPage();
+
+    private SettingsPage SettingsPage
+    {
+        get
+        {
+            if (_settingsPage != null)
+                return _settingsPage;
+
+            var page = new SettingsPage();
+            _settingsPage = page;
+            // 监控卡的「打开主页」：跨分区切到"作品搜索"并直接进这位 FANBOX 作家的主页（同下载页的"重新搜索"）
+            page.OpenFanboxArtistRequested += (id, name) =>
+            {
+                NavSearch.IsChecked = true;   // 触发 Nav_Checked 切页
+                SearchPage.OpenFanboxArtist(id, name);
+            };
+            return page;
+        }
+    }
 
     private DownloadPage DownloadPage
     {
@@ -114,7 +133,7 @@ public partial class MainWindow : Window
             "type" => _typePage ??= new MediaLibPage(MediaLibRoot.WorkType),
             "maker" => _makerPage ??= new MediaLibPage(MediaLibRoot.Maker),
             "favorite" => _favoritePage ??= new MediaLibPage(MediaLibRoot.Favorite),
-            "setting" => _settingsPage ??= new SettingsPage(),
+            "setting" => SettingsPage,
             _ => (object)_mediaLibPage,
         };
     }

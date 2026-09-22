@@ -10,34 +10,36 @@
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
-        <!-- 搜索栏：来源下拉在最前，之后是输入框/查询与各来源专属按钮（对齐 Web 端 renderSearchArea 的工具栏） -->
-        <Grid Grid.Row="0" Margin="0,0,0,10">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="Auto" />
-                <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="Auto" />
-                <ColumnDefinition Width="Auto" />
-                <ColumnDefinition Width="Auto" />
-                <ColumnDefinition Width="Auto" />
-                <ColumnDefinition Width="Auto" />
-                <ColumnDefinition Width="Auto" />
-            </Grid.ColumnDefinitions>
-            <ComboBox x:Name="SourceBox" MinWidth="104" Margin="0,0,8,0" VerticalContentAlignment="Center"
-                      SelectionChanged="SourceBox_SelectionChanged" />
-            <TextBox x:Name="InputBox" Grid.Column="1" FontSize="14" KeyDown="InputBox_KeyDown" />
-            <Button x:Name="SearchButton" Grid.Column="2" Margin="8,0,0,0" MinWidth="90"
-                    Style="{StaticResource AccentButton}" Click="SearchButton_Click" Content="查询" />
-            <Button x:Name="BackButton" Grid.Column="3" Margin="8,0,0,0" Visibility="Collapsed"
-                    Click="BackButton_Click" Content="← 返回结果" />
-            <Button x:Name="AutoDownloadButton" Grid.Column="4" Margin="8,0,0,0" MinWidth="110"
-                    Visibility="Collapsed" Click="AutoDownloadToggle_Click" Content="自动下载：关" />
-            <Button x:Name="FanboxBackButton" Grid.Column="5" Margin="8,0,0,0" MinWidth="120"
-                    Visibility="Collapsed" Click="FanboxBack_Click" Content="← 返回作家列表" />
-            <Button x:Name="FanboxWatchButton" Grid.Column="6" Margin="8,0,0,0" MinWidth="96"
-                    Visibility="Collapsed" Click="FanboxWatch_Click" Content="⏱ 监控" />
-            <Button x:Name="EhentaiBackButton" Grid.Column="7" Margin="8,0,0,0" MinWidth="120"
-                    Visibility="Collapsed" Click="EhentaiBack_Click" Content="← 返回搜索结果" />
-        </Grid>
+        <!-- 搜索栏：来源下拉在最前，之后是输入框/查询与各来源专属按钮（对齐 Web 端 renderSearchArea 的工具栏）。
+             整条包进 ToolbarCard：与 Web 的 .toolbar 一样是一张常驻页顶的悬浮卡片 -->
+        <Border Grid.Row="0" Style="{StaticResource ToolbarCard}">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <ComboBox x:Name="SourceBox" MinWidth="104" Margin="0,0,8,0" VerticalContentAlignment="Center"
+                          SelectionChanged="SourceBox_SelectionChanged" />
+                <TextBox x:Name="InputBox" Grid.Column="1" FontSize="14" KeyDown="InputBox_KeyDown" />
+                <Button x:Name="SearchButton" Grid.Column="2" Margin="8,0,0,0" MinWidth="90"
+                        Style="{StaticResource AccentButton}" Click="SearchButton_Click" Content="查询" />
+                <Button x:Name="BackButton" Grid.Column="3" Margin="8,0,0,0" Visibility="Collapsed"
+                        Click="BackButton_Click" Content="← 返回结果" />
+                <Button x:Name="AutoDownloadButton" Grid.Column="4" Margin="8,0,0,0" MinWidth="110"
+                        Visibility="Collapsed" Click="AutoDownloadToggle_Click" Content="自动下载：关" />
+                <Button x:Name="FanboxBackButton" Grid.Column="5" Margin="8,0,0,0" MinWidth="120"
+                        Visibility="Collapsed" Click="FanboxBack_Click" Content="← 返回作家列表" />
+                <!-- 作家监控的列表与间隔在「系统设置 → FANBOX 作家监控」里管，这里不再放入口；
+                     添加监控仍在作家主页的选择条上（「+ 监控作家」） -->
+                <Button x:Name="EhentaiBackButton" Grid.Column="6" Margin="8,0,0,0" MinWidth="120"
+                        Visibility="Collapsed" Click="EhentaiBack_Click" Content="← 返回搜索结果" />
+            </Grid>
+        </Border>
 
         <!-- 结果计数/提示（FANBOX 来源用；DLsite 来源的计数在各自结果里） -->
         <TextBlock x:Name="CountText" Grid.Row="1" Style="{StaticResource CaptionText}"

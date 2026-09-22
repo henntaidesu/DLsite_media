@@ -1,4 +1,4 @@
-<UserControl x:Class="R18MediaLibrary.Views.EhentaiSearchView"
+﻿<UserControl x:Class="R18MediaLibrary.Views.EhentaiSearchView"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:ctrl="clr-namespace:R18MediaLibrary.Controls">
@@ -11,35 +11,38 @@
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
-        <!-- 选择操作条：仅画廊网格显示 -->
-        <Grid x:Name="SelectBar" Grid.Row="0" Margin="0,0,0,8" Visibility="Collapsed">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="Auto" />
-                <ColumnDefinition Width="Auto" />
-                <ColumnDefinition Width="Auto" />
-            </Grid.ColumnDefinitions>
-            <TextBlock x:Name="SelectInfo" VerticalAlignment="Center"
-                       Style="{StaticResource CaptionText}" Text="已选 0 本" />
-            <Button x:Name="SelectAllButton" Grid.Column="1" MinWidth="72" Margin="8,0,0,0"
-                    Click="SelectAll_Click" Content="全选" />
-            <Button x:Name="SelectNoneButton" Grid.Column="2" MinWidth="72" Margin="8,0,0,0"
-                    Click="SelectNone_Click" Content="清空" />
-            <Button x:Name="DownloadSelectedButton" Grid.Column="3" MinWidth="110" Margin="8,0,0,0"
-                    IsEnabled="False" Style="{StaticResource AccentButton}"
-                    Click="DownloadSelected_Click" Content="下载选中" />
-        </Grid>
+        <!-- 选择操作条：仅画廊网格显示。外层 Border 即工具栏卡片（对齐 Web 的 .toolbar） -->
+        <Border x:Name="SelectBar" Grid.Row="0" Style="{StaticResource ToolbarCard}" Visibility="Collapsed">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <TextBlock x:Name="SelectInfo" VerticalAlignment="Center"
+                           Style="{StaticResource CaptionText}" Text="已选 0 本" />
+                <Button x:Name="SelectAllButton" Grid.Column="1" MinWidth="72" Margin="8,0,0,0"
+                        Click="SelectAll_Click" Content="全选" />
+                <Button x:Name="SelectNoneButton" Grid.Column="2" MinWidth="72" Margin="8,0,0,0"
+                        Click="SelectNone_Click" Content="清空" />
+                <Button x:Name="DownloadSelectedButton" Grid.Column="3" MinWidth="110" Margin="8,0,0,0"
+                        IsEnabled="False" Style="{StaticResource AccentButton}"
+                        Click="DownloadSelected_Click" Content="下载选中" />
+            </Grid>
+        </Border>
 
         <!-- 详情操作条与 SelectBar 同占第 0 行（两者按层级互斥显示）。
              放在滚动区之外，才能像 Web 的 .toolbar 一样常驻页顶、不被内容顶走。 -->
-        <StackPanel x:Name="DetailBar" Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,8"
-                    Visibility="Collapsed">
-            <Button x:Name="DetailDownloadButton" MinWidth="110"
-                    Style="{StaticResource AccentButton}"
-                    Click="DetailDownload_Click" Content="下载本篇" />
-            <Button x:Name="DetailOpenSiteButton" MinWidth="110" Margin="8,0,0,0"
-                    Click="DetailOpenSite_Click" Content="在站点打开" />
-        </StackPanel>
+        <Border x:Name="DetailBar" Grid.Row="0" Style="{StaticResource ToolbarCard}" Visibility="Collapsed">
+            <StackPanel Orientation="Horizontal">
+                <Button x:Name="DetailDownloadButton" MinWidth="110"
+                        Style="{StaticResource AccentButton}"
+                        Click="DetailDownload_Click" Content="下载本篇" />
+                <Button x:Name="DetailOpenSiteButton" MinWidth="110" Margin="8,0,0,0"
+                        Click="DetailOpenSite_Click" Content="在站点打开" />
+            </StackPanel>
+        </Border>
 
         <Grid Grid.Row="1">
             <!-- 画廊卡网格：排布与媒体库作品卡一致（同 Web .grid.cards） -->

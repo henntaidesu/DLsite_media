@@ -474,11 +474,13 @@ public static class I18n
         {
             ["zh_TW"] = "解壓密碼庫", ["ja"] = "解凍パスワード一覧", ["en"] = "Archive passwords",
         },
-        ["一行一个密码，解压加密压缩包时按顺序尝试"] = new()
+        ["添加一条密码"] = new()
         {
-            ["zh_TW"] = "一行一個密碼，解壓加密壓縮檔時依序嘗試",
-            ["ja"] = "1 行に 1 つ。暗号化書庫の解凍時に上から順に試します",
-            ["en"] = "One password per line, tried in order on encrypted archives",
+            ["zh_TW"] = "新增一條密碼", ["ja"] = "パスワードを追加", ["en"] = "Add a password",
+        },
+        ["删除这条密码"] = new()
+        {
+            ["zh_TW"] = "刪除這條密碼", ["ja"] = "このパスワードを削除", ["en"] = "Remove this password",
         },
         ["作品信息"] = new() { ["zh_TW"] = "作品資訊", ["ja"] = "作品情報", ["en"] = "Work info" },
         ["查看图片"] = new() { ["zh_TW"] = "查看圖片", ["ja"] = "画像を表示", ["en"] = "View image" },
@@ -575,12 +577,6 @@ public static class I18n
 
         // ---------- 媒体库管理（内联于系统设置页）----------
         ["新建媒体库"] = new() { ["zh_TW"] = "新增媒體庫", ["ja"] = "ライブラリを新規作成", ["en"] = "New library" },
-        ["文件夹路径为本机本地路径（如 D:\\ASMR）；添加后点\"扫描元数据\"导入作品与元数据。删除媒体库不会删除本地文件、已导入记录保留。"] = new()
-        {
-            ["zh_TW"] = "資料夾路徑為本機本地路徑（如 D:\\ASMR）；新增後點「掃描中繼資料」匯入作品與中繼資料。刪除媒體庫不會刪除本地檔案、已匯入記錄保留。",
-            ["ja"] = "フォルダパスは本機のローカルパス（例 D:\\ASMR）です。追加後「メタデータをスキャン」で作品とメタデータを取り込みます。ライブラリを削除してもローカルファイルは削除されず、取り込み済みの記録は保持されます。",
-            ["en"] = "Folder paths are local paths on this machine (e.g. D:\\ASMR). After adding, click \"Scan metadata\" to import works and metadata. Deleting a library does not delete local files; imported records are kept."
-        },
         ["还没有媒体库，点击\"新建媒体库\"创建。"] = new()
         {
             ["zh_TW"] = "還沒有媒體庫，點擊「新增媒體庫」建立。",
@@ -725,12 +721,6 @@ public static class I18n
             ["zh_TW"] = "✓ 已連線（圖床現有 {count} 張）",
             ["ja"] = "✓ 接続済み（画像ホスト上に {count} 枚）",
             ["en"] = "✓ Connected ({count} images on host)"
-        },
-        ["开启后作品卡封面由图床提供，未迁移的封面自动回退本地硬盘。迁移只复制不删除本地原图（它也是详情页的第一张图）；同一个作品重复迁移会被跳过，中断后再点一次即可续传。手机要看到图，服务地址须填电脑的局域网地址（不能是 127.0.0.1），并在图床「系统设置 → 附加访问主机名」里放行该地址。"] = new()
-        {
-            ["zh_TW"] = "開啟後作品卡封面由圖床提供，未遷移的封面自動回退本機硬碟。遷移只複製、不刪除本機原圖（它也是詳情頁的第一張圖）；同一個作品重複遷移會被跳過，中斷後再點一次即可續傳。手機要看到圖，服務位址須填電腦的區域網路位址（不能是 127.0.0.1），並在圖床「系統設定 → 附加存取主機名稱」裡放行該位址。",
-            ["ja"] = "有効にすると作品カードのカバーは画像ホストから配信されます（未移行分はローカルにフォールバック）。移行はコピーのみでローカル原本は消しません（詳細ページの1枚目でもあるため）。同じ作品の重複移行はスキップされ、中断しても再実行で続きから進みます。スマホで表示するにはサービスアドレスに PC の LAN アドレス（127.0.0.1 以外）を指定し、画像ホストの「システム設定 → 追加の許可ホスト名」に登録してください。",
-            ["en"] = "Work card covers are served from the image host; covers not yet migrated fall back to the local disk. Migration copies only — the local original is kept (it is also the first image on the detail page) — and a work already migrated is skipped, so an interrupted run just resumes. For phones, set the service URL to this PC's LAN address (not 127.0.0.1) and allow it under the image host's Settings → additional trusted hosts."
         },
     };
 }

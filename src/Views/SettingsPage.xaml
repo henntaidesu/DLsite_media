@@ -160,6 +160,37 @@
                 </StackPanel>
             </GroupBox>
 
+            <!-- pixiv（桌面独有配置，Web 设置页不暴露；排版随 E-Hentai 分区） -->
+            <GroupBox x:Name="PixivGroup" Header="pixiv">
+                <StackPanel>
+                    <!-- 画质 + 分级 + 匹配方式 同一行 -->
+                    <StackPanel Orientation="Horizontal" Margin="0,4">
+                        <TextBlock x:Name="PxOriginalLabel" Text="图片画质" Style="{StaticResource FieldLabel}" />
+                        <ComboBox x:Name="PxOriginalCombo" Width="200" VerticalContentAlignment="Center"
+                                  SelectionChanged="PxOriginalCombo_SelectionChanged" />
+                        <TextBlock x:Name="PxModeLabel" Text="搜索分级" Style="{StaticResource FieldLabel}"
+                                   MinWidth="0" Margin="24,0,12,0" />
+                        <ComboBox x:Name="PxModeCombo" Width="120" VerticalContentAlignment="Center"
+                                  SelectionChanged="PxModeCombo_SelectionChanged" />
+                        <TextBlock x:Name="PxMatchLabel" Text="匹配方式" Style="{StaticResource FieldLabel}"
+                                   MinWidth="0" Margin="24,0,12,0" />
+                        <ComboBox x:Name="PxMatchCombo" Width="160" VerticalContentAlignment="Center"
+                                  SelectionChanged="PxMatchCombo_SelectionChanged" />
+                        <Button x:Name="PxTestButton" Content="连接测试" Margin="16,0,0,0"
+                                Click="PxTestButton_Click" />
+                    </StackPanel>
+                    <!-- 登录 cookie：站点的登录带人机验证，程序里走不通，只能从浏览器复制 -->
+                    <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                        <TextBlock x:Name="PxSessionLabel" Text="PHPSESSID" Style="{StaticResource FieldLabel}" />
+                        <TextBox x:Name="PxSessionBox" Width="420" VerticalContentAlignment="Center"
+                                 LostFocus="PxSessionBox_LostFocus" />
+                    </StackPanel>
+                    <TextBlock x:Name="PxHint" TextWrapping="Wrap" Margin="120,6,0,0"
+                               Style="{StaticResource CaptionText}"
+                               Text="留空即匿名浏览：仍能搜索，但站点会把 R-18 作品从结果里滤掉。要看 R-18，请在浏览器登录 pixiv 后从 Cookie 里复制 PHPSESSID 填在这里。" />
+                </StackPanel>
+            </GroupBox>
+
             <!-- FANBOX 作家监控（对齐 Web 设置页 renderFanboxWatchSection）：原先的入口是
                  作品搜索工具栏的「⏱ 监控」，2026-09-22 起移到设置页；区块由 FanboxWatchSettings 在代码后台注入。
                  添加监控仍在 作品搜索 → FANBOX 的作家主页（「+ 监控作家」） -->

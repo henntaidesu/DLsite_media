@@ -263,8 +263,9 @@ function parseHash() {
   const s = SECTIONS.find(x => x.key === parts[0]);
   if (!s) return null;
   if (s.key === 'search') {
-    // parts[1]：来源（dlsite / fanbox，缺省 dlsite）；parts[2..]：查询词（整段 URI 编码）
-    const src = parts[1] === 'fanbox' ? 'fanbox' : 'dlsite';
+    // parts[1]：来源（按 SEARCH_SOURCES 校验，缺省 dlsite）；parts[2..]：查询词（整段 URI 编码）
+    const known = typeof SEARCH_SOURCES !== 'undefined' && SEARCH_SOURCES.some(x => x.key === parts[1]);
+    const src = known ? parts[1] : 'dlsite';
     let query = '';
     if (parts[2]) { try { query = decodeURIComponent(parts.slice(2).join('/')); } catch (e) { } }
     return { key: s.key, root: false, src, query };

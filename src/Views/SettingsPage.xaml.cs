@@ -177,6 +177,16 @@ public partial class SettingsPage : UserControl
         EhIgneousLabel.Text = "igneous";
         EhTestButton.Content = I18n.Tr("连接测试");
         BuildEhOriginalCombo();
+        PixivGroup.Header = "pixiv";
+        PxOriginalLabel.Text = I18n.Tr("图片画质");
+        PxModeLabel.Text = I18n.Tr("搜索分级");
+        PxMatchLabel.Text = I18n.Tr("匹配方式");
+        PxSessionLabel.Text = "PHPSESSID";
+        PxTestButton.Content = I18n.Tr("连接测试");
+        PxHint.Text = I18n.Tr(
+            "留空即匿名浏览：仍能搜索，但站点会把 R-18 作品从结果里滤掉。" +
+            "要看 R-18，请在浏览器登录 pixiv 后从 Cookie 里复制 PHPSESSID 填在这里。");
+        BuildPixivCombos();
         SystemGroup.Header = I18n.Tr("系统");
         MediaLibGroup.Header = I18n.Tr("媒体库");
         FanboxWatchGroup.Header = I18n.Tr("FANBOX 作家监控");
@@ -307,6 +317,10 @@ public partial class SettingsPage : UserControl
         EhMemberBox.Text = AppConfig.EhentaiMemberId;
         EhHashBox.Text = AppConfig.EhentaiPassHash;
         EhIgneousBox.Text = AppConfig.EhentaiIgneous;
+        PxSessionBox.Text = AppConfig.PixivSessionId;
+        PxOriginalCombo.SelectedIndex = AppConfig.PixivOriginal ? 0 : 1;
+        PxModeCombo.SelectedIndex = Math.Max(0, Array.IndexOf(PixivModes, AppConfig.PixivSearchMode));
+        PxMatchCombo.SelectedIndex = Math.Max(0, Array.IndexOf(PixivMatches, AppConfig.PixivTagMatch));
         AsmrMirrorCombo.SelectedIndex = AppConfig.AsmrMirrorSite switch
         {
             "Mirror-1" => 1,
@@ -635,6 +649,93 @@ public partial class SettingsPage : UserControl
         finally
         {
             EhTestButton.IsEnabled = true;
+        }
+    }
+
+    // ---------- pixiv ----------
+
+    /// <summary>搜索分级下拉的索引 → 站点的 mode 参数。</summary>
+    private static readonly string[] PixivModes = ["all", "safe", "r18"];
+
+    /// <summary>匹配方式下拉的索引 → 站点的 s_mode 参数。</summary>
+    private static readonly string[] PixivMatches = ["s_tag", "s_tag_full", "s_tc"];
+
+    /// <summary>三个下拉的选项文案随语言变，故每次重译都重建（同 BuildEhOriginalCombo）。</summary>
+    private void BuildPixivCombos()
+    {
+        var original = PxOriginalCombo.SelectedIndex;
+        var mode = PxModeCombo.SelectedIndex;
+        var match = PxMatchCombo.SelectedIndex;
+        _loading = true;
+
+        PxOriginalCombo.Items.Clear();
+        PxOriginalCombo.Items.Add(I18n.Tr("原图"));
+        PxOriginalCombo.Items.Add(I18n.Tr("站点缩放图（1200px）"));
+        PxOriginalCombo.SelectedIndex = original >= 0 ? original : (AppConfig.PixivOriginal ? 0 : 1);
+
+        PxModeCombo.Items.Clear();
+        PxModeCombo.Items.Add(I18n.Tr("全部"));
+        PxModeCombo.Items.Add(I18n.Tr("全年龄"));
+        PxModeCombo.Items.Add(I18n.Tr("仅 R-18"));
+        PxModeCombo.SelectedIndex =
+            mode >= 0 ? mode : Math.Max(0, Array.IndexOf(PixivModes, AppConfig.PixivSearchMode));
+
+        PxMatchCombo.Items.Clear();
+        PxMatchCombo.Items.Add(I18n.Tr("标签部分一致"));
+        PxMatchCombo.Items.Add(I18n.Tr("标签完全一致"));
+        PxMatchCombo.Items.Add(I18n.Tr("标题与说明文"));
+        PxMatchCombo.SelectedIndex =
+            match >= 0 ? match : Math.Max(0, Array.IndexOf(PixivMatches, AppConfig.PixivTagMatch));
+
+        _loading = false;
+    }
+
+    private void PxOriginalCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_loading || PxOriginalCombo.SelectedIndex < 0)
+            return;
+        AppConfig.Write("pixiv", "original", PxOriginalCombo.SelectedIndex == 0 ? "True" : "False");
+    }
+
+    private void PxModeCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_loading || PxModeCombo.SelectedIndex < 0)
+            return;
+        AppConfig.Write("pixiv", "mode", PixivModes[PxModeCombo.SelectedIndex]);
+    }
+
+    private void PxMatchCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_loading || PxMatchCombo.SelectedIndex < 0)
+            return;
+        AppConfig.Write("pixiv", "s_mode", PixivMatches[PxMatchCombo.SelectedIndex]);
+    }
+
+    private void PxSessionBox_LostFocus(object sender, RoutedEventArgs e)
+    {
+        if (_loading)
+            return;
+        AppConfig.Write("pixiv", "php_sessid", PxSessionBox.Text.Trim());
+        PixivApi.Invalidate();   // cookie 变了要重建客户端
+    }
+
+    private async void PxTestButton_Click(object sender, RoutedEventArgs e)
+    {
+        // 先保存当前输入，再用其连接
+        AppConfig.Write("pixiv", "php_sessid", PxSessionBox.Text.Trim());
+        PixivApi.Invalidate();
+        PxTestButton.IsEnabled = false;
+        try
+        {
+            var (ok, message) = await PixivApi.TestAsync();
+            if (ok)
+                InAppDialog.Info(this, message, I18n.Tr("测试成功"));
+            else
+                InAppDialog.Warn(this, message, I18n.Tr("测试失败"));
+        }
+        finally
+        {
+            PxTestButton.IsEnabled = true;
         }
     }
 

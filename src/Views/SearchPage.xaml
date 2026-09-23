@@ -23,6 +23,8 @@
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
                 <ComboBox x:Name="SourceBox" MinWidth="104" Margin="0,0,8,0" VerticalContentAlignment="Center"
                           SelectionChanged="SourceBox_SelectionChanged" />
@@ -43,6 +45,12 @@
                      添加监控仍在作家主页的选择条上（「+ 监控作家」） -->
                 <Button x:Name="EhentaiBackButton" Grid.Column="7" Margin="8,0,0,0" MinWidth="120"
                         Visibility="Collapsed" Click="EhentaiBack_Click" Content="← 返回搜索结果" />
+                <!-- pixiv 详情页的「下载 / 返回」：与 FANBOX 同样常驻工具栏（详情页不另起操作条） -->
+                <Button x:Name="PixivDownloadButton" Grid.Column="8" Margin="8,0,0,0" MinWidth="90"
+                        Visibility="Collapsed" Style="{StaticResource AccentButton}"
+                        Click="PixivDownload_Click" Content="下载" />
+                <Button x:Name="PixivBackButton" Grid.Column="9" Margin="8,0,0,0" MinWidth="90"
+                        Visibility="Collapsed" Click="PixivBack_Click" Content="返回" />
             </Grid>
         </Border>
 
@@ -265,6 +273,9 @@
 
             <!-- E-Hentai 来源的结果区（画廊网格 / 画廊详情），同样由代码塞入 EhentaiSearchView -->
             <ContentControl x:Name="EhentaiHost" Visibility="Collapsed" />
+
+            <!-- pixiv 来源的结果区（作品网格 / 作品详情），同样由代码塞入 PixivSearchView -->
+            <ContentControl x:Name="PixivHost" Visibility="Collapsed" />
 
             <!-- 查询加载遮罩 -->
             <Border x:Name="LoadingOverlay" Background="#96000000" Visibility="Collapsed">

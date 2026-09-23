@@ -84,9 +84,10 @@ public static class DownloadEngine
     /// <summary>作品子文件夹名：按设置以 RJ号 或 DL API 返回的作品名称命名。</summary>
     private static string FolderLeafName(string workId)
     {
-        // fanbox / E-Hentai 作品固定以作品号命名（标题会改、会重名，且顶层扫描要靠作品号认出它们）
+        // fanbox / E-Hentai / pixiv 作品固定以作品号命名（标题会改、会重名，且顶层扫描要靠作品号认出它们）
         if (AppConfig.FolderNameMode != "work_name" ||
-            FanboxService.IsFanboxWorkId(workId) || EhentaiService.IsEhentaiWorkId(workId))
+            FanboxService.IsFanboxWorkId(workId) || EhentaiService.IsEhentaiWorkId(workId) ||
+            PixivService.IsPixivWorkId(workId))
             return workId;
         var name = WorkNameCache.GetOrAdd(workId, id =>
         {
@@ -580,10 +581,10 @@ public static class DownloadEngine
     /// <summary>把某网盘（账户级则为所有论坛源）当前待下载('0')的分卷标记为流量用尽('2')暂停。</summary>
     private static void PauseHostDownloads(string key, string error)
     {
-        // 站点源（asmr / fanbox / ehentai）不经 debrid-link，不受其流量限制，不参与暂停
+        // 站点源（asmr / fanbox / ehentai / pixiv）不经 debrid-link，不受其流量限制，不参与暂停
         var rows = Db.Select(
             "SELECT \"UUID\", \"url\" FROM \"download_list\" WHERE \"status\" = '0' " +
-            "AND (\"source\" IS NULL OR \"source\" NOT IN ('asmr', 'fanbox', 'ehentai'))");
+            "AND (\"source\" IS NULL OR \"source\" NOT IN ('asmr', 'fanbox', 'ehentai', 'pixiv'))");
         foreach (var r in rows ?? [])
         {
             var url = r[1] as string ?? "";
@@ -687,13 +688,13 @@ public static class DownloadEngine
 
     /// <summary>探测文件总大小；返回 (总字节数, 是否支持 Range)。</summary>
     private static (long Total, bool Range) ProbeSize(HttpClient client, string url,
-        string? userAgent, string? cookie)
+        string? userAgent, string? cookie, string? referer)
     {
         try
         {
             using var request = new HttpRequestMessage(HttpMethod.Get, url);
             request.Headers.Range = new System.Net.Http.Headers.RangeHeaderValue(0, 0);
-            ApplyRequestHeaders(request, userAgent, cookie);
+            ApplyRequestHeaders(request, userAgent, cookie, referer);
             using var response = client.Send(request, HttpCompletionOption.ResponseHeadersRead);
             if (response.StatusCode == HttpStatusCode.PartialContent)
             {
@@ -713,11 +714,11 @@ public static class DownloadEngine
     /// <summary>单连接下载（断点续传 + 暂停 + 低速重试），返回 done/paused/slow/failed/throttled/missing。</summary>
     private static string DownloadSingle(HttpClient client, string url, string filePath,
         string filename, string key, string workId, string? userAgent, string? cookie,
-        bool expectImage = false)
+        string? referer = null, bool expectImage = false)
     {
         long downloaded = 0;
         using var request = new HttpRequestMessage(HttpMethod.Get, url);
-        ApplyRequestHeaders(request, userAgent, cookie);
+        ApplyRequestHeaders(request, userAgent, cookie, referer);
         if (File.Exists(filePath))
         {
             downloaded = new FileInfo(filePath).Length;
@@ -862,9 +863,9 @@ public static class DownloadEngine
     /// <summary>下载单个文件：清理旧版分段下载元数据后单连接下载，返回 done/paused/slow/failed/throttled/missing。</summary>
     private static string DownloadFile(HttpClient client, string directUrl, string filePath,
         string filename, string key, string workId, string? userAgent = null, string? cookie = null,
-        bool expectImage = false)
+        string? referer = null, bool expectImage = false)
     {
-        var (totalSize, _) = ProbeSize(client, directUrl, userAgent, cookie);
+        var (totalSize, _) = ProbeSize(client, directUrl, userAgent, cookie, referer);
 
         // 旧版分段下载遗留的元数据：其预分配的整文件内容不可信，连同文件一起清掉后重下
         if (File.Exists(MetaPath(filePath)))
@@ -879,15 +880,17 @@ public static class DownloadEngine
             return "done";
 
         return DownloadSingle(client, directUrl, filePath, filename, key, workId, userAgent, cookie,
-            expectImage);
+            referer, expectImage);
     }
 
     /// <summary>
-    /// 按来源覆盖单次请求的 User-Agent 与 Cookie
+    /// 按来源覆盖单次请求的 User-Agent、Cookie 与 Referer
     /// （下载线程的 client 为各来源共用，只能逐请求设置）。
-    /// pawchive 的防护网关要中性 UA；E-Hentai 的原图接口要登录 cookie。
+    /// pawchive 的防护网关要中性 UA；E-Hentai 的原图接口要登录 cookie；
+    /// pixiv 的图片服务器 i.pximg.net 带防盗链，没有 pixiv 的 Referer 一律 403。
     /// </summary>
-    private static void ApplyRequestHeaders(HttpRequestMessage request, string? userAgent, string? cookie)
+    private static void ApplyRequestHeaders(
+        HttpRequestMessage request, string? userAgent, string? cookie, string? referer = null)
     {
         if (!string.IsNullOrEmpty(userAgent))
         {
@@ -896,6 +899,8 @@ public static class DownloadEngine
         }
         if (!string.IsNullOrEmpty(cookie))
             request.Headers.TryAddWithoutValidation("Cookie", cookie);
+        if (!string.IsNullOrEmpty(referer))
+            request.Headers.TryAddWithoutValidation("Referer", referer);
     }
 
     /// <summary>被站点限流后的冷却时长：期间该线程不再发起请求，让封锁自然解除。</summary>
@@ -929,8 +934,9 @@ public static class DownloadEngine
 
                 var (k, workId, url, source, subPath) = claimed.Value;
                 key = k;
-                // asmr.one 与 fanbox 都是直链源：url 即可直接下载，且 sub_path 保留作品内目录结构
-                var isDirect = source is "asmr" or FanboxService.SourceName;
+                // asmr.one / fanbox / pixiv 都是直链源：url 即可直接下载，且 sub_path 保留作品内目录结构
+                // （pixiv 的图片地址不绑 IP 也不过期，只是取图必须带 Referer，见下面的 referer）
+                var isDirect = source is "asmr" or FanboxService.SourceName or PixivApi.SourceName;
                 // E-Hentai：url 是图片页地址，直链在页面里、与 IP 绑定又会过期，必须临下载前现解析；
                 // 但和直链源一样带 sub_path（作品内的三位页码文件名）
                 var isEhentai = source == EhentaiApi.SourceName;
@@ -1028,9 +1034,12 @@ public static class DownloadEngine
                 var userAgent = source == FanboxService.SourceName && !isDrive ? PawchiveApi.UserAgent : null;
                 // E-Hentai 的原图走站点自己的 fullimg 接口，要带登录 cookie（里站更是整站都要）
                 var cookie = isEhentai ? EhentaiApi.CookieHeader : null;
+                // pixiv 的图片服务器带防盗链：没有 pixiv 的 Referer 一律 403（与 cookie 无关，
+                // 匿名也能取图，只要带上它）
+                var referer = source == PixivApi.SourceName ? PixivApi.ImageReferer : null;
                 // E-Hentai 的每一条都是图片，响应不是图片就说明站点回了错误页（见 notimage 分支）
                 var result = DownloadFile(client, directUrl, filePath, filename, key, workId, userAgent, cookie,
-                    expectImage: isEhentai);
+                    referer, expectImage: isEhentai);
                 DownloadProgress.TryRemove(key, out _);
                 // pawchive 对只归档了预览的投稿（has_full=false）原图一律 404，但 img.<host> 上
                 // 800px 的预览图是有的。原图没有就存预览图，总好过整篇空手而归；
@@ -1041,7 +1050,8 @@ public static class DownloadEngine
                     var thumbUrl = PawchiveApi.ThumbUrlFromFileUrl(directUrl);
                     if (thumbUrl.Length > 0)
                     {
-                        result = DownloadFile(client, thumbUrl, filePath, filename, key, workId, userAgent, cookie);
+                        result = DownloadFile(client, thumbUrl, filePath, filename, key, workId, userAgent, cookie,
+                            referer);
                         DownloadProgress.TryRemove(key, out _);
                         if (result == "done")
                         {
@@ -1073,8 +1083,9 @@ public static class DownloadEngine
                 }
                 if (result == "missing")
                 {
-                    // 直链源（asmr / fanbox）的 url 就是源站地址，文件之间也彼此独立：404 说明
-                    // 源站没有这个文件（如 pawchive 只导入了投稿元数据、未归档文件本体），
+                    // 直链源（asmr / fanbox / pixiv）的 url 就是源站地址，文件之间也彼此独立：404 说明
+                    // 源站没有这个文件（如 pawchive 只导入了投稿元数据、未归档文件本体；
+                    // pixiv 则是作品已被作者删除），
                     // 再怎么重试都不会变，只会让整条队列原地打转。标记跳过、继续下能下的。
                     // E-Hentai 与谷歌网盘不在此列：它们的直链都是刚解析出来的临时地址，404 多半是
                     // 那一台服务器掉线，重新领取会重新解析，故按普通失败重试。
@@ -1223,7 +1234,7 @@ public static class DownloadEngine
         return done != null && Convert.ToInt64(done) > 0;
     }
 
-    /// <summary>按来源触发收尾：站点源（asmr / fanbox / ehentai）无压缩包，下完直接入库；论坛源走自动解压。</summary>
+    /// <summary>按来源触发收尾：站点源（asmr / fanbox / ehentai / pixiv）无压缩包，下完直接入库；论坛源走自动解压。</summary>
     private static void FinalizeBySource(string workId, string source)
     {
         switch (source)
@@ -1231,6 +1242,7 @@ public static class DownloadEngine
             case "asmr": AsmrFinalizeIfDone(workId); break;
             case FanboxService.SourceName: FanboxFinalizeIfDone(workId); break;
             case EhentaiApi.SourceName: EhentaiFinalizeIfDone(workId); break;
+            case PixivApi.SourceName: PixivFinalizeIfDone(workId); break;
             default: AutoUnzipIfDone(workId); break;
         }
     }
@@ -1337,6 +1349,48 @@ public static class DownloadEngine
         catch (Exception e)
         {
             Logger.Error(e, "E-Hentai 入库收尾");
+        }
+        finally
+        {
+            UnzipProgress.TryRemove(workId, out _);
+            lock (UnzipLock)
+                Unzipping.Remove(workId);
+        }
+    }
+
+    /// <summary>
+    /// pixiv 作品下完后的收尾（无解压）：所有文件完成后在后台移动到媒体库、
+    /// 写作品信息、定位封面并标记已品悦。每件作品只执行一次。
+    ///
+    /// 动图的逐帧 zip 有意不解压——解开就散成上百张无序帧图，还会丢掉播放速度。
+    /// </summary>
+    private static void PixivFinalizeIfDone(string workId)
+    {
+        if (!ReadyToFinalize(workId))
+            return;  // 还有未终结的文件，或一个都没下成（全部被跳过的作品不入库）
+
+        lock (UnzipLock)
+        {
+            if (!Unzipping.Add(workId))
+                return;  // 已有线程在收尾该作品（并发完成时去重）
+        }
+
+        UnzipProgress[workId] = new UnzipProgressInfo { State = "moving", Pct = 0 };
+        Logger.Info($"{workId} pixiv 下载完成，开始入库");
+        new Thread(() => RunPixivFinalize(workId))
+            { IsBackground = true, Name = $"pixiv-finalize-{workId}" }.Start();
+    }
+
+    /// <summary>在后台把 pixiv 作品移入媒体库并入库，进度由 MoveToTargetFolder 维护。</summary>
+    private static void RunPixivFinalize(string workId)
+    {
+        try
+        {
+            PixivService.FinalizeIntoLibrary(workId);
+        }
+        catch (Exception e)
+        {
+            Logger.Error(e, "pixiv 入库收尾");
         }
         finally
         {

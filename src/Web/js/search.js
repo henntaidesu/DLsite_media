@@ -2,6 +2,7 @@
 //   dlsite  —— 作品号/社团号/目录页搜索、AS 论坛扫描、加入下载队列（本文件）
 //   fanbox  —— pawchive 作家搜索与作品下载（fanbox.js）
 //   ehentai —— E-Hentai 画廊搜索与下载（ehentai.js）
+//   pixiv   —— pixiv 作品搜索与下载（pixiv.js）
 // 各来源共用同一条工具栏（来源下拉 + 输入框 + 查询），各自的结果面板并存、按来源切换显示。
 
 // 当前搜索来源；SEARCH_SOURCES 的顺序即下拉框顺序
@@ -9,6 +10,7 @@ const SEARCH_SOURCES = [
   { key: 'dlsite', label: 'DLsite', placeholder: '作品号(RJ/BJ/VJ)、社团号(RG) 或 DLsite 链接' },
   { key: 'fanbox', label: 'FANBOX', placeholder: '作家名 / 作家 ID，或 pawchive 作家链接' },
   { key: 'ehentai', label: 'E-Hentai', placeholder: '关键字 / 标签（如 artist:xxx），或 E-Hentai 画廊链接' },
+  { key: 'pixiv', label: 'pixiv', placeholder: '关键字 / 标签，或 pixiv 作品链接 / 作品号' },
 ];
 let searchSrc = 'dlsite';
 
@@ -44,8 +46,12 @@ function renderSearchArea() {
   // FANBOX 作家监控没有工具栏入口：列表与间隔在「系统设置 → FANBOX 作家监控」里管，
   // 这里只保留作家主页选择条上的「+ 监控作家」（加监控本就要先选到作家）
   const ehBack = el('button', 'icon-btn', '返回搜索结果'); ehBack.id = 'ehBackBtn'; ehBack.style.display = 'none'; ehBack.onclick = ehGoBackToList;
+  // pixiv 详情页的「下载 / 返回」：与 FANBOX 同样常驻工具栏，详情页自己不另起操作条
+  const pxDl = el('button', 'icon-btn primary', '下载'); pxDl.id = 'pxDlPostBtn'; pxDl.style.display = 'none';
+  pxDl.onclick = pxDownloadDetail;
+  const pxBack = el('button', 'icon-btn', '返回'); pxBack.id = 'pxBackBtn'; pxBack.style.display = 'none'; pxBack.onclick = pxGoBackToList;
 
-  bar.append(src, inp, btn, autoAll, backList, fbDl, fbBack, ehBack);
+  bar.append(src, inp, btn, autoAll, backList, fbDl, fbBack, ehBack, pxDl, pxBack);
   host.appendChild(bar);
 
   // DLsite：社团网格与帖子列表分两个 pane（进帖子列表时只隐藏社团 pane，保留 DOM 与后台扫描，返回即缓存恢复）
@@ -59,6 +65,9 @@ function renderSearchArea() {
 
   // E-Hentai：画廊结果 / 画廊详情两个 pane
   ehBuildPanes(host);
+
+  // pixiv：作品结果 / 作品详情两个 pane
+  pxBuildPanes(host);
 
   applySearchSource();
 }
@@ -75,10 +84,12 @@ function applySearchSource() {
   const meta = SEARCH_SOURCES.find(s => s.key === searchSrc) || SEARCH_SOURCES[0];
   const inp = $('sId'); if (inp) inp.placeholder = meta.placeholder;
   const dl = searchSrc === 'dlsite', fbOn = searchSrc === 'fanbox', ehOn = searchSrc === 'ehentai';
-  // 三套结果面板互斥显示
+  const pxOn = searchSrc === 'pixiv';
+  // 四套结果面板互斥显示
   const res = $('searchResult'); if (res) res.style.display = dl ? '' : 'none';
   const fb = $('fbResult'); if (fb) fb.style.display = fbOn ? '' : 'none';
   const eh = $('ehResult'); if (eh) eh.style.display = ehOn ? '' : 'none';
+  const px = $('pxResult'); if (px) px.style.display = pxOn ? '' : 'none';
   $('count').textContent = '';
   // 工具栏按钮按来源归位：先全部收起，再只恢复当前来源该有的
   const autoAll = $('autoAllBtn'); if (autoAll) autoAll.style.display = (dl && makerState) ? '' : 'none';
@@ -86,9 +97,12 @@ function applySearchSource() {
   const fbBack = $('fbBackBtn'); if (fbBack) fbBack.style.display = 'none';
   const fbDl = $('fbDlPostBtn'); if (fbDl) fbDl.style.display = 'none';
   const ehBack = $('ehBackBtn'); if (ehBack) ehBack.style.display = 'none';
+  const pxBack = $('pxBackBtn'); if (pxBack) pxBack.style.display = 'none';
+  const pxDl = $('pxDlPostBtn'); if (pxDl) pxDl.style.display = 'none';
   if (dl) updateBackListBtn();
   else if (fbOn) fbUpdateToolbarBtns();
-  else ehUpdateBackBtn();
+  else if (ehOn) ehUpdateBackBtn();
+  else pxUpdateToolbarBtns();
 }
 
 // 查询入口：按当前来源分流
@@ -96,6 +110,7 @@ function runSearchAny() {
   syncSearchHash();   // 把来源与查询词写入地址栏（只 replace 不累积历史）
   if (searchSrc === 'fanbox') return fbRunSearch();
   if (searchSrc === 'ehentai') return ehRunSearch();
+  if (searchSrc === 'pixiv') return pxRunSearch();
   return runSearch();
 }
 function showMakerPane() { $('makerPane').style.display = ''; $('workPane').style.display = 'none'; const b = $('backListBtn'); if (b) b.style.display = 'none'; const a = $('autoAllBtn'); if (a) a.style.display = makerState ? '' : 'none'; }

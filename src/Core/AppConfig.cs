@@ -61,6 +61,13 @@ public static class AppConfig
             ["username"] = "",
             ["original"] = "True",
         },
+        // pixiv 数据源：匿名也能搜，但结果里不含 R-18，要看 R-18 就得填浏览器里的 PHPSESSID。
+        // mode=搜索分级(all/safe/r18)，s_mode=匹配方式(标签部分/完全一致、标题说明文)，
+        // original=True 时下原图，否则下 1200px 缩放图
+        ["pixiv"] = new()
+        {
+            ["php_sessid"] = "", ["mode"] = "all", ["s_mode"] = "s_tag", ["original"] = "True",
+        },
         // 图床存储（自建 Image_hosting 服务）：开启后作品卡封面由图床直供，不再逐张唤醒 HDD
         ["image_host"] = new()
         {
@@ -402,6 +409,47 @@ public static class AppConfig
     /// 未登录时 EhentaiApi 会自动退回显示图，不会因此下载失败。
     /// </summary>
     public static bool EhentaiOriginal => Read("ehentai", "original", "True") != "False";
+
+    // ---------- pixiv 数据源 ----------
+
+    /// <summary>
+    /// 登录 cookie 的 PHPSESSID（浏览器登录 pixiv 后从 Cookie 里复制，形如 <c>12345678_abcdef…</c>）。
+    /// 留空即匿名浏览：仍能搜索，但站点会把 R-18 作品从结果里滤掉，单独打开也会被拒。
+    /// 只存这一个 cookie：pixiv 的鉴权只认它，别的 cookie 存了也没用。
+    /// </summary>
+    public static string PixivSessionId => (Read("pixiv", "php_sessid", "") ?? "").Trim();
+
+    /// <summary>
+    /// 搜索分级（站点的 mode 参数）：all=全部 / safe=全年龄 / r18=仅 R-18。
+    /// 未登录时选 all 或 r18 都只会拿到全年龄作品，那是站点在过滤，不是这里没生效。
+    /// </summary>
+    public static string PixivSearchMode
+    {
+        get
+        {
+            var mode = (Read("pixiv", "mode", "all") ?? "").Trim();
+            return mode is "all" or "safe" or "r18" ? mode : "all";
+        }
+    }
+
+    /// <summary>
+    /// 匹配方式（站点的 s_mode 参数）：s_tag=标签部分一致 / s_tag_full=标签完全一致 /
+    /// s_tc=标题与说明文。默认部分一致——搜索框里多是随手输入的词，完全一致常常一条都搜不到。
+    /// </summary>
+    public static string PixivTagMatch
+    {
+        get
+        {
+            var mode = (Read("pixiv", "s_mode", "s_tag") ?? "").Trim();
+            return mode is "s_tag" or "s_tag_full" or "s_tc" ? mode : "s_tag";
+        }
+    }
+
+    /// <summary>
+    /// 是否下载原图。关闭时下站点的 1200px 缩放图——体积小得多，但漫画的文字会糊。
+    /// 与 E-Hentai 不同，pixiv 的原图不需要登录（只有 R-18 作品本身才需要）。
+    /// </summary>
+    public static bool PixivOriginal => Read("pixiv", "original", "True") != "False";
 
     // ---------- 图床存储（自建 Image_hosting）----------
 

@@ -385,6 +385,11 @@ public static class WebServer
                 case "/api/eh/page": await ApiEhPageImageAsync(stream, req); break;
                 case "/api/eh/enqueue": await ApiEhEnqueueAsync(stream, req); break;
                 case "/api/eh/image": await ApiEhImageAsync(stream, req); break;
+
+                case "/api/px/search": await ApiPixivSearchAsync(stream, req); break;
+                case "/api/px/artwork": await ApiPixivArtworkAsync(stream, req); break;
+                case "/api/px/enqueue": await ApiPixivEnqueueAsync(stream, req); break;
+                case "/api/px/image": await ApiPixivImageAsync(stream, req); break;
                 // 设置
                 case "/api/settings": if (req.Method == "POST") ApiSettingsWrite(stream, req); else ApiSettings(stream); break;
                 case "/api/debridtest": await ApiDebridTestAsync(stream, req); break;
@@ -3037,6 +3042,165 @@ public static class WebServer
             ? new EhGalleryRef(gid, token.ToLowerInvariant())
             : null;
     }
+
+    // ---------- pixiv 数据源 ----------
+
+    /// <summary>
+    /// 搜索作品。贴作品链接/作品号时直接认出那一件并只返回它（等价于站内直达），
+    /// 否则按关键字搜；p 为页号（站点按页翻页，每页 60 件）。
+    /// </summary>
+    private static async Task ApiPixivSearchAsync(NetworkStream stream, Request req)
+    {
+        var keyword = (req.Query.GetValueOrDefault("q") ?? "").Trim();
+        if (keyword.Length == 0)
+        {
+            WriteJson(stream, 400, new { error = "bad request" });
+            return;
+        }
+        var page = Math.Max(1, GetInt(req, "p"));
+
+        // 贴的是作品链接/作品号：跳过搜索，直接取这一件的详情
+        if (page == 1 && PixivApi.ParseArtworkInput(keyword) is { } direct)
+        {
+            var (one, error) = await PixivApi.GetArtworkAsync(direct);
+            WriteJson(stream, 200, new
+            {
+                items = one is null ? Array.Empty<object>() : [PixivArtworkJson(one)],
+                total = one is null ? 0 : 1,
+                page = 1,
+                hasMore = false,
+                error,
+                anonymous = !PixivApi.HasCookie,
+            });
+            return;
+        }
+
+        var result = await PixivApi.SearchAsync(keyword, page);
+        WriteJson(stream, 200, new
+        {
+            items = result.Items.Select(PixivArtworkJson),
+            total = result.Total,
+            page = result.Page,
+            hasMore = result.HasMore,
+            error = result.Error,
+            // 未登录时站点会把 R-18 从结果里滤掉，前端据此提示一句，免得用户以为是搜索坏了
+            anonymous = !PixivApi.HasCookie,
+        });
+    }
+
+    /// <summary>
+    /// 单件作品详情（「查看内容」用）：元数据 + 逐页图片地址。
+    ///
+    /// 图一律给 1200px 的 regular：原图动辄几 MB，一篇漫画几十张全取原图会把带宽占满，
+    /// 而详情页只是预览（原图是下载时才取的）——与 FANBOX 详情页只给 800px 预览同理。
+    /// </summary>
+    private static async Task ApiPixivArtworkAsync(NetworkStream stream, Request req)
+    {
+        var id = (req.Query.GetValueOrDefault("id") ?? "").Trim();
+        if (id.Length == 0 || !id.All(char.IsAsciiDigit))
+        {
+            WriteJson(stream, 400, new { error = "bad request" });
+            return;
+        }
+
+        var (artwork, error) = await PixivApi.GetArtworkAsync(id);
+        if (artwork is null)
+        {
+            WriteJson(stream, 200, new { error = error ?? "获取作品信息失败" });
+            return;
+        }
+        var pages = await PixivApi.GetPagesAsync(id);
+        WriteJson(stream, 200, new
+        {
+            artwork = PixivArtworkJson(artwork),
+            images = pages.Select(x => new { index = x.Index, url = x.Regular, w = x.Width, h = x.Height }),
+        });
+    }
+
+    /// <summary>
+    /// 把选中的作品加入下载队列。请求只带作品号，元数据与图片清单由服务端重新拉取，
+    /// 不信任前端提交的内容（与 fanbox / E-Hentai 入队同理）。
+    /// </summary>
+    private static async Task ApiPixivEnqueueAsync(NetworkStream stream, Request req)
+    {
+        var ids = ReadStringArray(req.Body, "items")
+            .Where(x => x.Length > 0 && x.All(char.IsAsciiDigit))
+            .Distinct()
+            .ToList();
+        var lib = ReadStringField(req.Body, "lib");
+        var folder = ReadStringField(req.Body, "folder");
+        if (ids.Count == 0)
+        {
+            WriteJson(stream, 400, new { error = "bad request" });
+            return;
+        }
+
+        // 元数据由入队流程统一现取（见 PixivService.EnqueueByIdsAsync），这里只递作品号
+        var result = await PixivService.EnqueueByIdsAsync(
+            ids, folder.Length > 0 ? folder : null, lib.Length > 0 ? lib : null);
+        if (!result.Ok)
+        {
+            WriteJson(stream, 200, new { ok = false, error = result.Error ?? "入队失败" });
+            return;
+        }
+        WriteJson(stream, 200, new
+        {
+            ok = true, artworks = result.ArtworkCount, files = result.FileCount, skipped = result.Skipped,
+        });
+    }
+
+    /// <summary>
+    /// 站上图片代理。pixiv 的图片服务器带防盗链：浏览器直接引用 i.pximg.net 一律 403
+    /// （缺 Referer），所以图必须由本服务按配置的代理取回再转交。只放行 pixiv 自家域。
+    /// </summary>
+    private static async Task ApiPixivImageAsync(NetworkStream stream, Request req)
+    {
+        var url = req.Query.GetValueOrDefault("url") ?? "";
+        if (!PixivApi.IsPixivUrl(url) || !IsSafeFetchUrl(url))
+        {
+            WriteBytes(stream, 400, "Bad Request", "text/plain", []);
+            return;
+        }
+        try
+        {
+            using var client = Http.CreateClient(TimeSpan.FromSeconds(20));
+            using var request = new HttpRequestMessage(HttpMethod.Get, url);
+            PixivApi.ApplyHeaders(request);
+            using var resp = await client.SendAsync(request);
+            resp.EnsureSuccessStatusCode();
+            var bytes = await resp.Content.ReadAsByteArrayAsync();
+            var type = resp.Content.Headers.ContentType?.MediaType ?? "";
+            if (!type.StartsWith("image/", StringComparison.OrdinalIgnoreCase))
+                type = ContentType(url);
+            WriteBytes(stream, 200, "OK", type, bytes, ("Cache-Control", "max-age=86400"));
+        }
+        catch (Exception)
+        {
+            WriteBytes(stream, 404, "Not Found", "text/plain", []);
+        }
+    }
+
+    /// <summary>作品元数据转成前端要的字段（搜索/详情共用，保证卡片与详情同源）。</summary>
+    private static object PixivArtworkJson(PixivArtwork a) => new
+    {
+        id = a.Id,
+        title = a.Title,
+        cover = a.Thumb,
+        userId = a.UserId,
+        maker = PixivService.MakerNameOf(a),
+        pages = a.PageCount,
+        type = a.TypeName,
+        restrict = a.RestrictName,
+        ai = a.IsAi,
+        posted = a.Created is { } t ? t.ToString("yyyy-MM-dd") : "",
+        width = a.Width,
+        height = a.Height,
+        bookmarks = a.BookmarkCount,
+        views = a.ViewCount,
+        description = a.Description,
+        tags = a.Tags,
+        state = PixivService.ArtworkStates([a.Id]).GetValueOrDefault(a.Id, ""),
+    };
 
     /// <summary>画廊令牌固定是 10 位十六进制；用作 URL 参数前先校验。</summary>
     private static bool IsEhToken(string token) =>
